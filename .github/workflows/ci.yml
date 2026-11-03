@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: windows-latest
+    env:
+      # rust-toolchain.toml pins the GNU toolchain for local builds without Visual Studio;
+      # the runners have MSVC, which is what releases ship with.
+      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Check UI
+        run: npx svelte-check --threshold warning
+
+      - name: Build UI
+        run: npm run build
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable-x86_64-pc-windows-msvc
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # The build script only checks that the sidecars exist; empty files are enough here.
+      - name: Placeholder FFmpeg
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
+          foreach ($n in "ffmpeg", "ffprobe") { New-Item -Force "src-tauri/binaries/$n-x86_64-pc-windows-msvc.exe" | Out-Null }
+
+      - name: Clippy
+        working-directory: src-tauri
+        run: cargo clippy --locked --all-targets -- -D warnings

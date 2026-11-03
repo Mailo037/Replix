@@ -1,0 +1,318 @@
+<script lang="ts">
+  import { startDrag } from "@crabnebula/tauri-plugin-drag";
+  import { onDestroy } from "svelte";
+  import { api, fileUrl, type Item } from "../lib/api";
+  import { drawAscii, rain } from "../lib/ascii";
+  import { duration, time } from "../lib/format";
+  import { share } from "../lib/share";
+  import { store } from "../lib/store.svelte";
+  import Icon from "./Icon.svelte";
+
+  let {
+    item,
+    onopen,
+    onselect,
+    selecting = false,
+    selected = false,
+  }: {
+    item: Item;
+    onopen: (item: Item) => void;
+    /** Ctrl, Shift or selection mode: pick the tile instead of opening it. */
+    onselect: (item: Item, event: MouseEvent) => void;
+    selecting?: boolean;
+    selected?: boolean;
+  } = $props();
+
+  let canvas = $state<HTMLCanvasElement>();
+  let drawn = $state(false);
+  let menu = $state(false);
+  let tick = $state(0);
+
+  const ascii = $derived(store.settings?.asciiThumbs ?? true);
+  const thumbUrl = $derived(item.thumb ? fileUrl(item.thumb) : null);
+  const isNew = $derived(!item.seen && Date.now() - item.created < 86_400_000 && item.kind !== "screenshot");
+  const badge = $derived(isNew ? "[ NEW ]" : item.draft ? "[ DRAFT ]" : item.kind === "session" ? "[ SESSION ]" : null);
+  const label = $derived(item.kind === "screenshot" ? "PNG" : duration(item.duration));
+
+  $effect(() => {
+    if (!canvas || !thumbUrl || !ascii) return;
+    const target = canvas;
+    drawAscii(target, thumbUrl).then((ok) => (drawn = ok));
+  });
+
+  // Falling characters until the thumbnail exists.
+  const timer = setInterval(() => {
+    if (!item.thumb) tick += 1;
+  }, 120);
+  onDestroy(() => clearInterval(timer));
+
+  async function act(what: "favorite" | "reveal" | "delete" | "copy" | "link") {
+    menu = false;
+    if (what === "favorite") await api.setFavorite(item.id, !item.favorite);
+    if (what === "reveal") await api.revealItem(item.id);
+    if (what === "copy") await share.copy(item.path);
+    if (what === "link") await share.link(item.path);
+    if (what === "delete") {
+      await api.deleteItems([item.id]);
+      store.notify("Moved to the recycle bin", item.title);
+    }
+  }
+
+  // Dragging a tile hands the file to Windows, so it drops into Discord or a folder.
+  function drag(e: DragEvent) {
+    const icon = item.thumb ?? (item.kind === "screenshot" ? item.path : null);
+    if (!icon || selecting) return;
+    e.preventDefault();
+    startDrag({ item: [item.path], icon }).catch((err) => console.warn("drag failed", err));
+  }
+</script>
+
+<div class="tile" class:selected>
+  <button
+    type="button"
+    class="open"
+    onclick={(e) => (selecting || e.ctrlKey || e.shiftKey ? onselect(item, e) : onopen(item))}
+    aria-label={selecting ? `Select ${item.title}` : `Open ${item.title}`}
+    aria-pressed={selecting ? selected : undefined}
+    draggable="true"
+    ondragstart={drag}
+  >
+    <span class="thumb">
+      {#if thumbUrl}
+        {#if ascii}
+          <canvas bind:this={canvas} class="ascii" class:ready={drawn} aria-hidden="true"></canvas>
+        {/if}
+        <img src={thumbUrl} alt="" class="real" class:under={ascii && drawn} loading="lazy" />
+      {:else}
+        <pre class="rain" aria-hidden="true">{rain(48, 12, tick)}</pre>
+      {/if}
+      {#if selecting}
+        <span class="label badge top check" class:accent={selected} aria-hidden="true">{selected ? "[×]" : "[ ]"}</span>
+      {:else if badge}
+        <span class="label badge top" class:accent={isNew}>{badge}</span>
+      {/if}
+      {#if item.favorite}
+        <span class="fav" aria-label="Favorite"><Icon name="star" size={14} filled /></span>
+      {/if}
+      <span class="label badge bottom">{label}</span>
+    </span>
+    <span class="text">
+      <span class="title">{item.title}</span>
+      <span class="meta">{item.game && !item.title.includes(item.game) ? `${item.game} · ` : ""}{time(item.created)}</span>
+    </span>
+  </button>
+
+  {#if !selecting}
+    <button type="button" class="more" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}>
+      <Icon name="more" size={18} />
+    </button>
+  {/if}
+  {#if menu && !selecting}
+    <div class="menu" role="menu">
+      <button type="button" role="menuitem" onclick={() => act("copy")}>
+        <Icon name="copy" size={16} />Copy
+      </button>
+      <button type="button" role="menuitem" onclick={() => act("link")}>
+        <Icon name="link" size={16} />Get a link <span class="hint">72 h</span>
+      </button>
+      <span class="sep" role="separator"></span>
+      <button type="button" role="menuitem" onclick={() => act("favorite")}>
+        <Icon name="star" size={16} />{item.favorite ? "Remove favorite" : "Add to favorites"}
+      </button>
+      <button type="button" role="menuitem" onclick={() => act("reveal")}><Icon name="folder" size={16} />Show in folder</button>
+      <button type="button" role="menuitem" class="danger" onclick={() => act("delete")}>
+        <Icon name="trash" size={16} />Move to recycle bin
+      </button>
+    </div>
+  {/if}
+</div>
+
+<svelte:window onclick={(e) => menu && !(e.target as HTMLElement).closest(".tile") && (menu = false)} />
+
+<style>
+  .tile {
+    position: relative;
+  }
+  .open {
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    text-align: left;
+    border-radius: 14px;
+  }
+  .thumb {
+    position: relative;
+    display: block;
+    aspect-ratio: 16 / 9;
+    border-radius: 14px;
+    overflow: hidden;
+    background: var(--black);
+    transition: transform 220ms var(--travel);
+  }
+  .open:hover .thumb {
+    transform: scale(1.025);
+  }
+  .selected .thumb {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
+    transform: scale(0.97);
+  }
+  .selected .open:hover .thumb {
+    transform: scale(0.97);
+  }
+  .check {
+    font-size: 12px;
+  }
+  .ascii,
+  .real {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .ascii {
+    opacity: 0;
+    transition: opacity 320ms ease;
+  }
+  .ascii.ready {
+    opacity: 1;
+  }
+  .real {
+    transition: opacity 260ms ease;
+  }
+  .real.under {
+    opacity: 0;
+  }
+  .open:hover .real.under,
+  .open:focus-visible .real.under {
+    opacity: 1;
+  }
+  .rain {
+    position: absolute;
+    inset: 0;
+    margin: 0;
+    padding: 6px 8px;
+    font-family: var(--mono);
+    font-size: 9px;
+    line-height: 10px;
+    color: var(--accent);
+    opacity: 0.5;
+    overflow: hidden;
+  }
+  .label {
+    position: absolute;
+    padding: 2px 7px;
+    border-radius: 6px;
+    background: rgba(0, 0, 0, 0.65);
+    color: #fff;
+  }
+  .label.top {
+    top: 8px;
+    left: 8px;
+  }
+  .label.accent {
+    color: var(--accent);
+  }
+  .label.bottom {
+    right: 8px;
+    bottom: 8px;
+    font-size: 11px;
+  }
+  .fav {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    color: var(--accent);
+    display: flex;
+    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+  }
+  .text {
+    display: flex;
+    flex-direction: column;
+    padding: 0 4px;
+    min-width: 0;
+  }
+  .title {
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .more {
+    position: absolute;
+    right: 2px;
+    bottom: 2px;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ghost);
+    display: grid;
+    place-items: center;
+    opacity: 0;
+    transition: opacity 160ms ease, background-color 160ms ease;
+  }
+  .tile:hover .more,
+  .more:focus-visible,
+  .more[aria-expanded="true"] {
+    opacity: 1;
+  }
+  .more:hover {
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 20;
+    min-width: 210px;
+    padding: 4px;
+    border-radius: 14px;
+    background: var(--raised);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    animation: rise 160ms var(--travel);
+  }
+  @keyframes rise {
+    from {
+      opacity: 0;
+      transform: translateY(-4px);
+    }
+  }
+  .menu button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 38px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--ink);
+    text-align: left;
+  }
+  .menu button:hover {
+    background: var(--hover);
+  }
+  .menu .danger {
+    color: var(--red);
+  }
+  .hint {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--ghost);
+  }
+  .sep {
+    height: 1px;
+    margin: 2px 8px;
+    background: var(--line);
+  }
+</style>

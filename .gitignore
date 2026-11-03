@@ -1,0 +1,10 @@
+node_modules/
+dist/
+src-tauri/target/
+src-tauri/gen/
+src-tauri/binaries/
+*.log
+
+# Not for the public repo: screenshots of a real desktop and of other apps
+screenshots/
+recherche/ui/

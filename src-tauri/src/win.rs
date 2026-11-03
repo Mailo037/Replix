@@ -1,0 +1,409 @@
+//! Small Win32 helpers: windows, processes, monitors.
+
+use std::collections::HashMap;
+use std::ffi::c_void;
+
+use serde::Serialize;
+use windows::core::{BOOL, PCWSTR, PWSTR};
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
+use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+};
+use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+};
+use windows::Win32::System::Threading::{
+    OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
+};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
+    GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, MONITORINFOF_PRIMARY,
+    WS_EX_TOOLWINDOW,
+};
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowInfo {
+    pub hwnd: u64,
+    pub title: String,
+    pub exe: String,
+    #[serde(skip)]
+    pub exe_path: String,
+    pub pid: u32,
+    pub fullscreen: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MonitorInfo {
+    pub index: u32,
+    pub width: i32,
+    pub height: i32,
+    pub primary: bool,
+}
+
+fn hwnd(raw: u64) -> HWND {
+    HWND(raw as *mut c_void)
+}
+
+pub fn is_window(raw: u64) -> bool {
+    unsafe { IsWindow(Some(hwnd(raw))).as_bool() }
+}
+
+pub fn foreground() -> Option<WindowInfo> {
+    let h = unsafe { GetForegroundWindow() };
+    if h.0.is_null() {
+        return None;
+    }
+    describe(h)
+}
+
+fn title_of(h: HWND) -> String {
+    unsafe {
+        let len = GetWindowTextLengthW(h);
+        if len <= 0 {
+            return String::new();
+        }
+        let mut buf = vec![0u16; len as usize + 1];
+        let n = GetWindowTextW(h, &mut buf);
+        String::from_utf16_lossy(&buf[..n.max(0) as usize])
+    }
+}
+
+fn is_cloaked(h: HWND) -> bool {
+    let mut cloaked: u32 = 0;
+    unsafe {
+        DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut c_void, 4).is_ok() && cloaked != 0
+    }
+}
+
+fn covers_monitor(h: HWND) -> bool {
+    unsafe {
+        let mut rect = RECT::default();
+        if GetWindowRect(h, &mut rect).is_err() {
+            return false;
+        }
+        let monitor = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
+            return false;
+        }
+        let m = info.rcMonitor;
+        rect.left <= m.left && rect.top <= m.top && rect.right >= m.right && rect.bottom >= m.bottom
+    }
+}
+
+fn describe(h: HWND) -> Option<WindowInfo> {
+    let mut pid = 0u32;
+    unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+    if pid == 0 {
+        return None;
+    }
+    let exe_path = process_path(pid).unwrap_or_default();
+    let exe = exe_path.rsplit('\\').next().unwrap_or("").to_string();
+    Some(WindowInfo { hwnd: h.0 as u64, title: title_of(h), exe, exe_path, pid, fullscreen: covers_monitor(h) })
+}
+
+/// Visible top-level windows a person would recognise as programs.
+pub fn list_windows() -> Vec<WindowInfo> {
+    unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
+        let list = &mut *(data.0 as *mut Vec<HWND>);
+        list.push(h);
+        BOOL(1)
+    }
+    let mut handles: Vec<HWND> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(collect), LPARAM(&mut handles as *mut _ as isize));
+    }
+    let own = std::process::id();
+    handles
+        .into_iter()
+        .filter(|&h| unsafe {
+            IsWindowVisible(h).as_bool()
+                && GetWindow(h, GW_OWNER).map(|o| o.0.is_null()).unwrap_or(true)
+                && (GetWindowLongPtrW(h, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0) == 0
+                && !is_cloaked(h)
+                && GetWindowTextLengthW(h) > 0
+        })
+        .filter_map(describe)
+        .filter(|w| w.pid != own && !w.exe.is_empty())
+        .collect()
+}
+
+pub fn process_path(pid: u32) -> Option<String> {
+    unsafe {
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = vec![0u16; 1024];
+        let mut len = buf.len() as u32;
+        let result = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
+        let _ = CloseHandle(handle);
+        result.ok()?;
+        Some(String::from_utf16_lossy(&buf[..len as usize]))
+    }
+}
+
+pub struct ProcessEntry {
+    pub pid: u32,
+    pub parent: u32,
+    pub exe: String,
+}
+
+pub fn processes() -> Vec<ProcessEntry> {
+    let mut out = Vec::new();
+    unsafe {
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return out };
+        let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        if Process32FirstW(snap, &mut entry).is_ok() {
+            loop {
+                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                out.push(ProcessEntry {
+                    pid: entry.th32ProcessID,
+                    parent: entry.th32ParentProcessID,
+                    exe: String::from_utf16_lossy(&entry.szExeFile[..len]),
+                });
+                if Process32NextW(snap, &mut entry).is_err() {
+                    break;
+                }
+            }
+        }
+        let _ = CloseHandle(snap);
+    }
+    out
+}
+
+/// The outermost process with the same executable, so a capture includes all of an
+/// app's helper processes (Discord and browsers play sound from child processes).
+pub fn root_of(pid: u32, all: &[ProcessEntry]) -> u32 {
+    // Embedded browsers play sound on behalf of the app that hosts them.
+    const HELPERS: &[&str] = &["msedgewebview2.exe"];
+    let by_pid: HashMap<u32, &ProcessEntry> = all.iter().map(|p| (p.pid, p)).collect();
+    let mut current = pid;
+    for _ in 0..16 {
+        let Some(entry) = by_pid.get(&current) else { break };
+        let exe = entry.exe.to_lowercase();
+        match by_pid.get(&entry.parent) {
+            Some(parent)
+                if parent.pid != current
+                    && (parent.exe.to_lowercase() == exe || HELPERS.contains(&exe.as_str())) =>
+            {
+                current = parent.pid
+            }
+            _ => break,
+        }
+    }
+    current
+}
+
+/// "Discord" for Discord.exe: the file description, or the file name without extension.
+pub fn app_name(exe_path: &str) -> String {
+    let stem = exe_path
+        .rsplit('\\')
+        .next()
+        .unwrap_or(exe_path)
+        .trim_end_matches(".exe")
+        .trim_end_matches(".EXE")
+        .to_string();
+    file_description(exe_path)
+        .filter(|d| !d.trim().is_empty() && d.len() <= 40)
+        .unwrap_or_else(|| capitalise(&stem))
+}
+
+fn capitalise(s: &str) -> String {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    }
+}
+
+fn file_description(path: &str) -> Option<String> {
+    let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let size = GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), None);
+        if size == 0 {
+            return None;
+        }
+        let mut data = vec![0u8; size as usize];
+        GetFileVersionInfoW(PCWSTR(wide.as_ptr()), None, size, data.as_mut_ptr() as *mut c_void).ok()?;
+        // Read the first language/codepage pair, then FileDescription for it.
+        let mut ptr: *mut c_void = std::ptr::null_mut();
+        let mut len = 0u32;
+        let query: Vec<u16> = "\\VarFileInfo\\Translation".encode_utf16().chain(Some(0)).collect();
+        if !VerQueryValueW(data.as_ptr() as *const c_void, PCWSTR(query.as_ptr()), &mut ptr, &mut len).as_bool() || len < 4 {
+            return None;
+        }
+        let pair = std::slice::from_raw_parts(ptr as *const u16, 2);
+        let key = format!("\\StringFileInfo\\{:04x}{:04x}\\FileDescription", pair[0], pair[1]);
+        let key: Vec<u16> = key.encode_utf16().chain(Some(0)).collect();
+        if !VerQueryValueW(data.as_ptr() as *const c_void, PCWSTR(key.as_ptr()), &mut ptr, &mut len).as_bool() || len == 0 {
+            return None;
+        }
+        let text = std::slice::from_raw_parts(ptr as *const u16, len as usize);
+        let end = text.iter().position(|&c| c == 0).unwrap_or(text.len());
+        Some(String::from_utf16_lossy(&text[..end]).trim().to_string())
+    }
+}
+
+fn monitor_handles() -> Vec<HMONITOR> {
+    unsafe extern "system" fn collect(m: HMONITOR, _: HDC, _: *mut RECT, data: LPARAM) -> BOOL {
+        let list = &mut *(data.0 as *mut Vec<HMONITOR>);
+        list.push(m);
+        BOOL(1)
+    }
+    let mut handles: Vec<HMONITOR> = Vec::new();
+    unsafe {
+        let _ = EnumDisplayMonitors(None, None, Some(collect), LPARAM(&mut handles as *mut _ as isize));
+    }
+    handles
+}
+
+/// The Desktop Duplication output index of a monitor, when the default graphics adapter drives it.
+pub fn dxgi_output(index: u32) -> Option<u32> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+    let target = *monitor_handles().get(index as usize)?;
+    unsafe {
+        let factory: IDXGIFactory1 = CreateDXGIFactory1().ok()?;
+        let adapter = factory.EnumAdapters1(0).ok()?;
+        let mut i = 0;
+        while let Ok(output) = adapter.EnumOutputs(i) {
+            if output.GetDesc().ok()?.Monitor == target {
+                return Some(i);
+            }
+            i += 1;
+        }
+    }
+    None
+}
+
+/// Each graphics adapter as "name vendor:device driver", to notice new hardware or drivers.
+pub fn gpu_signature() -> Vec<String> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIDevice, IDXGIFactory1};
+    use windows::core::Interface;
+    let mut out = Vec::new();
+    unsafe {
+        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else { return out };
+        let mut i = 0;
+        while let Ok(adapter) = factory.EnumAdapters1(i) {
+            i += 1;
+            let Ok(desc) = adapter.GetDesc1() else { continue };
+            let len = desc.Description.iter().position(|&c| c == 0).unwrap_or(desc.Description.len());
+            let name = String::from_utf16_lossy(&desc.Description[..len]);
+            let driver = adapter.CheckInterfaceSupport(&IDXGIDevice::IID).unwrap_or(0);
+            out.push(format!("{name} {:04x}:{:04x} {driver:x}", desc.VendorId, desc.DeviceId));
+        }
+    }
+    out
+}
+
+pub fn monitors() -> Vec<MonitorInfo> {
+    monitor_handles()
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, m)| unsafe {
+            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+            GetMonitorInfoW(m, &mut info).as_bool().then(|| MonitorInfo {
+                index: i as u32,
+                width: info.rcMonitor.right - info.rcMonitor.left,
+                height: info.rcMonitor.bottom - info.rcMonitor.top,
+                primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
+            })
+        })
+        .collect()
+}
+
+/// Programs that are never games, even when they cover the screen.
+const NOT_GAMES: &[&str] = &[
+    "explorer.exe", "searchhost.exe", "startmenuexperiencehost.exe", "shellexperiencehost.exe",
+    "applicationframehost.exe", "textinputhost.exe", "lockapp.exe", "chrome.exe", "msedge.exe", "firefox.exe",
+    "brave.exe", "opera.exe", "opera_gx.exe", "vivaldi.exe", "arc.exe", "zen.exe", "discord.exe", "spotify.exe",
+    "vlc.exe", "mpv.exe", "mpc-hc64.exe", "potplayermini64.exe", "wmplayer.exe", "code.exe", "devenv.exe",
+    "obs64.exe", "steam.exe", "steamwebhelper.exe", "epicgameslauncher.exe", "battle.net.exe", "riotclientux.exe",
+    "riotclientservices.exe", "eadesktop.exe", "ubisoftconnect.exe", "galaxyclient.exe", "powerpnt.exe",
+    "winword.exe", "excel.exe", "teams.exe", "ms-teams.exe", "zoom.exe", "slack.exe", "windowsterminal.exe",
+    "claude.exe", "replix.exe", "ffmpeg.exe", "photos.exe", "microsoft.media.player.exe",
+];
+
+/// Folders games are installed into by the common stores.
+const GAME_DIRS: &[&str] = &[
+    "\\steamapps\\common\\", "\\epic games\\", "\\riot games\\", "\\xboxgames\\", "\\gog galaxy\\games\\",
+    "\\gog games\\", "\\ubisoft game launcher\\games\\", "\\ea games\\", "\\rockstar games\\", "\\amazon games\\",
+    "\\itch\\apps\\", "\\battle.net\\games\\",
+];
+
+pub fn looks_like_game(w: &WindowInfo) -> bool {
+    let exe = w.exe.to_lowercase();
+    if NOT_GAMES.contains(&exe.as_str()) || w.pid == std::process::id() {
+        return false;
+    }
+    let path = w.exe_path.to_lowercase();
+    GAME_DIRS.iter().any(|d| path.contains(d)) || w.fullscreen
+}
+
+/// The name shown for a game: its window title when that is short, else the
+/// store folder or the executable's description.
+pub fn game_name(w: &WindowInfo) -> String {
+    let title = w.title.trim();
+    if !title.is_empty() && title.chars().count() <= 48 {
+        return title.to_string();
+    }
+    let lower = w.exe_path.to_lowercase();
+    if let Some(pos) = lower.find("\\steamapps\\common\\") {
+        let rest = &w.exe_path[pos + "\\steamapps\\common\\".len()..];
+        if let Some(folder) = rest.split('\\').next() {
+            return folder.to_string();
+        }
+    }
+    app_name(&w.exe_path)
+}
+
+/// Free bytes on the drive that holds `path`.
+pub fn disk_free(path: &std::path::Path) -> u64 {
+    use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain(Some(0)).collect();
+    let mut free = 0u64;
+    unsafe {
+        let _ = GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), None, None);
+    }
+    free
+}
+
+pub fn hide_file(path: &std::path::Path) {
+    use windows::Win32::Storage::FileSystem::{SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN};
+    let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let _ = SetFileAttributesW(PCWSTR(wide.as_ptr()), FILE_ATTRIBUTE_HIDDEN);
+    }
+}
+
+/// Shows a window without taking focus from the game.
+pub fn show_passive(raw: u64) {
+    use windows::Win32::UI::WindowsAndMessaging::{
+        SetWindowLongPtrW, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+        SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
+    };
+    let h = hwnd(raw);
+    unsafe {
+        let ex = GetWindowLongPtrW(h, GWL_EXSTYLE) as u32;
+        let wanted = ex | WS_EX_NOACTIVATE.0 | WS_EX_TOOLWINDOW.0;
+        if ex != wanted {
+            SetWindowLongPtrW(h, GWL_EXSTYLE, wanted as isize);
+        }
+        let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
+        let _ = SetWindowPos(h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    }
+}
+
+/// Work area of the monitor the foreground window is on: (x, y, width, height).
+pub fn foreground_work_area() -> Option<(i32, i32, i32, i32)> {
+    unsafe {
+        let h = GetForegroundWindow();
+        let monitor = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
+        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        GetMonitorInfoW(monitor, &mut info).as_bool().then(|| {
+            let r = info.rcWork;
+            (r.left, r.top, r.right - r.left, r.bottom - r.top)
+        })
+    }
+}

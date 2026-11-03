@@ -1,0 +1,150 @@
+<script lang="ts">
+  // Frames slide past. The newest stay inside the bracket; older ones crumble into characters.
+  let { seconds = 30 }: { seconds?: number } = $props();
+
+  const scenes = [30, 62, 44, 70, 36, 58, 50, 66];
+  const reel = [...scenes, ...scenes];
+  const dust = [
+    ":  .   ·  :   .",
+    " .  :  ·    .  ",
+    "·   .   :  ·   ",
+    "  :   ·  .   : ",
+    " .  ·   :  .   ",
+  ].join("\n");
+</script>
+
+<div class="art" aria-hidden="true">
+  <span class="rec mono"><i></i>buffer</span>
+  <div class="track">
+    <div class="reel">
+      {#each reel as x, i (i)}
+        <span class="frame" style:--x="{x}%"></span>
+      {/each}
+    </div>
+  </div>
+  <pre class="dust mono">{dust}</pre>
+  <div class="keep">
+    <span class="label mono">[ last {seconds < 60 ? `${seconds} s` : `${seconds / 60} min`} ]</span>
+  </div>
+  <div class="now mono">now</div>
+</div>
+
+<style>
+  .art {
+    position: absolute;
+    inset: 0;
+  }
+  .rec {
+    position: absolute;
+    top: 9cqmin;
+    left: 9cqmin;
+    display: flex;
+    align-items: center;
+    gap: 2cqmin;
+    font-size: 3.2cqmin;
+    color: var(--ghost);
+  }
+  .rec i {
+    width: 2.4cqmin;
+    height: 2.4cqmin;
+    border-radius: 50%;
+    background: var(--accent);
+    animation: breathe 2.4s ease-in-out infinite;
+  }
+  .track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 40cqmin;
+    height: 20cqmin;
+    overflow: hidden;
+    mask-image: linear-gradient(to right, transparent 4%, #000 42%);
+  }
+  .reel {
+    display: flex;
+    gap: 2.4cqmin;
+    width: max-content;
+    animation: slide 9s linear infinite;
+  }
+  .frame {
+    width: 24cqmin;
+    height: 20cqmin;
+    flex: none;
+    border-radius: 2.4cqmin;
+    background:
+      radial-gradient(circle at var(--x) 34%, var(--accent) 0 7%, transparent 7.5%),
+      linear-gradient(170deg, transparent 58%, #3a3a3a 58.5% 70%, transparent 70.5%),
+      linear-gradient(#262626, #1b1b1b 62%, #303030 62.5%);
+  }
+  .keep {
+    position: absolute;
+    top: 36cqmin;
+    right: 6cqmin;
+    width: 46cqmin;
+    height: 28cqmin;
+    border: 0.7cqmin solid var(--accent);
+    border-radius: 4cqmin;
+    box-shadow: 0 0 6cqmin color-mix(in srgb, var(--accent) 25%, transparent);
+  }
+  .label {
+    position: absolute;
+    top: -7cqmin;
+    left: 50%;
+    transform: translateX(-50%);
+    white-space: nowrap;
+    font-size: 3.6cqmin;
+    color: var(--accent);
+  }
+  .now {
+    position: absolute;
+    top: 68cqmin;
+    right: 6cqmin;
+    width: 46cqmin;
+    text-align: right;
+    font-size: 3.2cqmin;
+    color: var(--ghost);
+  }
+  .now::before {
+    content: "";
+    display: inline-block;
+    width: 30cqmin;
+    height: 0.3cqmin;
+    margin-right: 2cqmin;
+    vertical-align: middle;
+    background: linear-gradient(to right, transparent, var(--line));
+  }
+  .dust {
+    position: absolute;
+    top: 38cqmin;
+    left: 3cqmin;
+    margin: 0;
+    font-size: 3.4cqmin;
+    line-height: 1.25;
+    color: var(--ghost);
+    opacity: 0.55;
+    animation: drift 3s ease-in-out infinite alternate;
+  }
+  @keyframes slide {
+    to {
+      transform: translateX(-50%);
+    }
+  }
+  @keyframes drift {
+    to {
+      transform: translate(-1.5cqmin, 1cqmin);
+      opacity: 0.25;
+    }
+  }
+  @keyframes breathe {
+    50% {
+      opacity: 0.35;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .reel,
+    .dust,
+    .rec i {
+      animation: none;
+    }
+  }
+</style>
