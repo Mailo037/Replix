@@ -1,11 +1,14 @@
 //! Editing: preview material, drafts, exports and stills.
 
+use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader};
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::{bail, Context, Result};
+use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::encoder::Encoder;
@@ -39,13 +42,82 @@ pub struct EditorData {
 
 pub const FILMSTRIP_FRAMES: u32 = 14;
 
-pub fn prepare(id: &str, path: &Path, meta: &Meta, cache: &Path) -> Result<EditorData> {
+/// What ffprobe said about a clip, kept next to its preview material so a second open skips it.
+#[derive(Serialize, Deserialize)]
+struct Probed {
+    duration: f64,
+    width: u32,
+    height: u32,
+    titles: Vec<Option<String>>,
+}
+
+/// One preparation per clip at a time: opening while a warm-up runs waits for it instead of repeating it.
+fn lock_for(id: &str) -> Arc<Mutex<()>> {
+    static LOCKS: OnceLock<Mutex<HashMap<String, Arc<Mutex<()>>>>> = OnceLock::new();
+    LOCKS.get_or_init(Default::default).lock().entry(id.to_string()).or_default().clone()
+}
+
+/// Clips whose filmstrip is being made right now.
+fn pending() -> &'static Mutex<HashSet<String>> {
+    static PENDING: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+    PENDING.get_or_init(Default::default)
+}
+
+/// Gets a clip ready for the editor. `strip_ready` runs once a missing filmstrip has been made.
+pub fn prepare(
+    id: &str,
+    path: &Path,
+    meta: &Meta,
+    cache: &Path,
+    strip_ready: impl FnOnce(PathBuf) + Send + 'static,
+) -> Result<EditorData> {
+    let lock = lock_for(id);
+    let _held = lock.lock();
     let dir = cache.join("editor").join(id);
     std::fs::create_dir_all(&dir)?;
-    let info = ffmpeg::probe(path)?;
-    let count = info.audio_titles.len();
 
+    let probed_path = dir.join("info.json");
+    let info = match std::fs::read(&probed_path).ok().and_then(|b| serde_json::from_slice::<Probed>(&b).ok()) {
+        Some(p) => p,
+        None => {
+            let i = ffmpeg::probe(path)?;
+            let p = Probed { duration: i.duration, width: i.width, height: i.height, titles: i.audio_titles };
+            let _ = std::fs::write(&probed_path, serde_json::to_vec(&p)?);
+            p
+        }
+    };
+    let count = info.titles.len();
     let audio: Vec<PathBuf> = (0..count).map(|i| dir.join(format!("a{i}.m4a"))).collect();
+    let strip = dir.join("strip.jpg");
+
+    // The filmstrip decodes keyframes only, and in the background: the editor opens
+    // without it and shows it once it's ready.
+    if !strip.exists() && info.duration > 0.0 && pending().lock().insert(id.to_string()) {
+        let (id, input, out, rate) = (id.to_string(), path.to_path_buf(), strip.clone(), FILMSTRIP_FRAMES as f64 / info.duration);
+        std::thread::spawn(move || {
+            let args: Vec<String> = vec![
+                "-skip_frame".into(),
+                "nokey".into(),
+                "-i".into(),
+                ffmpeg::path_arg(&input),
+                "-an".into(),
+                "-vf".into(),
+                format!("fps={rate:.5},scale=-2:96,tile={FILMSTRIP_FRAMES}x1"),
+                "-frames:v".into(),
+                "1".into(),
+                "-q:v".into(),
+                "5".into(),
+                "-y".into(),
+                ffmpeg::path_arg(&out),
+            ];
+            let made = ffmpeg::run(&args);
+            pending().lock().remove(&id);
+            match made {
+                Ok(()) => strip_ready(out),
+                Err(e) => log::warn!("filmstrip failed: {e}"),
+            }
+        });
+    }
     if count > 0 && audio.iter().any(|p| !p.exists()) {
         let mut args: Vec<String> = vec!["-i".into(), ffmpeg::path_arg(path)];
         for (i, out) in audio.iter().enumerate() {
@@ -54,30 +126,10 @@ pub fn prepare(id: &str, path: &Path, meta: &Meta, cache: &Path) -> Result<Edito
         ffmpeg::run(&args).context("could not split the audio tracks")?;
     }
 
-    let strip = dir.join("strip.jpg");
-    if !strip.exists() && info.duration > 0.0 {
-        let rate = FILMSTRIP_FRAMES as f64 / info.duration;
-        let args: Vec<String> = vec![
-            "-i".into(),
-            ffmpeg::path_arg(path),
-            "-vf".into(),
-            format!("fps={rate:.5},scale=-2:96,tile={FILMSTRIP_FRAMES}x1"),
-            "-frames:v".into(),
-            "1".into(),
-            "-q:v".into(),
-            "5".into(),
-            "-y".into(),
-            ffmpeg::path_arg(&strip),
-        ];
-        if let Err(e) = ffmpeg::run(&args) {
-            log::warn!("filmstrip failed: {e}");
-        }
-    }
-
     let tracks = (0..count)
         .map(|i| EditorTrack {
             meta: meta.tracks.get(i).cloned().unwrap_or(TrackMeta {
-                name: info.audio_titles[i].clone().unwrap_or_else(|| format!("Track {}", i + 1)),
+                name: info.titles[i].clone().unwrap_or_else(|| format!("Track {}", i + 1)),
                 kind: crate::audio::TrackKind::App,
             }),
             audio: audio[i].to_string_lossy().into_owned(),

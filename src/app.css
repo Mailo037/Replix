@@ -237,12 +237,23 @@ button {
   overflow: visible;
 }
 
-.tooltip:popover-open {
-  animation: tooltip 140ms var(--travel);
+.tooltip {
+  opacity: 0;
+  transform: translateY(3px);
+  transition:
+    opacity 120ms ease,
+    transform 120ms var(--travel),
+    display 120ms allow-discrete,
+    overlay 120ms allow-discrete;
 }
 
-@keyframes tooltip {
-  from {
+.tooltip:popover-open {
+  opacity: 1;
+  transform: none;
+}
+
+@starting-style {
+  .tooltip:popover-open {
     opacity: 0;
     transform: translateY(3px);
   }

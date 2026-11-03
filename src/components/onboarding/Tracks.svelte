@@ -39,16 +39,16 @@
     display: flex;
     align-items: center;
     gap: 3cqmin;
-    height: 14cqmin;
+    height: 11.5cqmin;
     padding: 0 3cqmin;
-    border-radius: 4cqmin;
+    border-radius: 3cqmin;
     background: #1c1c1c;
   }
   .tile {
-    width: 8cqmin;
-    height: 8cqmin;
+    width: 7cqmin;
+    height: 7cqmin;
     flex: none;
-    border-radius: 2.4cqmin;
+    border-radius: 2cqmin;
     background: var(--raised);
     color: var(--accent);
     display: grid;
@@ -61,7 +61,7 @@
   }
   .wave {
     flex: 1;
-    height: 8cqmin;
+    height: 6cqmin;
     display: flex;
     align-items: center;
     gap: 0.8cqmin;

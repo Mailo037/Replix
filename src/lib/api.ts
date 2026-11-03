@@ -91,7 +91,6 @@ export interface Settings {
   clipsDir: string;
   storageLimitGb: number;
   hotkeys: Hotkeys;
-  asciiThumbs: boolean;
   accent: string;
   launchAtStartup: boolean;
   closeToTray: boolean;
@@ -159,6 +158,8 @@ export const api = {
   listMonitors: () => invoke<Monitor[]>("list_monitors"),
   listLibrary: () => invoke<Item[]>("list_library"),
   openEditor: (id: string) => invoke<EditorData>("open_editor", { id }),
+  /** Gets a clip ready for the editor in the background. */
+  warmEditor: (id: string) => invoke<void>("warm_editor", { id }),
   saveDraft: (id: string, title: string, draft: Draft) => invoke<void>("save_draft", { id, title, draft }),
   renameItem: (id: string, title: string) => invoke<void>("rename_item", { id, title }),
   setFavorite: (id: string, favorite: boolean) => invoke<void>("set_favorite", { id, favorite }),

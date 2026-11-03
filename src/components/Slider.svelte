@@ -51,14 +51,14 @@
     outline: none;
   }
   .slider::-webkit-slider-runnable-track {
-    height: 6px;
-    border-radius: 3px;
+    height: 4px;
+    border-radius: 2px;
     background: linear-gradient(to right, var(--accent) var(--fill), var(--black) var(--fill));
   }
   .slider::-webkit-slider-thumb {
     appearance: none;
-    width: 16px;
-    height: 16px;
+    width: 14px;
+    height: 14px;
     margin-top: -5px;
     border-radius: 50%;
     background: var(--ink);

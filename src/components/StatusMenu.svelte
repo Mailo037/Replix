@@ -2,6 +2,7 @@
   import { api, type AppWindow, type Source } from "../lib/api";
   import { lengthLabel } from "../lib/format";
   import { store } from "../lib/store.svelte";
+  import { pop } from "../lib/motion";
   import Icon from "./Icon.svelte";
   import Segmented from "./Segmented.svelte";
   import Switch from "./Switch.svelte";
@@ -105,7 +106,7 @@
   </button>
 
   {#if open && settings}
-    <div class="popover" role="dialog" aria-label="Recording">
+    <div class="popover" role="dialog" aria-label="Recording" transition:pop>
       <div class="pop-row">
         <span class="pop-title">
           <span>Recording</span>
@@ -218,13 +219,6 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
-    animation: drop 180ms var(--travel);
-  }
-  @keyframes drop {
-    from {
-      opacity: 0;
-      transform: translateY(-6px);
-    }
   }
   .pop-row {
     display: flex;

@@ -397,18 +397,17 @@
             {/each}
           </div>
         </div>
-        <div class="row">
-          <div class="text"><span>ASCII thumbnails</span><span class="meta">Draw previews as characters until you point at them</span></div>
-          <Switch checked={s.asciiThumbs} label="ASCII thumbnails" onchange={(v) => update({ asciiThumbs: v })} />
-        </div>
-        <div class="row">
-          <div class="text"><span>Note when saving</span><span class="meta">A small box in the corner, without leaving the game</span></div>
-          <Switch checked={s.showToast} label="Note when saving" onchange={(v) => update({ showToast: v })} />
-        </div>
       </div>
 
       <h2>General</h2>
       <div class="panel group">
+        <div class="row">
+          <div class="text">
+            <span>Notifications</span>
+            <span class="meta">Messages like “Clip saved” in the top right corner of your screen. Off shows none at all.</span>
+          </div>
+          <Switch checked={s.showToast} label="Notifications" onchange={(v) => update({ showToast: v })} />
+        </div>
         <div class="row">
           <div class="text"><span>Start with Windows</span><span class="meta">Opens quietly in the tray</span></div>
           <Switch checked={s.launchAtStartup} label="Start with Windows" onchange={(v) => update({ launchAtStartup: v })} />

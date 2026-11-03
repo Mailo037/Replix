@@ -31,17 +31,17 @@
   .row {
     display: flex;
     align-items: center;
-    gap: 5cqmin;
-    padding: 3cqmin;
-    border-radius: 5cqmin;
+    gap: 4cqmin;
+    padding: 2.4cqmin;
+    border-radius: 3.6cqmin;
     background: #1c1c1c;
     animation: light 3.6s var(--travel) infinite;
   }
   .tile {
-    width: 12cqmin;
-    height: 12cqmin;
+    width: 10cqmin;
+    height: 10cqmin;
     flex: none;
-    border-radius: 3.4cqmin;
+    border-radius: 2.6cqmin;
     background: var(--raised);
     color: var(--accent);
     display: grid;
@@ -57,15 +57,15 @@
     color: var(--ghost);
   }
   .cap {
-    min-width: 11cqmin;
-    height: 11cqmin;
-    padding: 0 2.6cqmin;
+    min-width: 9cqmin;
+    height: 9cqmin;
+    padding: 0 2.2cqmin;
     display: grid;
     place-items: center;
     border-radius: 2.6cqmin;
     background: linear-gradient(#3a3a3a, #262626);
-    box-shadow: 0 1.2cqmin 0 #161616;
-    font-size: 4.4cqmin;
+    box-shadow: 0 0.8cqmin 0 #161616;
+    font-size: 3.8cqmin;
   }
   .taken .cap {
     color: var(--red);

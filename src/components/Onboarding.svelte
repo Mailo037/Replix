@@ -228,6 +228,10 @@
                 <span>Start with Windows</span>
                 <Switch checked={s.launchAtStartup} label="Start with Windows" onchange={(v) => update({ launchAtStartup: v })} />
               </div>
+              <div class="line">
+                <span>Notifications in the corner</span>
+                <Switch checked={s.showToast} label="Notifications in the corner" onchange={(v) => update({ showToast: v })} />
+              </div>
             </div>
           {/if}
         </div>
@@ -266,7 +270,7 @@
   .stage {
     position: relative;
     align-self: center;
-    width: min(100%, 100cqh, 560px);
+    width: min(100%, 92cqh, 460px);
     aspect-ratio: 1;
     justify-self: end;
     container-type: size;
@@ -372,7 +376,7 @@
     display: flex;
     align-items: center;
     gap: 14px;
-    padding: 12px 14px;
+    padding: 9px 12px;
     border: 0;
     border-radius: var(--r-row);
     background: var(--overlay);
@@ -387,10 +391,10 @@
     box-shadow: inset 0 0 0 1.5px var(--accent);
   }
   .choice-icon {
-    width: 38px;
-    height: 38px;
+    width: 32px;
+    height: 32px;
     flex: none;
-    border-radius: 12px;
+    border-radius: 9px;
     background: var(--raised);
     color: var(--accent);
     display: grid;
@@ -451,7 +455,7 @@
     padding-top: 16px;
   }
   .nav .btn.primary {
-    min-width: 140px;
+    min-width: 120px;
   }
   @keyframes scene {
     from {

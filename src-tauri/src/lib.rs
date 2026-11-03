@@ -217,7 +217,28 @@ async fn open_editor(app: AppHandle, id: String) -> Res<editor::EditorData> {
             meta.seen = true;
             library::write_meta(&path, &meta);
         }
-        editor::prepare(&id, &path, &meta, &state.cache).map_err(err)
+        editor::prepare(&id, &path, &meta, &state.cache, strip_ready(&app, &id)).map_err(err)
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Tells an open editor that its filmstrip is ready.
+fn strip_ready(app: &AppHandle, id: &str) -> impl FnOnce(std::path::PathBuf) + Send + 'static {
+    let (app, id) = (app.clone(), id.to_string());
+    move |strip| {
+        let _ = app.emit("filmstrip", (id, strip.to_string_lossy().into_owned()));
+    }
+}
+
+/// Prepares a clip's preview material ahead of time, e.g. while the pointer rests on its tile.
+#[tauri::command]
+async fn warm_editor(app: AppHandle, id: String) -> Res<()> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let path = state.path_of(&id)?;
+        let meta = library::read_meta(&path).unwrap_or_default();
+        editor::prepare(&id, &path, &meta, &state.cache, strip_ready(&app, &id)).map(|_| ()).map_err(err)
     })
     .await
     .map_err(err)?
@@ -595,6 +616,7 @@ pub fn run() {
             list_monitors,
             list_library,
             open_editor,
+            warm_editor,
             save_draft,
             rename_item,
             set_favorite,

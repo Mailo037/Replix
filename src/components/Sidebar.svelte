@@ -70,10 +70,13 @@
     margin: 0;
     padding: 0;
   }
+  /* The panel's corners follow the rows inside it: row radius plus the 6px padding. */
   .group {
     display: flex;
     flex-direction: column;
     gap: 2px;
+    padding: 6px;
+    border-radius: 15px;
   }
   .games-panel {
     min-height: 0;
@@ -101,6 +104,7 @@
     transition: background-color 160ms ease, color 160ms ease;
   }
   .row:hover {
+    background: rgb(255 255 255 / 0.035);
     color: var(--ink);
   }
   .row.current {

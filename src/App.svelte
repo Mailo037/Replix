@@ -37,7 +37,9 @@
     {:else if store.settings && !store.settings.onboarded}
       <Onboarding />
     {:else}
-      <Sidebar />
+      {#if store.view.name !== "editor"}
+        <Sidebar />
+      {/if}
       <main>
         {#key page}
           <div class="page">

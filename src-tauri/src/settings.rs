@@ -73,7 +73,6 @@ pub struct Settings {
     /// 0 means no limit.
     pub storage_limit_gb: u32,
     pub hotkeys: Hotkeys,
-    pub ascii_thumbs: bool,
     pub accent: String,
     pub launch_at_startup: bool,
     pub close_to_tray: bool,
@@ -120,7 +119,6 @@ impl Default for Settings {
             clips_dir: default_clips_dir(),
             storage_limit_gb: 0,
             hotkeys: Hotkeys::default(),
-            ascii_thumbs: true,
             accent: "#FF9A3C".into(),
             launch_at_startup: false,
             close_to_tray: true,

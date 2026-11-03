@@ -1,8 +1,6 @@
 <script lang="ts">
   import { startDrag } from "@crabnebula/tauri-plugin-drag";
-  import { onDestroy } from "svelte";
   import { api, fileUrl, type Item } from "../lib/api";
-  import { drawAscii, rain } from "../lib/ascii";
   import { duration, time } from "../lib/format";
   import { share } from "../lib/share";
   import { store } from "../lib/store.svelte";
@@ -25,32 +23,17 @@
     selected?: boolean;
   } = $props();
 
-  let canvas = $state<HTMLCanvasElement>();
-  let drawn = $state(false);
+  let loaded = $state(false);
   let menu = $state(false);
   let menuEl = $state<HTMLDivElement>();
   let moreBtn = $state<HTMLButtonElement>();
   /** The menu was open when the ⋯ button was pressed, so the click closes it rather than reopening. */
   let wasOpen = false;
-  let tick = $state(0);
 
-  const ascii = $derived(store.settings?.asciiThumbs ?? true);
   const thumbUrl = $derived(item.thumb ? fileUrl(item.thumb) : null);
   const isNew = $derived(!item.seen && Date.now() - item.created < 86_400_000 && item.kind !== "screenshot");
   const badge = $derived(isNew ? "[ NEW ]" : item.draft ? "[ DRAFT ]" : item.kind === "session" ? "[ SESSION ]" : null);
   const label = $derived(item.kind === "screenshot" ? "PNG" : duration(item.duration));
-
-  $effect(() => {
-    if (!canvas || !thumbUrl || !ascii) return;
-    const target = canvas;
-    drawAscii(target, thumbUrl).then((ok) => (drawn = ok));
-  });
-
-  // Falling characters until the thumbnail exists.
-  const timer = setInterval(() => {
-    if (!item.thumb) tick += 1;
-  }, 120);
-  onDestroy(() => clearInterval(timer));
 
   // At the cursor on right-click, under the ⋯ button otherwise; always inside the window.
   function showMenu(at: DOMRect, align: "start" | "end") {
@@ -108,15 +91,11 @@
     aria-pressed={selecting ? selected : undefined}
     draggable="true"
     ondragstart={drag}
+    onpointerenter={() => item.kind !== "screenshot" && store.warm(item.id)}
   >
     <span class="thumb">
       {#if thumbUrl}
-        {#if ascii}
-          <canvas bind:this={canvas} class="ascii" class:ready={drawn} aria-hidden="true"></canvas>
-        {/if}
-        <img src={thumbUrl} alt="" class="real" class:under={ascii && drawn} loading="lazy" />
-      {:else}
-        <pre class="rain" aria-hidden="true">{rain(48, 12, tick)}</pre>
+        <img src={thumbUrl} alt="" class="real" class:loaded loading="lazy" onload={() => (loaded = true)} />
       {/if}
       {#if selecting}
         <span class="label badge top check" class:accent={selected} aria-hidden="true">{selected ? "[×]" : "[ ]"}</span>
@@ -207,42 +186,17 @@
   .check {
     font-size: 12px;
   }
-  .ascii,
   .real {
     position: absolute;
     inset: 0;
     width: 100%;
     height: 100%;
     object-fit: cover;
-  }
-  .ascii {
     opacity: 0;
-    transition: opacity 320ms ease;
-  }
-  .ascii.ready {
-    opacity: 1;
-  }
-  .real {
     transition: opacity 260ms ease;
   }
-  .real.under {
-    opacity: 0;
-  }
-  .open:hover .real.under,
-  .open:focus-visible .real.under {
+  .real.loaded {
     opacity: 1;
-  }
-  .rain {
-    position: absolute;
-    inset: 0;
-    margin: 0;
-    padding: 6px 8px;
-    font-family: var(--mono);
-    font-size: 9px;
-    line-height: 10px;
-    color: var(--accent);
-    opacity: 0.5;
-    overflow: hidden;
   }
   .label {
     position: absolute;
@@ -321,14 +275,24 @@
       0 0 0 1px rgb(255 255 255 / 0.04),
       0 14px 36px rgb(0 0 0 / 0.5);
   }
+  .menu {
+    opacity: 0;
+    transform: translateY(-4px);
+    transition:
+      opacity 140ms ease,
+      transform 140ms var(--travel),
+      display 140ms allow-discrete,
+      overlay 140ms allow-discrete;
+  }
   .menu:popover-open {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    animation: rise 160ms var(--travel);
+    opacity: 1;
+    transform: none;
   }
-  @keyframes rise {
-    from {
+  @starting-style {
+    .menu:popover-open {
       opacity: 0;
       transform: translateY(-4px);
     }

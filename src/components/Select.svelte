@@ -225,25 +225,26 @@
     outline: none;
     overflow-y: auto;
   }
+  .options {
+    opacity: 0;
+    transform: translateY(-4px);
+    transition:
+      opacity 140ms ease,
+      transform 140ms var(--travel),
+      display 140ms allow-discrete,
+      overlay 140ms allow-discrete;
+  }
   .options:popover-open {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    animation: drop 160ms var(--travel);
+    opacity: 1;
+    transform: none;
   }
-  .options:global(.up):popover-open {
-    animation-name: lift;
-  }
-  @keyframes drop {
-    from {
+  @starting-style {
+    .options:popover-open {
       opacity: 0;
       transform: translateY(-4px);
-    }
-  }
-  @keyframes lift {
-    from {
-      opacity: 0;
-      transform: translateY(4px);
     }
   }
   .option {
@@ -279,8 +280,8 @@
     color: var(--accent);
   }
   @media (prefers-reduced-motion: reduce) {
-    .options:popover-open {
-      animation: none;
+    .options {
+      transition: none;
     }
   }
 </style>

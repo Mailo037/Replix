@@ -87,6 +87,8 @@ class Store {
     } finally {
       this.loaded = true;
     }
+    // The newest clips are the ones most likely to be opened next.
+    for (const item of this.items.filter((i) => i.kind !== "screenshot").slice(0, 2)) this.warm(item.id);
   }
 
   async save(next: Settings) {
@@ -108,6 +110,15 @@ class Store {
     this.notice = { title, detail, actions };
     window.clearTimeout(this.noticeTimer);
     this.noticeTimer = window.setTimeout(() => (this.notice = null), actions.length ? 6000 : 2600);
+  }
+
+  private warmed = new Set<string>();
+
+  /** Gets a clip ready for the editor in the background, once. */
+  warm(id: string) {
+    if (this.warmed.has(id)) return;
+    this.warmed.add(id);
+    api.warmEditor(id).catch(() => this.warmed.delete(id));
   }
 
   go(view: View) {

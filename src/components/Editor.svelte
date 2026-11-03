@@ -6,10 +6,11 @@
   import { share } from "../lib/share";
   import { store } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
+  import { pop } from "../lib/motion";
   import { tip } from "../lib/tooltip";
   import Segmented from "./Segmented.svelte";
   import Slider from "./Slider.svelte";
-  import Switch from "./Switch.svelte";
+  import Waveform from "./Waveform.svelte";
 
   let { id }: { id: string } = $props();
 
@@ -59,6 +60,17 @@
 
   const pct = (t: number) => (data && data.duration > 0 ? (t / data.duration) * 100 : 0);
 
+  /** Ruler marks: a round step that gives about ten of them. */
+  const ticks = $derived.by(() => {
+    if (!data) return [];
+    const total = data.duration;
+    const step = [0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600].find((s) => total / s <= 10) ?? 1200;
+    const out: number[] = [];
+    for (let t = 0; t < total - step / 4; t += step) out.push(t);
+    return out;
+  });
+  const mark = (t: number) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+
   const icons: Record<string, string> = { game: "game", mic: "mic", app: "app", desktop: "desktop" };
 
   onMount(async () => {
@@ -82,10 +94,15 @@
   const unlisten = listen<number>("export-progress", (e) => {
     if (progress !== null) progress = e.payload;
   });
+  // The filmstrip is made in the background the first time a clip opens.
+  const unlistenStrip = listen<[string, string]>("filmstrip", (e) => {
+    if (data && e.payload[0] === id) data.filmstrip = e.payload[1];
+  });
 
   onDestroy(() => {
     cancelAnimationFrame(frame);
     unlisten.then((f) => f());
+    unlistenStrip.then((f) => f());
   });
 
   function loop() {
@@ -355,19 +372,20 @@
 />
 
 <section class="editor">
-  <header>
-    <button type="button" class="btn small back" onclick={back}><Icon name="back" />Clips</button>
+  <header class="top">
+    <button type="button" class="icon-btn back" aria-label="Back to clips" use:tip={"Back to clips · Esc"} onclick={back}>
+      <Icon name="back" size={16} />
+    </button>
     {#if data}
       <div class="heading">
         <label class="visually-hidden" for="clip-title">Title</label>
         <input id="clip-title" class="title" bind:value={title} spellcheck="false" />
-        <div class="meta">
-          {#if data.draft}<span class="badge">[ DRAFT ]</span>{/if}
-          {data.game ? `${data.game} · ` : ""}{time(data.created)} · {data.width}×{data.height}
-        </div>
+        <span class="meta">
+          {data.game ? `${data.game} · ` : ""}{time(data.created)} · {data.width}×{data.height}{data.draft ? " · Draft" : ""}
+        </span>
       </div>
       <div class="actions">
-        <button type="button" class="btn small" onclick={saveDraft} use:tip={"Ctrl + S"}>Save draft</button>
+        <button type="button" class="btn small ghost" onclick={saveDraft} use:tip={"Ctrl + S"}>Save draft</button>
         <div class="split">
           <button type="button" class="btn small primary" disabled={progress !== null} onclick={() => exportAs("original")}>
             {progress !== null ? `Exporting ${Math.round(progress * 100)}%` : "Export"}
@@ -384,7 +402,7 @@
             <Icon name="chevronDown" size={16} />
           </button>
           {#if exportMenu}
-            <div class="menu" role="menu">
+            <div class="menu" role="menu" transition:pop>
               <button type="button" role="menuitem" onclick={() => exportAs("original")}>
                 <span>Full quality</span><span class="meta">MP4, as recorded</span>
               </button>
@@ -408,48 +426,114 @@
       <p class="meta">{failure}</p>
     </div>
   {:else if data}
-    <div class="workspace">
-      <div class="stage">
-        <div class="column" style:--ratio={data.width && data.height ? data.width / data.height : 16 / 9}>
-        <div class="preview" bind:this={preview}>
-          <!-- svelte-ignore a11y_media_has_caption -->
-          <video bind:this={video} src={fileUrl(data.path)} muted preload="auto" onloadedmetadata={() => seek(trimStart)} onclick={() => (playing ? pause() : play())}></video>
-          {#each data.tracks as track, i (i)}
-            <audio bind:this={audios[i]} src={fileUrl(track.audio)} preload="auto"></audio>
-          {/each}
-          {#if vertical}
-            <span class="crop-mask" style:left="0" style:width="{(1 - cropWidth) * cropX * 100}%"></span>
-            <span class="crop-mask" style:right="0" style:width="{(1 - cropWidth) * (1 - cropX) * 100}%"></span>
-            <button
-              type="button"
-              class="crop"
-              style:left="{(1 - cropWidth) * cropX * 100}%"
-              style:width="{cropWidth * 100}%"
-              aria-label="9:16 frame. Drag or use the arrow keys to move it"
-              onpointerdown={dragCrop}
-              onkeydown={(e) => {
-                if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-                  e.preventDefault();
-                  e.stopPropagation();
-                  cropX = Math.min(1, Math.max(0, cropX + (e.key === "ArrowLeft" ? -0.05 : 0.05)));
-                }
-              }}
-            >
-              <span class="crop-label mono">9:16</span>
-            </button>
+    <div class="viewer">
+      <div class="preview" bind:this={preview} style:--ratio={data.width && data.height ? data.width / data.height : 16 / 9}>
+        <!-- svelte-ignore a11y_media_has_caption -->
+        <video bind:this={video} src={fileUrl(data.path)} muted preload="auto" onloadedmetadata={() => seek(trimStart)} onclick={() => (playing ? pause() : play())}></video>
+        {#each data.tracks as track, i (i)}
+          <audio bind:this={audios[i]} src={fileUrl(track.audio)} preload="auto"></audio>
+        {/each}
+        {#if vertical}
+          <span class="crop-mask" style:left="0" style:width="{(1 - cropWidth) * cropX * 100}%"></span>
+          <span class="crop-mask" style:right="0" style:width="{(1 - cropWidth) * (1 - cropX) * 100}%"></span>
+          <button
+            type="button"
+            class="crop"
+            style:left="{(1 - cropWidth) * cropX * 100}%"
+            style:width="{cropWidth * 100}%"
+            aria-label="9:16 frame. Drag or use the arrow keys to move it"
+            onpointerdown={dragCrop}
+            onkeydown={(e) => {
+              if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+                e.preventDefault();
+                e.stopPropagation();
+                cropX = Math.min(1, Math.max(0, cropX + (e.key === "ArrowLeft" ? -0.05 : 0.05)));
+              }
+            }}
+          >
+            <span class="crop-label mono">9:16</span>
+          </button>
+        {/if}
+        {#if !playing}
+          <button type="button" class="play" aria-label="Play" use:tip={"Play · Space"} onclick={play}><Icon name="play" size={20} /></button>
+        {/if}
+      </div>
+    </div>
+
+    <div class="timeline">
+      <div class="toolbar">
+        <button
+          type="button"
+          class="tool icon"
+          aria-label={playing ? "Pause" : "Play"}
+          use:tip={playing ? "Pause · Space" : "Play · Space"}
+          onclick={() => (playing ? pause() : play())}
+        >
+          <Icon name={playing ? "pause" : "play"} size={16} />
+        </button>
+        <span class="clock mono"><span class="ink">{position(current)}</span> / {position(data.duration)}</span>
+        <span class="sep"></span>
+        <button type="button" class="tool" use:tip={"Split at the playhead · S"} onclick={splitHere}>
+          <Icon name="scissors" size={16} />Split
+        </button>
+        <button
+          type="button"
+          class="tool"
+          disabled={!here || parts.length < 2}
+          use:tip={here?.removed ? "Put this part back · Del" : "Remove the part under the playhead · Del"}
+          onclick={togglePart}
+        >
+          {#if here?.removed}
+            <Icon name="restore" size={16} />Put back
+          {:else}
+            <Icon name="trash" size={16} />Remove
           {/if}
-          {#if !playing}
-            <button type="button" class="play" aria-label="Play" use:tip={"Play · Space"} onclick={play}><Icon name="play" size={24} /></button>
-          {/if}
-          <span class="pos badge">{position(current)} / {position(data.duration)}</span>
+        </button>
+        <span class="sep"></span>
+        <button type="button" class="tool icon" aria-label="Undo" use:tip={"Undo · Ctrl + Z"} disabled={!undoStack.length && snapshot === committed} onclick={undo}>
+          <Icon name="undo" size={16} />
+        </button>
+        <button type="button" class="tool icon" aria-label="Redo" use:tip={"Redo · Ctrl + Y"} disabled={!redoStack.length} onclick={redo}>
+          <Icon name="redo" size={16} />
+        </button>
+        <span class="spacer"></span>
+        <span class="length mono">
+          {parts.length > 1 ? `${kept.length} of ${parts.length} parts · ` : ""}<span class="ink">{position(length)}</span> long
+        </span>
+        <div class="format">
+          <Segmented
+            label="Format"
+            track="var(--black)"
+            value={vertical ? "tall" : "wide"}
+            options={[
+              { value: "wide", label: "16:9" },
+              { value: "tall", label: "9:16" },
+            ]}
+            onchange={(v) => (vertical = v === "tall")}
+          />
+        </div>
+        <button type="button" class="tool icon" aria-label="Save this frame as a screenshot" use:tip={"Save this frame as a screenshot"} onclick={saveFrame}>
+          <Icon name="camera" size={16} />
+        </button>
+      </div>
+
+      <div class="tracks">
+        <div class="row ruler-row">
+          <span class="head"></span>
+          <div class="lane ruler" role="presentation" onpointerdown={(e) => drag("head", e)}>
+            {#each ticks as t (t)}
+              <span class="tick" style:left="{pct(t)}%"><span class="mono">{mark(t)}</span></span>
+            {/each}
+          </div>
         </div>
 
-        <div class="transport">
-          <button type="button" class="icon-btn" aria-label={playing ? "Pause" : "Play"} use:tip={playing ? "Pause · Space" : "Play · Space"} onclick={() => (playing ? pause() : play())}>
-            <Icon name={playing ? "pause" : "play"} size={16} />
-          </button>
+        <div class="row">
+          <div class="head">
+            <span class="kind"><Icon name="clips" size={16} /></span>
+            <span class="name">Video</span>
+          </div>
           <div
-            class="strip"
+            class="lane strip"
             bind:this={strip}
             role="slider"
             tabindex="0"
@@ -460,11 +544,6 @@
             onpointerdown={(e) => drag("head", e)}
             style:background-image={data.filmstrip ? `url("${fileUrl(data.filmstrip)}")` : undefined}
           >
-            <span class="dim" style:left="0" style:width="{pct(trimStart)}%"></span>
-            <span class="dim" style:left="{pct(trimEnd)}%" style:right="0"></span>
-            {#each parts.filter((p) => p.removed) as p (p.start)}
-              <span class="cut" style:left="{pct(p.start)}%" style:width="{pct(p.end) - pct(p.start)}%"></span>
-            {/each}
             <span class="range" style:left="{pct(trimStart)}%" style:width="{pct(trimEnd) - pct(trimStart)}%"></span>
             {#each splits.filter((s) => s > trimStart && s < trimEnd) as s (s)}
               <span class="split-mark" style:left="{pct(s)}%"></span>
@@ -476,7 +555,9 @@
                 use:tip={"Join the parts"}
                 onpointerdown={(e) => e.stopPropagation()}
                 onclick={() => join(s)}
-              >×</button>
+              >
+                <Icon name="close" size={10} />
+              </button>
             {/each}
             <button
               type="button"
@@ -494,65 +575,25 @@
               use:tip={"Drag to set the end · O"}
               onpointerdown={(e) => drag("end", e)}
             ></button>
-            <span class="head" style:left="{pct(current)}%"></span>
           </div>
         </div>
-        <div class="cutbar">
-          <div class="history">
-            <button type="button" class="tool icon" aria-label="Undo" use:tip={"Undo · Ctrl + Z"} disabled={!undoStack.length && snapshot === committed} onclick={undo}>
-              <Icon name="undo" size={16} />
-            </button>
-            <button type="button" class="tool icon" aria-label="Redo" use:tip={"Redo · Ctrl + Y"} disabled={!redoStack.length} onclick={redo}>
-              <Icon name="redo" size={16} />
-            </button>
-          </div>
-          <button type="button" class="tool" onclick={splitHere}>
-            <Icon name="scissors" size={16} />Split here<kbd>S</kbd>
-          </button>
-          <button type="button" class="tool" disabled={!here || parts.length < 2} onclick={togglePart}>
-            {#if here?.removed}
-              <Icon name="restore" size={16} />Put this part back
-            {:else}
-              <Icon name="trash" size={16} />Remove this part
-            {/if}<kbd>Del</kbd>
-          </button>
-          <span class="times mono">
-            {parts.length > 1 ? `${kept.length} of ${parts.length} parts · ` : ""}<span class="ink">{position(length)}</span>
-            of {position(data.duration)}
-          </span>
-        </div>
-        </div>
-      </div>
 
-      <aside class="panel audio" aria-labelledby="audio-title">
-        <div class="format">
-          <span class="format-label">Format</span>
-          <Segmented
-            label="Format"
-            track="var(--canvas)"
-            value={vertical ? "tall" : "wide"}
-            options={[
-              { value: "wide", label: "16:9" },
-              { value: "tall", label: "9:16 · TikTok" },
-            ]}
-            onchange={(v) => (vertical = v === "tall")}
-          />
-        </div>
-        <div class="divider"></div>
-        <div class="audio-head">
-          <h2 id="audio-title">Audio</h2>
-          <p class="meta">Every source is its own track. Turn one off and it's gone from the export.</p>
-        </div>
         {#each data.tracks as track, i (i)}
           {#if edits[i]}
-            <div class="track" class:off={!edits[i].enabled}>
-              <span class="tile"><Icon name={icons[track.kind] ?? "speaker"} /></span>
-              <div class="track-body">
-                <div class="track-top">
+            <div class="row" class:off={!edits[i].enabled}>
+              <div class="head">
+                <button
+                  type="button"
+                  class="kind mute"
+                  aria-pressed={!edits[i].enabled}
+                  aria-label={edits[i].enabled ? `Mute ${track.name}` : `Unmute ${track.name}`}
+                  use:tip={edits[i].enabled ? "Mute" : "Unmute"}
+                  onclick={() => (edits[i].enabled = !edits[i].enabled)}
+                >
+                  <Icon name={edits[i].enabled ? (icons[track.kind] ?? "speaker") : "mute"} size={16} />
+                </button>
+                <div class="head-body">
                   <span class="name">{track.name}</span>
-                  <Switch checked={edits[i].enabled} label={track.name} onchange={(v) => (edits[i].enabled = v)} />
-                </div>
-                <div class="level">
                   <Slider
                     label="{track.name} volume"
                     value={Math.round(edits[i].volume * 100)}
@@ -562,16 +603,25 @@
                   />
                 </div>
               </div>
+              <div class="lane audio-lane" role="presentation" onpointerdown={(e) => drag("head", e)}>
+                <Waveform src={fileUrl(track.audio)} muted={!edits[i].enabled} enabled={data.duration <= 600} />
+              </div>
             </div>
           {/if}
-        {:else}
-          <p class="meta none">This clip has no sound.</p>
         {/each}
-        <div class="divider"></div>
-        <button type="button" class="text-action" onclick={saveFrame}>
-          <Icon name="screenshots" />Save this frame as a screenshot
-        </button>
-      </aside>
+
+        <div class="overlay" aria-hidden="true">
+          <span class="dim" style:left="0" style:width="{pct(trimStart)}%"></span>
+          <span class="dim" style:left="{pct(trimEnd)}%" style:right="0"></span>
+          {#each parts.filter((p) => p.removed) as p (p.start)}
+            <span class="cut" style:left="{pct(p.start)}%" style:width="{pct(p.end) - pct(p.start)}%"></span>
+          {/each}
+          <span class="playhead" style:left="{pct(current)}%"></span>
+        </div>
+      </div>
+      {#if !data.tracks.length}
+        <p class="meta none">This clip has no sound.</p>
+      {/if}
     </div>
   {:else}
     <div class="loading"><span class="mono meta">Preparing tracks…</span></div>
@@ -582,31 +632,42 @@
   .editor {
     flex: 1;
     min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 18px;
-    min-height: 0;
+    gap: 12px;
   }
-  header {
+
+  /* Title row */
+  .top {
     display: flex;
     align-items: center;
-    gap: 14px;
-    flex-wrap: wrap;
+    gap: 10px;
+    min-height: 40px;
   }
   .back {
-    padding-left: 8px;
-    gap: 4px;
+    background: transparent;
+    color: var(--muted);
+  }
+  .back:hover {
+    background: var(--surface);
+    color: var(--ink);
   }
   .heading {
     flex: 1;
-    min-width: 200px;
+    min-width: 0;
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
   }
   .title {
-    width: 100%;
-    padding: 2px 6px;
+    min-width: 80px;
+    max-width: 50%;
+    field-sizing: content;
+    padding: 3px 6px;
     margin-left: -6px;
     border: 0;
-    border-radius: 8px;
+    border-radius: 7px;
     background: transparent;
     font-size: 15px;
     font-weight: 600;
@@ -617,16 +678,14 @@
     background: var(--overlay);
   }
   .heading .meta {
-    display: flex;
-    gap: 6px;
-    align-items: center;
-  }
-  .heading .badge {
-    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .actions {
     display: flex;
-    gap: 8px;
+    align-items: center;
+    gap: 6px;
   }
   .split {
     position: relative;
@@ -635,10 +694,10 @@
   }
   .split .btn.primary:first-child {
     border-radius: 8px 3px 3px 8px;
-    min-width: 84px;
+    min-width: 80px;
   }
   .caret {
-    width: 28px;
+    width: 26px;
     padding: 0;
     border-radius: 3px 8px 8px 3px;
   }
@@ -649,8 +708,11 @@
     z-index: 20;
     width: 230px;
     padding: 4px;
-    border-radius: 14px;
+    border-radius: 12px;
     background: var(--raised);
+    box-shadow:
+      0 0 0 1px rgb(255 255 255 / 0.04),
+      0 14px 36px rgb(0 0 0 / 0.5);
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -659,43 +721,29 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    padding: 8px 12px;
+    padding: 7px 10px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 8px;
     background: transparent;
     text-align: left;
   }
   .menu button:hover {
     background: var(--hover);
   }
-  .workspace {
+
+  /* Player: as large as the room allows, at the clip's own shape. */
+  .viewer {
     flex: 1;
-    min-height: 0;
-    display: flex;
-    gap: 20px;
-    justify-content: center;
-  }
-  /* The player takes all the room it can at the clip's own shape; the timeline follows its width. */
-  .stage {
-    flex: 1;
-    min-width: 0;
-    min-height: 0;
+    min-height: 120px;
     container-type: size;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-  .column {
-    --below: 124px;
-    width: min(100cqw, calc((100cqh - var(--below)) * var(--ratio)));
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
+    display: grid;
+    place-items: center;
   }
   .preview {
     position: relative;
+    width: min(100cqw, 100cqh * var(--ratio));
     aspect-ratio: var(--ratio);
-    border-radius: 16px;
+    border-radius: 12px;
     overflow: hidden;
     background: var(--black);
   }
@@ -710,195 +758,22 @@
     position: absolute;
     top: 50%;
     left: 50%;
-    width: 60px;
-    height: 60px;
-    margin: -30px 0 0 -30px;
+    width: 44px;
+    height: 44px;
+    margin: -22px 0 0 -22px;
+    padding-left: 2px;
     border: 0;
     border-radius: 50%;
-    background: var(--accent);
-    color: var(--on-accent);
+    background: rgb(0 0 0 / 0.5);
+    color: #fff;
+    backdrop-filter: blur(8px);
     display: grid;
     place-items: center;
-    padding-left: 3px;
-    transition: transform 160ms var(--travel);
+    transition: transform 160ms var(--travel), background-color 160ms ease;
   }
   .play:hover {
+    background: rgb(0 0 0 / 0.7);
     transform: scale(1.06);
-  }
-  .play:active {
-    transform: scale(0.9);
-  }
-  .pos {
-    position: absolute;
-    right: 10px;
-    bottom: 10px;
-    padding: 3px 8px;
-    border-radius: 6px;
-    background: rgba(0, 0, 0, 0.65);
-    color: #fff;
-    font-size: 12px;
-  }
-  .transport {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-  .strip {
-    position: relative;
-    flex: 1;
-    height: 60px;
-    border-radius: 12px;
-    background-color: var(--black);
-    background-size: 100% 100%;
-    cursor: pointer;
-    touch-action: none;
-  }
-  .dim {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    background: rgba(10, 10, 9, 0.72);
-  }
-  .dim:first-child {
-    border-radius: 12px 0 0 12px;
-  }
-  .range {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    border: 3px solid var(--accent);
-    border-radius: 12px;
-    pointer-events: none;
-  }
-  .handle {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    width: 14px;
-    margin-left: 0;
-    padding: 0;
-    border: 0;
-    border-radius: 12px 0 0 12px;
-    background: var(--accent);
-    cursor: ew-resize;
-    touch-action: none;
-  }
-  .handle.end {
-    margin-left: -14px;
-    border-radius: 0 12px 12px 0;
-  }
-  .handle::after {
-    content: "";
-    position: absolute;
-    top: 22px;
-    left: 5px;
-    width: 4px;
-    height: 16px;
-    border-radius: 2px;
-    background: var(--on-accent);
-    opacity: 0.55;
-  }
-  .head {
-    position: absolute;
-    top: -4px;
-    bottom: -4px;
-    width: 3px;
-    margin-left: -1.5px;
-    border-radius: 2px;
-    background: #fff;
-    pointer-events: none;
-    box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.4);
-  }
-  .cut {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    background: repeating-linear-gradient(-45deg, rgb(10 10 9 / 0.86) 0 6px, rgb(10 10 9 / 0.6) 6px 12px);
-    pointer-events: none;
-  }
-  .split-mark {
-    position: absolute;
-    top: 3px;
-    bottom: 3px;
-    width: 2px;
-    margin-left: -1px;
-    background: var(--accent);
-    pointer-events: none;
-  }
-  .join {
-    position: absolute;
-    top: -11px;
-    width: 18px;
-    height: 18px;
-    margin-left: -9px;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    background: var(--accent);
-    color: var(--on-accent);
-    font-size: 12.5px;
-    line-height: 18px;
-    opacity: 0;
-    transition: opacity 140ms ease;
-  }
-  .strip:hover .join,
-  .join:focus-visible {
-    opacity: 1;
-  }
-  .cutbar {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding-left: 50px;
-  }
-  .tool {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    height: 32px;
-    padding: 0 10px;
-    border: 0;
-    border-radius: 10px;
-    background: transparent;
-    color: var(--muted);
-    font-size: 12.5px;
-    white-space: nowrap;
-  }
-  .tool:hover:not(:disabled) {
-    background: var(--surface);
-    color: var(--ink);
-  }
-  .tool:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-  kbd {
-    font-family: var(--mono);
-    font-size: 11px;
-    padding: 1px 5px;
-    border-radius: 5px;
-    background: var(--surface);
-    color: var(--ghost);
-  }
-  /* Undo and redo sit at the far end, after the length. */
-  .history {
-    order: 1;
-    display: flex;
-    gap: 2px;
-    padding-left: 6px;
-    border-left: 1px solid var(--line);
-  }
-  .tool.icon {
-    width: 32px;
-    padding: 0;
-    justify-content: center;
-  }
-  .times {
-    margin-left: auto;
-    padding-right: 4px;
-    font-size: 12px;
-    color: var(--ghost);
-    white-space: nowrap;
   }
   .crop-mask {
     position: absolute;
@@ -932,110 +807,279 @@
     color: var(--on-accent);
     font-size: 11px;
   }
-  .format {
+
+  /* Timeline */
+  .timeline {
+    flex: none;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding: 12px 12px 6px;
+    gap: 6px;
+    padding: 6px 10px 10px;
+    border-radius: 14px;
+    background: var(--overlay);
   }
-  .format-label {
-    font-size: 14px;
-    font-weight: 600;
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-height: 36px;
+  }
+  .tool {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 9px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 12.5px;
+    white-space: nowrap;
+  }
+  .tool:hover:not(:disabled) {
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .tool:disabled {
+    opacity: 0.4;
+    cursor: default;
+  }
+  .tool.icon {
+    width: 28px;
+    padding: 0;
+    justify-content: center;
+  }
+  .clock {
+    padding: 0 8px;
+    font-size: 12px;
+    color: var(--ghost);
+    white-space: nowrap;
   }
   .ink {
     color: var(--ink);
   }
-  .audio {
-    width: 300px;
-    flex: none;
-    align-self: flex-start;
+  .sep {
+    width: 1px;
+    height: 16px;
+    margin: 0 6px;
+    background: var(--line);
+  }
+  .spacer {
+    flex: 1;
+  }
+  .length {
+    padding: 0 8px;
+    font-size: 12px;
+    color: var(--ghost);
+    white-space: nowrap;
+  }
+  .format {
+    width: 116px;
+    margin: 0 4px;
+  }
+
+  .tracks {
+    --head: 168px;
+    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 4px;
   }
-  .audio-head {
-    padding: 12px 12px 8px;
-  }
-  .audio-head h2 {
-    margin: 0;
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .audio-head p {
-    margin: 2px 0 0;
-  }
-  .track {
-    display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    padding: 10px 12px;
-    border-radius: var(--r-row);
-    background: var(--surface);
-    transition: background-color 220ms ease;
-  }
-  .track.off {
-    background: transparent;
-  }
-  .tile {
-    width: 32px;
-    height: 32px;
-    flex: none;
-    border-radius: 9px;
-    background: var(--raised);
-    color: var(--accent);
+  .row {
     display: grid;
-    place-items: center;
+    grid-template-columns: var(--head) 1fr;
+    gap: 10px;
+    align-items: stretch;
   }
-  .track.off .tile {
-    color: var(--ghost);
-    background: var(--surface);
-  }
-  .track-body {
-    flex: 1;
-    min-width: 0;
-  }
-  .track-top {
+  .head {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 8px;
-    min-height: 26px;
+    min-width: 0;
+  }
+  .kind {
+    width: 28px;
+    height: 28px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--accent);
+  }
+  .mute {
+    padding: 0;
+    transition: background-color 160ms ease, color 160ms ease;
+  }
+  .mute:hover {
+    background: var(--hover);
+  }
+  .off .mute {
+    background: transparent;
+    color: var(--ghost);
+  }
+  .head-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
   }
   .name {
+    font-size: 12.5px;
     font-weight: 500;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .track.off .name {
-    color: var(--muted);
+  .off .name {
+    color: var(--ghost);
   }
-  .level {
-    margin: 6px 0 0;
+  .lane {
+    position: relative;
+    border-radius: 7px;
+    background: var(--black);
+    cursor: pointer;
+    touch-action: none;
+  }
+  .ruler-row .lane {
+    height: 20px;
+    background: transparent;
+  }
+  .tick {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border-left: 1px solid var(--line);
+  }
+  .tick span {
+    position: absolute;
+    top: 2px;
+    left: 4px;
+    font-size: 10.5px;
+    color: var(--ghost);
+    white-space: nowrap;
+  }
+  .strip {
+    height: 46px;
+    background-size: 100% 100%;
+  }
+  .audio-lane {
+    height: 38px;
+    overflow: hidden;
+  }
+  .range {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    border: 2px solid var(--accent);
+    border-radius: 7px;
+    pointer-events: none;
+  }
+  .handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 2;
+    width: 9px;
+    padding: 0;
+    border: 0;
+    border-radius: 7px 0 0 7px;
+    background: var(--accent);
+    cursor: ew-resize;
+    touch-action: none;
+  }
+  .handle.end {
+    margin-left: -9px;
+    border-radius: 0 7px 7px 0;
+  }
+  .handle::after {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 3.5px;
+    width: 2px;
+    height: 12px;
+    margin-top: -6px;
+    border-radius: 1px;
+    background: var(--on-accent);
+    opacity: 0.55;
+  }
+  .split-mark {
+    position: absolute;
+    top: 2px;
+    bottom: 2px;
+    width: 2px;
+    margin-left: -1px;
+    background: var(--accent);
+    pointer-events: none;
+  }
+  .join {
+    position: absolute;
+    top: 50%;
+    z-index: 3;
+    width: 18px;
+    height: 18px;
+    margin: -9px 0 0 -9px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--on-accent);
+    opacity: 0;
+    transition: opacity 140ms ease;
+  }
+  .strip:hover .join,
+  .join:focus-visible {
+    opacity: 1;
+  }
+
+  /* Shading and the playhead run across every lane. */
+  .overlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: calc(var(--head) + 10px);
+    right: 0;
+    pointer-events: none;
+  }
+  .dim {
+    position: absolute;
+    top: 20px;
+    bottom: 0;
+    background: rgb(10 10 9 / 0.66);
+  }
+  .cut {
+    position: absolute;
+    top: 20px;
+    bottom: 0;
+    background: repeating-linear-gradient(-45deg, rgb(10 10 9 / 0.8) 0 5px, rgb(10 10 9 / 0.55) 5px 10px);
+  }
+  .playhead {
+    position: absolute;
+    top: 0;
+    bottom: -4px;
+    width: 2px;
+    margin-left: -1px;
+    background: #fff;
+    box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
+  }
+  .playhead::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: -4px;
+    width: 10px;
+    height: 10px;
+    border-radius: 3px 3px 50% 50%;
+    background: #fff;
   }
   .none {
-    padding: 0 12px 8px;
-  }
-  .divider {
-    height: 1px;
-    margin: 6px 12px;
-    background: var(--line);
-  }
-  .text-action {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    min-height: 44px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: var(--r-row);
-    background: transparent;
-    color: var(--accent);
-    font-weight: 500;
-    text-align: left;
-  }
-  .text-action:hover {
-    background: var(--surface);
+    margin: 4px 0 0;
+    padding-left: calc(var(--head, 168px) + 10px);
   }
   .failure,
   .loading {
