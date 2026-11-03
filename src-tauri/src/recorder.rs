@@ -127,12 +127,32 @@ struct Pipeline {
     list_offset: u64,
     /// Each save owns its pin until it finishes reading the buffer.
     pins: Vec<Weak<u64>>,
+    /// When FFmpeg was launched; stream time counts from just after it.
+    started: Instant,
+    /// Clips whose last moment is still on its way through the encoder.
+    pending: Vec<PendingClip>,
 }
 
 #[derive(Clone)]
 struct Segment {
     index: u64,
-    duration: f64,
+    /// Stream time in seconds.
+    start: f64,
+    end: f64,
+}
+
+impl Segment {
+    fn duration(&self) -> f64 {
+        (self.end - self.start).max(0.0)
+    }
+}
+
+struct PendingClip {
+    /// Stream time of the key press, where the clip ends.
+    end: f64,
+    pressed: u64,
+    deadline: Instant,
+    pin: Arc<u64>,
 }
 
 impl Pipeline {
@@ -192,6 +212,7 @@ impl Pipeline {
         args.push(ffmpeg::path_arg(&dir.join("seg%06d.ts")));
 
         log::info!("starting capture of {} with {}", target.label(), encoder.id);
+        let started = Instant::now();
         let mut child = std::process::Command::new(ffmpeg::exe())
             .creation_flags(0x0800_0000)
             .args(&args)
@@ -228,6 +249,8 @@ impl Pipeline {
             segments: VecDeque::new(),
             list_offset: 0,
             pins: Vec::new(),
+            started,
+            pending: Vec::new(),
         })
     }
 
@@ -283,7 +306,7 @@ impl Pipeline {
                     if let (Some(index), Ok(start), Ok(end)) =
                         (segment_index(name), start.parse::<f64>(), end.parse::<f64>())
                     {
-                        self.segments.push_back(Segment { index, duration: (end - start).max(0.0) });
+                        self.segments.push_back(Segment { index, start, end });
                     }
                 }
             }
@@ -399,7 +422,7 @@ impl Worker {
         }
         if let Some(mut p) = self.pipeline.take() {
             p.stop();
-            Self::finish_session(&self.app, &self.settings, &mut p);
+            Self::finish_saves(&self.app, &self.settings, &mut p);
         }
     }
 
@@ -434,7 +457,7 @@ impl Worker {
                 if restart {
                     if let Some(mut p) = self.pipeline.take() {
                         p.stop();
-                        Self::finish_session(&self.app, &self.settings, &mut p);
+                        Self::finish_saves(&self.app, &self.settings, &mut p);
                     }
                     self.retry_at = None;
                 } else if let Some(p) = self.pipeline.as_mut() {
@@ -496,7 +519,7 @@ impl Worker {
             if let Some(mut p) = self.pipeline.take() {
                 // A session in progress is saved rather than lost.
                 p.stop();
-                Self::finish_session(&self.app, &self.settings, &mut p);
+                Self::finish_saves(&self.app, &self.settings, &mut p);
             }
             if let Some(target) = desired.clone() {
                 if self.retry_at.is_none_or(|t| Instant::now() >= t) {
@@ -510,6 +533,7 @@ impl Worker {
             if !p.alive() {
                 failed = Some(p.last_error());
             } else {
+                Self::finish_clips(&self.app, &self.settings, p, false);
                 p.trim(p.settings.buffer_seconds);
                 if p.last_poll.elapsed() > Duration::from_secs(2) {
                     p.router.poll();
@@ -521,7 +545,7 @@ impl Worker {
             log::warn!("capture stopped: {error}");
             if let Some(mut p) = self.pipeline.take() {
                 p.stop();
-                Self::finish_session(&self.app, &self.settings, &mut p);
+                Self::finish_saves(&self.app, &self.settings, &mut p);
             }
             // The remembered encoder may no longer work, e.g. after a driver change Windows hid.
             if self.encoders_cached {
@@ -587,38 +611,70 @@ impl Worker {
             return;
         };
         let seconds = p.settings.buffer_seconds as f64;
-        let (done, _) = p.segments();
-        let mut picked = Vec::new();
-        let mut total = 0.0;
-        for s in done.iter().rev() {
-            if total >= seconds {
-                break;
-            }
-            picked.push(s.index);
-            total += s.duration;
-        }
-        picked.reverse();
-        let Some(&first) = picked.first() else {
+        // The last second or so before the key press is still in the encoder, and the segment
+        // holding it is not complete yet. The clip waits for it rather than ending early.
+        // Stream time starts a little after launch, so this end lands just after the press.
+        let end = p.started.elapsed().as_secs_f64();
+        let (done, current) = p.segments();
+        let Some(first) = done.iter().find(|s| s.end > end - seconds).map(|s| s.index).or(current) else {
             crate::toast(&self.app, "Nothing to save yet", "The buffer is still filling up.");
             return;
         };
-        let now = audio::now_ms();
-        let tracks = p.router.tracks_between(now.saturating_sub((seconds as u64 + 2) * 1000), now);
-        let job = SaveJob {
-            app: self.app.clone(),
-            dir: p.dir.clone(),
-            segments: picked,
-            tracks,
-            kind: Kind::Clip,
-            name: p.target.label(),
-            trim_to: (total > seconds + 0.25).then_some(seconds),
-            duration: total,
-            fps: p.settings.fps,
-            clips_dir: self.settings.clips_dir.clone(),
-            limit_gb: self.settings.storage_limit_gb,
-            _pin: p.pin(first),
+        let pending = PendingClip {
+            end,
+            pressed: audio::now_ms(),
+            deadline: Instant::now() + Duration::from_secs_f64(SEGMENT_SECONDS + 4.0),
+            pin: p.pin(first),
         };
-        job.start();
+        p.pending.push(pending);
+        crate::toast(&self.app, "Saving clip…", &p.target.label());
+    }
+
+    /// Saves the clips whose end has been written, or all of them once the capture stopped.
+    fn finish_clips(app: &AppHandle, settings: &Settings, p: &mut Pipeline, all: bool) {
+        let seconds = p.settings.buffer_seconds as f64;
+        let (done, _) = p.segments();
+        let written = done.back().map_or(f64::MIN, |s| s.end);
+        let now = Instant::now();
+        let (ready, waiting) = std::mem::take(&mut p.pending)
+            .into_iter()
+            .partition::<Vec<_>, _>(|c| all || written >= c.end || now >= c.deadline);
+        p.pending = waiting;
+        for clip in ready {
+            // Without the segment holding the press, the clip ends with what was written.
+            let end = clip.end.min(written);
+            let start = end - seconds;
+            let picked: Vec<&Segment> =
+                p.segments.iter().filter(|s| s.index >= *clip.pin && s.end > start && s.start < end).collect();
+            let (Some(first), Some(last)) = (picked.first(), picked.last()) else {
+                crate::toast(app, "Nothing to save yet", "The buffer is still filling up.");
+                continue;
+            };
+            let skip = (start - first.start).max(0.0);
+            let length = end - first.start - skip;
+            let trim = skip > 0.1 || last.end - end > 0.1;
+            let job = SaveJob {
+                app: app.clone(),
+                dir: p.dir.clone(),
+                segments: picked.iter().map(|s| s.index).collect(),
+                tracks: p.router.tracks_between(clip.pressed.saturating_sub((seconds as u64 + 2) * 1000), clip.pressed),
+                kind: Kind::Clip,
+                name: p.target.label(),
+                trim_to: trim.then_some((skip, length)),
+                duration: last.end - first.start,
+                fps: p.settings.fps,
+                clips_dir: settings.clips_dir.clone(),
+                limit_gb: settings.storage_limit_gb,
+                _pin: clip.pin,
+            };
+            job.start();
+        }
+    }
+
+    /// Saves what a capture that just stopped still owes.
+    fn finish_saves(app: &AppHandle, settings: &Settings, p: &mut Pipeline) {
+        Self::finish_clips(app, settings, p, true);
+        Self::finish_session(app, settings, p);
     }
 
     fn toggle_session(&mut self) {
@@ -643,7 +699,7 @@ impl Worker {
         let Some(Session { first, since }) = p.session else { return };
         let (done, _) = p.segments();
         let segments = done.iter().filter(|s| s.index >= first);
-        let duration = segments.clone().map(|s| s.duration).sum();
+        let duration = segments.clone().map(Segment::duration).sum();
         let picked: Vec<u64> = segments.map(|s| s.index).collect();
         let Some(&first) = picked.first() else {
             crate::toast(app, "Nothing to save yet", "The session has no completed recording segments.");
@@ -664,6 +720,7 @@ impl Worker {
             limit_gb: settings.storage_limit_gb,
             _pin: p.pin(first),
         };
+        crate::toast(app, "Saving session…", &job.name);
         job.start();
     }
 
@@ -723,7 +780,8 @@ struct SaveJob {
     tracks: Vec<Track>,
     kind: Kind,
     name: String,
-    trim_to: Option<f64>,
+    /// Seconds to skip at the start of the joined segments, and the length to keep.
+    trim_to: Option<(f64, f64)>,
     duration: f64,
     fps: u32,
     clips_dir: PathBuf,
@@ -733,8 +791,6 @@ struct SaveJob {
 
 impl SaveJob {
     fn start(self) {
-        let title = if self.kind == Kind::Session { "Saving session…" } else { "Saving clip…" };
-        crate::toast(&self.app, title, &self.name);
         std::thread::spawn(move || self.run());
     }
 
@@ -814,7 +870,7 @@ impl SaveJob {
             args.extend(["-map".into(), format!("0:a:{}", t.slot)]);
         }
         args.extend(titles.iter().cloned());
-        let Some(seconds) = self.trim_to else {
+        let Some((skip, seconds)) = self.trim_to else {
             self.write_mp4(&args, joined, self.duration)?;
             return Ok(joined);
         };
@@ -823,10 +879,18 @@ impl SaveJob {
         args.push(ffmpeg::path_arg(joined));
         ffmpeg::run_in(&self.dir.0, &args)?;
 
-        // Seeking from the end gives exactly the clip length: the cut starts at the keyframe
-        // before it and an edit list hides the frames up to it.
-        let mut args: Vec<String> =
-            vec!["-sseof".into(), format!("-{seconds:.3}"), "-i".into(), ffmpeg::path_arg(joined), "-map".into(), "0".into()];
+        // The cut starts at the keyframe before the clip and an edit list hides the frames up
+        // to it; reading stops at the key press.
+        let mut args: Vec<String> = vec![
+            "-ss".into(),
+            format!("{skip:.3}"),
+            "-t".into(),
+            format!("{seconds:.3}"),
+            "-i".into(),
+            ffmpeg::path_arg(joined),
+            "-map".into(),
+            "0".into(),
+        ];
         args.extend(titles);
         match self.write_mp4(&args, trimmed, seconds) {
             Ok(()) => Ok(trimmed),
