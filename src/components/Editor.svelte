@@ -6,7 +6,9 @@
   import { share } from "../lib/share";
   import { store } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
+  import { tip } from "../lib/tooltip";
   import Segmented from "./Segmented.svelte";
+  import Slider from "./Slider.svelte";
   import Switch from "./Switch.svelte";
 
   let { id }: { id: string } = $props();
@@ -218,8 +220,76 @@
     target.addEventListener("pointerup", up);
   }
 
+  // Undo history. Each entry is the edit as it was before a change; a quick run of changes
+  // (dragging a handle, moving a slider) settles into one entry.
+  let undoStack = $state<string[]>([]);
+  let redoStack = $state<string[]>([]);
+  let committed = $state("");
+  let settle = 0;
+  const snapshot = $derived(data ? JSON.stringify(draft()) : "");
+
+  $effect(() => {
+    const now = snapshot;
+    if (!now || now === committed) return;
+    if (!committed) committed = now;
+    else {
+      clearTimeout(settle);
+      settle = window.setTimeout(commit, 400);
+    }
+  });
+
+  function commit() {
+    clearTimeout(settle);
+    if (!snapshot || snapshot === committed) return;
+    undoStack.push(committed);
+    if (undoStack.length > 100) undoStack.shift();
+    redoStack = [];
+    committed = snapshot;
+  }
+
+  function restore(json: string) {
+    const d = JSON.parse(json) as Draft;
+    trimStart = d.trimStart;
+    trimEnd = d.trimEnd;
+    edits = d.tracks;
+    splits = d.splits;
+    cuts = d.cuts;
+    vertical = d.vertical;
+    cropX = d.cropX;
+    committed = json;
+    if (current < trimStart || current > trimEnd) seek(trimStart);
+  }
+
+  function undo() {
+    commit();
+    const prev = undoStack.pop();
+    if (prev === undefined) return;
+    redoStack.push(committed);
+    restore(prev);
+  }
+
+  function redo() {
+    commit();
+    const next = redoStack.pop();
+    if (next === undefined) return;
+    undoStack.push(committed);
+    restore(next);
+  }
+
   function onKey(e: KeyboardEvent) {
-    if ((e.target as HTMLElement).tagName === "INPUT" || !data) return;
+    // Text fields keep their own undo; sliders don't.
+    const target = e.target;
+    if ((target instanceof Element && target.matches("input:not([type=range]), textarea")) || !data) return;
+    if (e.ctrlKey || e.metaKey) {
+      const key = e.key.toLowerCase();
+      if (key === "z" && !e.shiftKey) undo();
+      else if (key === "y" || (key === "z" && e.shiftKey)) redo();
+      else if (key === "s") saveDraft();
+      else return;
+      e.preventDefault();
+      return;
+    }
+    if (e.altKey) return;
     const step = e.shiftKey ? 1 : 1 / 30;
     if (e.code === "Space") {
       e.preventDefault();
@@ -297,15 +367,16 @@
         </div>
       </div>
       <div class="actions">
-        <button type="button" class="btn" onclick={saveDraft}>Save draft</button>
+        <button type="button" class="btn small" onclick={saveDraft} use:tip={"Ctrl + S"}>Save draft</button>
         <div class="split">
-          <button type="button" class="btn primary" disabled={progress !== null} onclick={() => exportAs("original")}>
+          <button type="button" class="btn small primary" disabled={progress !== null} onclick={() => exportAs("original")}>
             {progress !== null ? `Exporting ${Math.round(progress * 100)}%` : "Export"}
           </button>
           <button
             type="button"
-            class="btn primary caret"
+            class="btn small primary caret"
             aria-label="More export options"
+            use:tip={"More formats"}
             aria-expanded={exportMenu}
             disabled={progress !== null}
             onclick={() => (exportMenu = !exportMenu)}
@@ -368,13 +439,13 @@
             </button>
           {/if}
           {#if !playing}
-            <button type="button" class="play" aria-label="Play" onclick={play}><Icon name="play" size={24} /></button>
+            <button type="button" class="play" aria-label="Play" use:tip={"Play · Space"} onclick={play}><Icon name="play" size={24} /></button>
           {/if}
           <span class="pos badge">{position(current)} / {position(data.duration)}</span>
         </div>
 
         <div class="transport">
-          <button type="button" class="icon-btn" aria-label={playing ? "Pause" : "Play"} onclick={() => (playing ? pause() : play())}>
+          <button type="button" class="icon-btn" aria-label={playing ? "Pause" : "Play"} use:tip={playing ? "Pause · Space" : "Play · Space"} onclick={() => (playing ? pause() : play())}>
             <Icon name={playing ? "pause" : "play"} size={16} />
           </button>
           <div
@@ -402,7 +473,7 @@
                 class="join"
                 style:left="{pct(s)}%"
                 aria-label="Join the parts at {position(s)}"
-                title="Join"
+                use:tip={"Join the parts"}
                 onpointerdown={(e) => e.stopPropagation()}
                 onclick={() => join(s)}
               >×</button>
@@ -412,6 +483,7 @@
               class="handle"
               style:left="{pct(trimStart)}%"
               aria-label="Start of the clip"
+              use:tip={"Drag to set the start · I"}
               onpointerdown={(e) => drag("start", e)}
             ></button>
             <button
@@ -419,16 +491,25 @@
               class="handle end"
               style:left="{pct(trimEnd)}%"
               aria-label="End of the clip"
+              use:tip={"Drag to set the end · O"}
               onpointerdown={(e) => drag("end", e)}
             ></button>
             <span class="head" style:left="{pct(current)}%"></span>
           </div>
         </div>
         <div class="cutbar">
-          <button type="button" class="tool" onclick={splitHere} title="S">
+          <div class="history">
+            <button type="button" class="tool icon" aria-label="Undo" use:tip={"Undo · Ctrl + Z"} disabled={!undoStack.length && snapshot === committed} onclick={undo}>
+              <Icon name="undo" size={16} />
+            </button>
+            <button type="button" class="tool icon" aria-label="Redo" use:tip={"Redo · Ctrl + Y"} disabled={!redoStack.length} onclick={redo}>
+              <Icon name="redo" size={16} />
+            </button>
+          </div>
+          <button type="button" class="tool" onclick={splitHere}>
             <Icon name="scissors" size={16} />Split here<kbd>S</kbd>
           </button>
-          <button type="button" class="tool" disabled={!here || parts.length < 2} onclick={togglePart} title="Delete">
+          <button type="button" class="tool" disabled={!here || parts.length < 2} onclick={togglePart}>
             {#if here?.removed}
               <Icon name="restore" size={16} />Put this part back
             {:else}
@@ -471,15 +552,15 @@
                   <span class="name">{track.name}</span>
                   <Switch checked={edits[i].enabled} label={track.name} onchange={(v) => (edits[i].enabled = v)} />
                 </div>
-                <input
-                  type="range"
-                  min="0"
-                  max="100"
-                  aria-label={`${track.name} volume`}
-                  value={Math.round(edits[i].volume * 100)}
-                  disabled={!edits[i].enabled}
-                  oninput={(e) => (edits[i].volume = Number((e.target as HTMLInputElement).value) / 100)}
-                />
+                <div class="level">
+                  <Slider
+                    label="{track.name} volume"
+                    value={Math.round(edits[i].volume * 100)}
+                    valuetext="{Math.round(edits[i].volume * 100)}%"
+                    disabled={!edits[i].enabled}
+                    oninput={(v) => (edits[i].volume = v / 100)}
+                  />
+                </div>
               </div>
             </div>
           {/if}
@@ -527,7 +608,7 @@
     border: 0;
     border-radius: 8px;
     background: transparent;
-    font-size: 21px;
+    font-size: 15px;
     font-weight: 600;
     outline: none;
   }
@@ -553,13 +634,13 @@
     gap: 2px;
   }
   .split .btn.primary:first-child {
-    border-radius: var(--r-control) 6px 6px var(--r-control);
-    min-width: 118px;
+    border-radius: 8px 3px 3px 8px;
+    min-width: 84px;
   }
   .caret {
-    width: 40px;
+    width: 28px;
     padding: 0;
-    border-radius: 6px var(--r-control) var(--r-control) 6px;
+    border-radius: 3px 8px 8px 3px;
   }
   .menu {
     position: absolute;
@@ -755,7 +836,7 @@
     border-radius: 50%;
     background: var(--accent);
     color: var(--on-accent);
-    font-size: 13px;
+    font-size: 12.5px;
     line-height: 18px;
     opacity: 0;
     transition: opacity 140ms ease;
@@ -780,7 +861,7 @@
     border-radius: 10px;
     background: transparent;
     color: var(--muted);
-    font-size: 13px;
+    font-size: 12.5px;
     white-space: nowrap;
   }
   .tool:hover:not(:disabled) {
@@ -789,6 +870,7 @@
   }
   .tool:disabled {
     opacity: 0.45;
+    cursor: default;
   }
   kbd {
     font-family: var(--mono);
@@ -797,6 +879,19 @@
     border-radius: 5px;
     background: var(--surface);
     color: var(--ghost);
+  }
+  /* Undo and redo sit at the far end, after the length. */
+  .history {
+    order: 1;
+    display: flex;
+    gap: 2px;
+    padding-left: 6px;
+    border-left: 1px solid var(--line);
+  }
+  .tool.icon {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
   }
   .times {
     margin-left: auto;
@@ -844,14 +939,14 @@
     padding: 12px 12px 6px;
   }
   .format-label {
-    font-size: 17px;
+    font-size: 14px;
     font-weight: 600;
   }
   .ink {
     color: var(--ink);
   }
   .audio {
-    width: 320px;
+    width: 300px;
     flex: none;
     align-self: flex-start;
     display: flex;
@@ -863,7 +958,7 @@
   }
   .audio-head h2 {
     margin: 0;
-    font-size: 17px;
+    font-size: 14px;
     font-weight: 600;
   }
   .audio-head p {
@@ -882,10 +977,10 @@
     background: transparent;
   }
   .tile {
-    width: 38px;
-    height: 38px;
+    width: 32px;
+    height: 32px;
     flex: none;
-    border-radius: 12px;
+    border-radius: 9px;
     background: var(--raised);
     color: var(--accent);
     display: grid;
@@ -915,10 +1010,8 @@
   .track.off .name {
     color: var(--muted);
   }
-  input[type="range"] {
-    width: 100%;
-    margin: 8px 0 2px;
-    accent-color: var(--accent);
+  .level {
+    margin: 6px 0 0;
   }
   .none {
     padding: 0 12px 8px;
@@ -950,6 +1043,6 @@
     text-align: center;
   }
   .failure h2 {
-    font-size: 17px;
+    font-size: 14px;
   }
 </style>

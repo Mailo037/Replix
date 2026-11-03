@@ -14,7 +14,6 @@
 </script>
 
 <div class="art" aria-hidden="true">
-  <span class="rec mono"><i></i>buffer</span>
   <div class="track">
     <div class="reel">
       {#each reel as x, i (i)}
@@ -34,23 +33,6 @@
     position: absolute;
     inset: 0;
   }
-  .rec {
-    position: absolute;
-    top: 9cqmin;
-    left: 9cqmin;
-    display: flex;
-    align-items: center;
-    gap: 2cqmin;
-    font-size: 3.2cqmin;
-    color: var(--ghost);
-  }
-  .rec i {
-    width: 2.4cqmin;
-    height: 2.4cqmin;
-    border-radius: 50%;
-    background: var(--accent);
-    animation: breathe 2.4s ease-in-out infinite;
-  }
   .track {
     position: absolute;
     left: 0;
@@ -58,7 +40,7 @@
     top: 40cqmin;
     height: 20cqmin;
     overflow: hidden;
-    mask-image: linear-gradient(to right, transparent 4%, #000 42%);
+    mask-image: linear-gradient(to right, transparent 4%, #000 42%, #000 90%, transparent);
   }
   .reel {
     display: flex;
@@ -135,15 +117,9 @@
       opacity: 0.25;
     }
   }
-  @keyframes breathe {
-    50% {
-      opacity: 0.35;
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
     .reel,
-    .dust,
-    .rec i {
+    .dust {
       animation: none;
     }
   }

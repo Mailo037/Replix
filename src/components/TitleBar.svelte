@@ -1,6 +1,7 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { store } from "../lib/store.svelte";
+  import { tip } from "../lib/tooltip";
   import { updates } from "../lib/updates.svelte";
   import Icon from "./Icon.svelte";
   import Mark from "./Mark.svelte";
@@ -19,23 +20,24 @@
         type="button"
         class="gear"
         class:current={inSettings}
-        aria-label="Settings"
+        aria-label={updates.phase === "available" ? "Settings, update ready" : "Settings"}
+        use:tip={updates.phase === "available" ? "Settings · update ready" : "Settings"}
         aria-pressed={inSettings}
         onclick={() => store.go(inSettings ? { name: "library", filter: "all", game: null } : { name: "settings" })}
       >
         <Icon name="settings" size={16} />
-        {#if updates.phase === "available"}<span class="badge-dot" title="Update ready"></span>{/if}
+        {#if updates.phase === "available"}<span class="badge-dot"></span>{/if}
       </button>
     </div>
   {/if}
   <div class="controls">
-    <button type="button" aria-label="Minimize" onclick={() => win.minimize()}>
+    <button type="button" aria-label="Minimize" use:tip={"Minimize"} onclick={() => win.minimize()}>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5h10" stroke="currentColor" /></svg>
     </button>
-    <button type="button" aria-label="Maximize" onclick={() => win.toggleMaximize()}>
+    <button type="button" aria-label="Maximize" use:tip={"Maximize"} onclick={() => win.toggleMaximize()}>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" /></svg>
     </button>
-    <button type="button" class="close" aria-label="Close" onclick={() => win.close()}>
+    <button type="button" class="close" aria-label="Close" use:tip={store.settings?.closeToTray ? "Close · keeps recording in the tray" : "Close"} onclick={() => win.close()}>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" /></svg>
     </button>
   </div>

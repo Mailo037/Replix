@@ -13,6 +13,7 @@
   import Sources from "./onboarding/Sources.svelte";
   import Tracks from "./onboarding/Tracks.svelte";
   import Segmented from "./Segmented.svelte";
+  import Select from "./Select.svelte";
   import Switch from "./Switch.svelte";
 
   // First start: one idea per step, each with its own picture.
@@ -25,6 +26,14 @@
   const current = $derived(steps[step]);
   const keys = (combo: string) => (combo ? combo.split("+") : ["Not set"]);
   const micDevice = $derived(store.settings?.micDevice ?? null);
+  const micOptions = $derived([
+    { value: null, label: "Windows default", hint: mics.find((m) => m.default)?.name },
+    ...mics.map((m) => ({ value: m.id as string | null, label: m.name })),
+  ]);
+  const appOptions = $derived([
+    ...apps.map((a) => ({ value: a.exe as string | null, label: a.name, hint: a.title })),
+    ...(s.appExe && !apps.some((a) => a.exe === s.appExe) ? [{ value: s.appExe, label: s.appExe }] : []),
+  ]);
 
   onMount(async () => {
     mics = await api.listMics();
@@ -54,7 +63,7 @@
   }
 
   function onKey(e: KeyboardEvent) {
-    if ((e.target as HTMLElement).closest("input, select, textarea")) return;
+    if ((e.target as HTMLElement).closest("input, textarea, [role='listbox'], [aria-haspopup]")) return;
     if (e.key === "ArrowRight" || e.key === "Enter") {
       if (e.key === "Enter" && (e.target as HTMLElement).closest("button")) return;
       e.preventDefault();
@@ -158,21 +167,14 @@
               {/each}
             </div>
             {#if s.source === "app"}
-              <select
-                class="app-pick"
-                value={s.appExe ?? ""}
-                onfocus={async () => (apps = await api.listApps())}
-                onchange={(e) => update({ appExe: (e.target as HTMLSelectElement).value || null })}
-                aria-label="App to record"
-              >
-                <option value="">Choose an open app…</option>
-                {#each apps as a (a.exe)}
-                  <option value={a.exe}>{a.name}</option>
-                {/each}
-                {#if s.appExe && !apps.some((a) => a.exe === s.appExe)}
-                  <option value={s.appExe}>{s.appExe}</option>
-                {/if}
-              </select>
+              <Select
+                label="App to record"
+                placeholder="Choose an open app…"
+                value={s.appExe}
+                options={appOptions}
+                onopen={async () => (apps = await api.listApps())}
+                onchange={(v) => update({ appExe: v })}
+              />
             {/if}
           {:else if current === "tracks"}
             <h1>Every sound gets its own track</h1>
@@ -191,16 +193,9 @@
               {#if s.recordMic}
                 <div class="line">
                   <span>Microphone</span>
-                  <select
-                    value={s.micDevice ?? ""}
-                    onchange={(e) => update({ micDevice: (e.target as HTMLSelectElement).value || null })}
-                    aria-label="Microphone"
-                  >
-                    <option value="">Windows default</option>
-                    {#each mics as m (m.id)}
-                      <option value={m.id}>{m.name}</option>
-                    {/each}
-                  </select>
+                  <div class="pick">
+                    <Select label="Microphone" value={s.micDevice} options={micOptions} onchange={(v) => update({ micDevice: v })} />
+                  </div>
                 </div>
                 <div class="line">
                   <span>Noise suppression</span>
@@ -275,12 +270,6 @@
     aspect-ratio: 1;
     justify-self: end;
     container-type: size;
-    border-radius: 28px;
-    overflow: hidden;
-    background:
-      radial-gradient(ellipse 80% 60% at 50% 0%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 70%),
-      radial-gradient(circle, rgb(255 255 255 / 0.05) 0.18cqmin, transparent 0.3cqmin) 0 0 / 4cqmin 4cqmin,
-      var(--black);
   }
   .scene {
     position: absolute;
@@ -319,7 +308,7 @@
     border: 0;
     background: transparent;
     color: var(--ghost);
-    font-size: 13px;
+    font-size: 12.5px;
     padding: 6px 4px;
   }
   .skip:hover {
@@ -337,7 +326,7 @@
   }
   h1 {
     margin: 0;
-    font-size: clamp(26px, 3.2vw, 34px);
+    font-size: clamp(24px, 2.8vw, 30px);
     line-height: 1.12;
     font-weight: 650;
     letter-spacing: -0.02em;
@@ -347,7 +336,7 @@
     margin: 0;
     max-width: 44ch;
     color: var(--muted);
-    font-size: 15px;
+    font-size: 14px;
     line-height: 1.55;
     text-wrap: pretty;
   }
@@ -356,7 +345,7 @@
   }
   kbd {
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 12.5px;
     padding: 2px 7px;
     border-radius: 6px;
     background: var(--surface);
@@ -370,7 +359,7 @@
     margin-top: 6px;
   }
   .label {
-    font-size: 13px;
+    font-size: 12.5px;
     color: var(--muted);
   }
   .choices {
@@ -414,7 +403,7 @@
     flex-direction: column;
   }
   .choice-text span {
-    font-size: 13px;
+    font-size: 12.5px;
     color: var(--muted);
   }
   .mark {
@@ -424,16 +413,9 @@
   [aria-checked="true"] .mark {
     color: var(--accent);
   }
-  select {
-    height: 40px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: 10px;
-    background: var(--surface);
-    max-width: 260px;
-  }
-  .app-pick {
-    max-width: none;
+  .pick {
+    width: 260px;
+    min-width: 0;
   }
   .rows {
     display: flex;

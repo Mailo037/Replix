@@ -17,6 +17,9 @@
     store.init().catch((e) => (error = String(e)));
   });
 
+  /** Each page (and each library filter) fades in when you switch to it. */
+  const page = $derived(JSON.stringify(store.view));
+
   const glow = $derived(
     `radial-gradient(ellipse 55% 100% at 50% 0%, ${rgba(store.settings?.accent ?? "#FF9A3C", 0.13)}, transparent 72%)`,
   );
@@ -36,15 +39,17 @@
     {:else}
       <Sidebar />
       <main>
-        {#if store.view.name === "library"}
-          <Library filter={store.view.filter} game={store.view.game} />
-        {:else if store.view.name === "editor"}
-          {#key store.view.id}
-            <Editor id={store.view.id} />
-          {/key}
-        {:else}
-          <Settings />
-        {/if}
+        {#key page}
+          <div class="page">
+            {#if store.view.name === "library"}
+              <Library filter={store.view.filter} game={store.view.game} />
+            {:else if store.view.name === "editor"}
+              <Editor id={store.view.id} />
+            {:else}
+              <Settings />
+            {/if}
+          </div>
+        {/key}
       </main>
     {/if}
   </div>
@@ -116,6 +121,19 @@
     min-height: 0;
     display: flex;
     padding-top: 8px;
+  }
+  .page {
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    animation: page 220ms var(--travel);
+  }
+  @keyframes page {
+    from {
+      opacity: 0;
+      transform: translateY(4px);
+    }
   }
   .notice {
     position: absolute;

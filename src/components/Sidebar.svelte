@@ -58,7 +58,7 @@
 
 <style>
   .sidebar {
-    width: 216px;
+    width: 196px;
     flex: none;
     display: flex;
     flex-direction: column;
@@ -90,11 +90,11 @@
     width: 100%;
     display: flex;
     align-items: center;
-    gap: 12px;
-    height: 40px;
-    padding: 0 12px;
+    gap: 10px;
+    height: 34px;
+    padding: 0 10px;
     border: 0;
-    border-radius: 12px;
+    border-radius: 9px;
     background: transparent;
     color: var(--muted);
     text-align: left;

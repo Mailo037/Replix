@@ -95,7 +95,7 @@
     padding: 0 12px;
     border-radius: 10px;
     background: var(--black);
-    font-size: 15px;
+    font-size: 14px;
     line-height: 1;
     color: var(--line);
     overflow: hidden;

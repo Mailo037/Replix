@@ -18,11 +18,11 @@
   .switch {
     position: relative;
     flex: none;
-    width: 44px;
-    height: 26px;
+    width: 36px;
+    height: 20px;
     padding: 0;
     border: 0;
-    border-radius: 13px;
+    border-radius: 10px;
     background: var(--hover);
     transition: background-color 220ms ease;
   }
@@ -30,8 +30,8 @@
     position: absolute;
     top: 3px;
     left: 3px;
-    width: 20px;
-    height: 20px;
+    width: 14px;
+    height: 14px;
     border-radius: 50%;
     background: var(--muted);
     transition: left 220ms var(--travel), background-color 220ms ease;
@@ -40,7 +40,7 @@
     background: var(--accent);
   }
   .switch.on span {
-    left: 21px;
+    left: 19px;
     background: #fff;
   }
 </style>

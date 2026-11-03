@@ -10,7 +10,7 @@
     <span><b>Clip saved</b><br /><small>Last {seconds < 60 ? `${seconds} s` : `${seconds / 60} min`}</small></span>
   </div>
   <div class="clip">
-    <span class="thumb"><span class="badge mono">[ NEW ]</span><span class="len mono">{length}</span></span>
+    <span class="thumb"><span class="len mono">{length}</span></span>
   </div>
   <div class="keys">
     {#each keys as key, i (i)}
@@ -83,20 +83,12 @@
       linear-gradient(165deg, transparent 55%, #3a3a3a 55.5% 68%, transparent 68.5%),
       linear-gradient(#2a2a2a, #1b1b1b 60%, #333 60.5%);
   }
-  .badge,
   .len {
     position: absolute;
     padding: 0.4cqmin 1.4cqmin;
     border-radius: 1.2cqmin;
     background: rgb(0 0 0 / 0.65);
     font-size: 2.8cqmin;
-  }
-  .badge {
-    top: 1.6cqmin;
-    left: 1.6cqmin;
-    color: var(--accent);
-  }
-  .len {
     right: 1.6cqmin;
     bottom: 1.6cqmin;
     color: #fff;

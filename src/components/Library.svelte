@@ -1,14 +1,16 @@
 <script lang="ts">
-  import { api, fileUrl, type Item } from "../lib/api";
+  import { api, type Item } from "../lib/api";
   import { day, size } from "../lib/format";
   import { store, type Filter } from "../lib/store.svelte";
   import ClipTile from "./ClipTile.svelte";
   import Icon from "./Icon.svelte";
+  import ImageViewer from "./ImageViewer.svelte";
   import Mark from "./Mark.svelte";
 
   let { filter, game }: { filter: Filter; game: string | null } = $props();
   let query = $state("");
-  let viewing = $state<Item | null>(null);
+  /** Which screenshot is open in the viewer. */
+  let viewing = $state<number | null>(null);
   let selecting = $state(false);
   let selected = $state<string[]>([]);
   /** Where a Shift-click range starts. */
@@ -47,6 +49,8 @@
     return out;
   });
 
+  const shots = $derived(visible.filter((i) => i.kind === "screenshot"));
+
   const clipKey = $derived(store.settings?.hotkeys.clip.replace("+", " + ") ?? "Alt + C");
 
   const totalSize = $derived(visible.reduce((sum, i) => sum + i.size, 0));
@@ -61,7 +65,7 @@
   });
 
   function open(item: Item) {
-    if (item.kind === "screenshot") viewing = item;
+    if (item.kind === "screenshot") viewing = shots.indexOf(item);
     else store.go({ name: "editor", id: item.id });
   }
 
@@ -105,9 +109,9 @@
 
   function onKey(e: KeyboardEvent) {
     const typing = (e.target as HTMLElement).closest("input, textarea, select");
+    if (viewing !== null) return;
     if (e.key === "Escape") {
-      if (viewing) viewing = null;
-      else if (selecting) stopSelecting();
+      if (selecting) stopSelecting();
     } else if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && visible.length) {
       e.preventDefault();
       selecting = true;
@@ -147,7 +151,12 @@
         {/if}
         <label class="search">
           <Icon name="search" size={16} />
-          <input type="search" placeholder="Search clips" aria-label="Search clips" bind:value={query} />
+          <input type="search" placeholder="Search clips" aria-label="Search clips" spellcheck="false" bind:value={query} />
+          {#if query}
+            <button type="button" class="clear" aria-label="Clear search" onclick={() => (query = "")}>
+              <Icon name="close" size={14} />
+            </button>
+          {/if}
         </label>
       </div>
     {/if}
@@ -192,18 +201,8 @@
   </div>
 </section>
 
-{#if viewing}
-  <div class="viewer" role="dialog" aria-label={viewing.title}>
-    <button type="button" class="backdrop" aria-label="Close" onclick={() => (viewing = null)}></button>
-    <img src={fileUrl(viewing.path)} alt={viewing.title} />
-    <div class="viewer-bar">
-      <span class="mono meta">{viewing.width}×{viewing.height}</span>
-      <button type="button" class="btn small" onclick={() => viewing && api.revealItem(viewing.id)}>
-        <Icon name="folder" size={16} />Show in folder
-      </button>
-      <button type="button" class="btn small" onclick={() => (viewing = null)}>Close</button>
-    </div>
-  </div>
+{#if viewing !== null && shots.length}
+  <ImageViewer items={shots} bind:index={viewing} onclose={() => (viewing = null)} />
 {/if}
 
 <style>
@@ -219,8 +218,8 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    min-height: 58px;
-    padding: 6px 6px 12px;
+    min-height: 44px;
+    padding: 0 6px 8px;
   }
   header > .meta {
     white-space: nowrap;
@@ -268,7 +267,7 @@
   }
   h1 {
     margin: 0;
-    font-size: 21px;
+    font-size: 16px;
     font-weight: 600;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -278,11 +277,11 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    width: 300px;
-    max-width: 50%;
-    height: 40px;
-    padding: 0 14px;
-    border-radius: var(--r-control);
+    flex: 0 1 280px;
+    min-width: 160px;
+    height: 32px;
+    padding: 0 12px;
+    border-radius: 9px;
     background: var(--overlay);
     color: var(--ghost);
   }
@@ -299,6 +298,24 @@
   }
   .search input::placeholder {
     color: var(--ghost);
+  }
+  .search input::-webkit-search-cancel-button {
+    display: none;
+  }
+  .clear {
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    margin-right: -6px;
+    border: 0;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--ghost);
+  }
+  .clear:hover {
+    background: var(--surface);
+    color: var(--ink);
   }
   .body {
     flex: 1;
@@ -322,7 +339,7 @@
   }
   .group h2 {
     margin: 0;
-    font-size: 17px;
+    font-size: 14px;
     font-weight: 600;
   }
   .grid {
@@ -350,7 +367,7 @@
   }
   .empty h2 {
     margin: 0 0 6px;
-    font-size: 17px;
+    font-size: 14px;
     font-weight: 600;
   }
   .empty p {
@@ -364,45 +381,5 @@
     border-radius: 6px;
     background: var(--surface);
     color: var(--ink);
-  }
-  .viewer {
-    position: fixed;
-    inset: 0;
-    z-index: 50;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 16px;
-    padding: 56px 40px 32px;
-  }
-  .backdrop {
-    position: absolute;
-    inset: 0;
-    border: 0;
-    background: rgba(0, 0, 0, 0.82);
-    cursor: default;
-  }
-  .viewer img {
-    position: relative;
-    max-width: 100%;
-    max-height: calc(100% - 64px);
-    border-radius: 14px;
-    animation: pop 200ms var(--travel);
-  }
-  @keyframes pop {
-    from {
-      opacity: 0;
-      transform: scale(0.97);
-    }
-  }
-  .viewer-bar {
-    position: relative;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .viewer-bar .meta {
-    margin-right: 8px;
   }
 </style>

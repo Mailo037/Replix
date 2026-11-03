@@ -169,8 +169,8 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    min-height: 56px;
-    padding: 10px 12px;
+    min-height: 48px;
+    padding: 8px 12px;
     border: 0;
     border-radius: 12px;
     background: transparent;
@@ -199,7 +199,7 @@
     background: var(--surface);
     color: var(--accent);
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 12.5px;
     display: grid;
     place-items: center;
   }

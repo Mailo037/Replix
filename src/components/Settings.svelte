@@ -16,7 +16,10 @@
   import Icon from "./Icon.svelte";
   import MicMeter from "./MicMeter.svelte";
   import Profiles from "./Profiles.svelte";
+  import { tip } from "../lib/tooltip";
   import Segmented from "./Segmented.svelte";
+  import Select from "./Select.svelte";
+  import Slider from "./Slider.svelte";
   import Switch from "./Switch.svelte";
 
   let monitors = $state<Monitor[]>([]);
@@ -31,6 +34,11 @@
   // Its own derived so the mic test restarts only when the device really changes.
   const micDevice = $derived(store.settings?.micDevice ?? null);
   const defaultMic = $derived(mics.find((m) => m.default));
+  const micOptions = $derived([
+    { value: null, label: "Windows default", hint: defaultMic?.name },
+    ...mics.map((m) => ({ value: m.id as string | null, label: m.name })),
+    ...(s.micDevice && !mics.some((m) => m.id === s.micDevice) ? [{ value: s.micDevice, label: "Not connected" }] : []),
+  ]);
   const accents = ["#FF9A3C", "#FF5FD2", "#F5D547", "#3DDC97", "#5AB4FF", "#A98BFF", "#FF6B6B"];
 
   let storage = $state<StorageInfo | null>(null);
@@ -236,12 +244,14 @@
             <span>Encoder</span>
             <span class="meta">{store.status.encoder ? `Using ${store.status.encoder}` : "Picked automatically"}</span>
           </div>
-          <select value={s.encoder} onchange={(e) => update({ encoder: (e.target as HTMLSelectElement).value })} aria-label="Encoder">
-            <option value="auto">Automatic</option>
-            {#each encoders as enc (enc.id)}
-              <option value={enc.id}>{enc.label}</option>
-            {/each}
-          </select>
+          <div class="pick">
+            <Select
+              label="Encoder"
+              value={s.encoder}
+              options={[{ value: "auto", label: "Automatic" }, ...encoders.map((enc) => ({ value: enc.id, label: enc.label }))]}
+              onchange={(v) => update({ encoder: v })}
+            />
+          </div>
         </div>
         <div class="row">
           <div class="text"><span>Mouse cursor</span><span class="meta">Show the pointer in clips</span></div>
@@ -261,33 +271,27 @@
               <span>Device</span>
               <span class="meta">{s.micDevice ? "Stays on this mic" : `Follows Windows${defaultMic ? ` · ${defaultMic.name}` : ""}`}</span>
             </div>
-            <select
-              class="device"
-              value={s.micDevice ?? ""}
-              onfocus={refreshMics}
-              onchange={(e) => update({ micDevice: (e.target as HTMLSelectElement).value || null })}
-              aria-label="Microphone"
-            >
-              <option value="">Windows default</option>
-              {#each mics as m (m.id)}
-                <option value={m.id}>{m.name}</option>
-              {/each}
-              {#if s.micDevice && !mics.some((m) => m.id === s.micDevice)}
-                <option value={s.micDevice}>Not connected</option>
-              {/if}
-            </select>
+            <div class="pick wide">
+              <Select
+                label="Microphone"
+                value={s.micDevice}
+                options={micOptions}
+                onopen={refreshMics}
+                onchange={(v) => update({ micDevice: v })}
+              />
+            </div>
           </div>
           <div class="row">
             <div class="text"><span>Volume</span><span class="meta">How loud your voice is in clips</span></div>
             <div class="volume">
-              <input
-                type="range"
-                min="0"
-                max="200"
-                step="5"
+              <Slider
+                label="Microphone volume"
+                min={0}
+                max={200}
+                step={5}
                 value={Math.round(s.micVolume * 100)}
-                oninput={(e) => update({ micVolume: Number((e.target as HTMLInputElement).value) / 100 })}
-                aria-label="Microphone volume"
+                valuetext="{Math.round(s.micVolume * 100)}%"
+                oninput={(v) => update({ micVolume: v / 100 })}
               />
               <span class="mono percent">{Math.round(s.micVolume * 100)}%</span>
             </div>
@@ -357,7 +361,7 @@
         <div class="row">
           <div class="text"><span>Clips folder</span><span class="meta path mono">{s.clipsDir}</span></div>
           <div class="inline">
-            <button type="button" class="icon-btn" aria-label="Open folder" onclick={() => api.openClipsFolder()}><Icon name="folder" /></button>
+            <button type="button" class="icon-btn" aria-label="Open folder" use:tip={"Open folder"} onclick={() => api.openClipsFolder()}><Icon name="folder" /></button>
             <button type="button" class="btn small" onclick={chooseFolder}>Change</button>
           </div>
         </div>
@@ -439,7 +443,7 @@
   }
   h1 {
     margin: 6px 6px 4px;
-    font-size: 21px;
+    font-size: 16px;
     font-weight: 600;
   }
   /* Scrolls edge to edge; the content sits in a centred column. */
@@ -454,7 +458,7 @@
   }
   h2 {
     margin: 18px 6px 8px;
-    font-size: 17px;
+    font-size: 14px;
     font-weight: 600;
   }
   .group {
@@ -468,8 +472,8 @@
     display: flex;
     align-items: center;
     gap: 16px;
-    min-height: 56px;
-    padding: 10px 12px;
+    min-height: 48px;
+    padding: 8px 12px;
   }
   .row + .row {
     border-top: 1px solid var(--line);
@@ -520,9 +524,12 @@
     background: var(--accent);
     transition: width 400ms var(--travel);
   }
-  .device {
-    max-width: 300px;
-    text-overflow: ellipsis;
+  .pick {
+    width: 200px;
+    flex: none;
+  }
+  .pick.wide {
+    width: 280px;
   }
   .volume {
     display: flex;
@@ -530,32 +537,21 @@
     gap: 12px;
     width: 260px;
   }
-  .volume input {
-    flex: 1;
-    accent-color: var(--accent);
-  }
   .percent {
     width: 4ch;
     text-align: right;
     color: var(--muted);
-    font-size: 13px;
-  }
-  select {
-    height: 38px;
-    padding: 0 12px;
-    border: 0;
-    border-radius: 10px;
-    background: var(--surface);
+    font-size: 12.5px;
   }
   .key {
-    min-width: 120px;
-    height: 38px;
-    padding: 0 14px;
+    min-width: 110px;
+    height: 30px;
+    padding: 0 12px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 8px;
     background: var(--surface);
     font-family: var(--mono);
-    font-size: 13px;
+    font-size: 12.5px;
   }
   .key.listening {
     background: var(--accent);
@@ -573,8 +569,8 @@
     gap: 8px;
   }
   .swatch {
-    width: 28px;
-    height: 28px;
+    width: 22px;
+    height: 22px;
     border: 0;
     border-radius: 50%;
     transition: transform 160ms var(--travel), box-shadow 160ms ease;

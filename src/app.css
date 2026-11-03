@@ -42,7 +42,7 @@ body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: 13px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   user-select: none;
@@ -101,8 +101,32 @@ button {
 
 .scroll {
   overflow-y: auto;
-  scrollbar-width: thin;
-  scrollbar-color: var(--hover) transparent;
+}
+
+/* Scrollbars: a slim thumb, no arrows, no track. */
+::-webkit-scrollbar {
+  width: 12px;
+  height: 12px;
+}
+
+::-webkit-scrollbar-track,
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+::-webkit-scrollbar-button {
+  display: none;
+}
+
+::-webkit-scrollbar-thumb {
+  border: 4px solid transparent;
+  border-radius: 6px;
+  background: var(--hover) padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  border-width: 3px;
+  background-color: #4a4a4a;
 }
 
 /* Buttons: primary (accent), neutral (surface), ghost. */
@@ -110,15 +134,15 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
-  height: 46px;
-  padding: 0 20px;
+  gap: 8px;
+  height: 36px;
+  padding: 0 16px;
   border: 0;
-  border-radius: var(--r-control);
+  border-radius: 10px;
   background: var(--surface);
   color: var(--ink);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 560;
   white-space: nowrap;
   transition: transform 120ms var(--travel), background-color 160ms ease;
 }
@@ -151,10 +175,11 @@ button {
 }
 
 .btn.small {
-  height: 36px;
-  padding: 0 14px;
-  font-size: 13px;
-  border-radius: 10px;
+  height: 30px;
+  padding: 0 12px;
+  gap: 6px;
+  font-size: 12px;
+  border-radius: 8px;
 }
 
 .btn:disabled {
@@ -169,10 +194,10 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 9px;
   background: var(--surface);
   color: var(--ink);
   transition: transform 120ms var(--travel), background-color 160ms ease;
@@ -190,6 +215,37 @@ button {
   background: var(--overlay);
   border-radius: var(--r-panel);
   padding: 4px;
+}
+
+/* The one tooltip, placed by lib/tooltip.ts. */
+.tooltip {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  max-width: 280px;
+  padding: 6px 10px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--raised);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1.35;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.04),
+    0 8px 24px rgb(0 0 0 / 0.45);
+  pointer-events: none;
+  overflow: visible;
+}
+
+.tooltip:popover-open {
+  animation: tooltip 140ms var(--travel);
+}
+
+@keyframes tooltip {
+  from {
+    opacity: 0;
+    transform: translateY(3px);
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

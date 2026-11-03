@@ -6,6 +6,8 @@
   import { duration, time } from "../lib/format";
   import { share } from "../lib/share";
   import { store } from "../lib/store.svelte";
+  import { fit } from "../lib/place";
+  import { tip } from "../lib/tooltip";
   import Icon from "./Icon.svelte";
 
   let {
@@ -26,6 +28,10 @@
   let canvas = $state<HTMLCanvasElement>();
   let drawn = $state(false);
   let menu = $state(false);
+  let menuEl = $state<HTMLDivElement>();
+  let moreBtn = $state<HTMLButtonElement>();
+  /** The menu was open when the ⋯ button was pressed, so the click closes it rather than reopening. */
+  let wasOpen = false;
   let tick = $state(0);
 
   const ascii = $derived(store.settings?.asciiThumbs ?? true);
@@ -46,8 +52,24 @@
   }, 120);
   onDestroy(() => clearInterval(timer));
 
+  // At the cursor on right-click, under the ⋯ button otherwise; always inside the window.
+  function showMenu(at: DOMRect, align: "start" | "end") {
+    if (!menuEl) return;
+    if (!menuEl.matches(":popover-open")) menuEl.showPopover();
+    fit(menuEl, at, { align, gap: align === "start" ? 2 : 6 });
+    menuEl.querySelector<HTMLElement>("button")?.focus();
+  }
+
+  $effect(() => {
+    if (!menuEl) return;
+    const node = menuEl;
+    const sync = (e: Event) => (menu = (e as ToggleEvent).newState === "open");
+    node.addEventListener("toggle", sync);
+    return () => node.removeEventListener("toggle", sync);
+  });
+
   async function act(what: "favorite" | "reveal" | "delete" | "copy" | "link") {
-    menu = false;
+    menuEl?.hidePopover();
     if (what === "favorite") await api.setFavorite(item.id, !item.favorite);
     if (what === "reveal") await api.revealItem(item.id);
     if (what === "copy") await share.copy(item.path);
@@ -67,7 +89,17 @@
   }
 </script>
 
-<div class="tile" class:selected>
+<div
+  class="tile"
+  class:selected
+  role="group"
+  aria-label={item.title}
+  oncontextmenu={(e) => {
+    if (selecting) return;
+    e.preventDefault();
+    showMenu(new DOMRect(e.clientX, e.clientY, 0, 0), "start");
+  }}
+>
   <button
     type="button"
     class="open"
@@ -103,12 +135,21 @@
   </button>
 
   {#if !selecting}
-    <button type="button" class="more" aria-label="More actions" aria-expanded={menu} onclick={() => (menu = !menu)}>
+    <button type="button" class="more" bind:this={moreBtn}
+      aria-label="More actions"
+      use:tip={"More"}
+      aria-expanded={menu}
+      onpointerdown={() => (wasOpen = menu)}
+      onclick={() => {
+        if (wasOpen) wasOpen = false;
+        else if (moreBtn) showMenu(moreBtn.getBoundingClientRect(), "end");
+      }}
+    >
       <Icon name="more" size={18} />
     </button>
   {/if}
-  {#if menu && !selecting}
-    <div class="menu" role="menu">
+  {#if !selecting}
+    <div class="menu" role="menu" popover="auto" bind:this={menuEl}>
       <button type="button" role="menuitem" onclick={() => act("copy")}>
         <Icon name="copy" size={16} />Copy
       </button>
@@ -127,7 +168,6 @@
   {/if}
 </div>
 
-<svelte:window onclick={(e) => menu && !(e.target as HTMLElement).closest(".tile") && (menu = false)} />
 
 <style>
   .tile {
@@ -268,14 +308,20 @@
     color: var(--ink);
   }
   .menu {
-    position: absolute;
-    right: 0;
-    top: calc(100% + 4px);
-    z-index: 20;
+    position: fixed;
+    inset: auto;
+    margin: 0;
     min-width: 210px;
     padding: 4px;
+    border: 0;
     border-radius: 14px;
     background: var(--raised);
+    color: var(--ink);
+    box-shadow:
+      0 0 0 1px rgb(255 255 255 / 0.04),
+      0 14px 36px rgb(0 0 0 / 0.5);
+  }
+  .menu:popover-open {
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -291,10 +337,10 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    height: 38px;
-    padding: 0 12px;
+    height: 32px;
+    padding: 0 10px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 8px;
     background: transparent;
     color: var(--ink);
     text-align: left;

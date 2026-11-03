@@ -33,17 +33,17 @@
     grid-auto-flow: column;
     grid-auto-columns: minmax(0, 1fr);
     gap: 2px;
-    padding: 4px;
-    border-radius: var(--r-control);
+    padding: 3px;
+    border-radius: 10px;
   }
   button {
-    height: 34px;
+    height: 26px;
     padding: 0 10px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 7px;
     background: transparent;
     color: var(--muted);
-    font-size: 13px;
+    font-size: 12px;
     font-weight: 500;
     white-space: nowrap;
     transition: background-color 220ms ease, color 220ms ease;
