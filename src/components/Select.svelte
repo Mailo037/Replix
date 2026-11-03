@@ -176,7 +176,7 @@
     height: 30px;
     padding: 0 8px 0 10px;
     border: 0;
-    border-radius: 8px;
+    border-radius: 999px;
     background: var(--surface);
     color: var(--ink);
     text-align: left;
@@ -216,7 +216,7 @@
     max-height: calc(100vh - 16px);
     padding: 4px;
     border: 0;
-    border-radius: 12px;
+    border-radius: 20px;
     background: var(--raised);
     color: var(--ink);
     box-shadow:
@@ -253,7 +253,7 @@
     gap: 10px;
     min-height: 32px;
     padding: 5px 8px 5px 10px;
-    border-radius: 8px;
+    border-radius: 999px;
     cursor: pointer;
   }
   .option.active {

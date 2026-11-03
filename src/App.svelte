@@ -1,7 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { raster } from "./lib/ascii";
-  import { rgba } from "./lib/format";
   import { store } from "./lib/store.svelte";
   import Editor from "./components/Editor.svelte";
   import Library from "./components/Library.svelte";
@@ -19,14 +18,9 @@
 
   /** Each page (and each library filter) fades in when you switch to it. */
   const page = $derived(JSON.stringify(store.view));
-
-  const glow = $derived(
-    `radial-gradient(ellipse 55% 100% at 50% 0%, ${rgba(store.settings?.accent ?? "#FF9A3C", 0.13)}, transparent 72%)`,
-  );
 </script>
 
 <div class="shell">
-  <div class="glow" aria-hidden="true" style:background={glow}></div>
   <pre class="raster" aria-hidden="true">{field}</pre>
 
   <TitleBar />
@@ -81,7 +75,6 @@
     flex-direction: column;
     overflow: hidden;
   }
-  .glow,
   .raster {
     position: absolute;
     top: 0;
@@ -148,7 +141,7 @@
     gap: 16px;
     max-width: min(560px, calc(100% - 48px));
     padding: 12px 12px 12px 18px;
-    border-radius: 14px;
+    border-radius: 22px;
     background: var(--raised);
     animation: up 240ms var(--travel);
   }
@@ -174,7 +167,7 @@
     height: 40px;
     padding: 0 12px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 999px;
     background: transparent;
     color: var(--accent);
     font-weight: 600;

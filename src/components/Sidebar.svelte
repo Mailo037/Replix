@@ -1,5 +1,6 @@
 <script lang="ts">
   import { store, type Filter } from "../lib/store.svelte";
+  import { gameColor } from "../lib/format";
   import Icon from "./Icon.svelte";
 
   const sections: { filter: Filter; label: string; icon: string; count: () => number }[] = [
@@ -45,7 +46,7 @@
               class:current={isActive("all", g.name)}
               onclick={() => store.go({ name: "library", filter: "all", game: g.name })}
             >
-              <span class="initial" aria-hidden="true">{g.name.slice(0, 1).toUpperCase()}</span>
+              <span class="initial" aria-hidden="true" style:background={gameColor(g.name)}>{g.name.slice(0, 1).toUpperCase()}</span>
               <span class="label">{g.name}</span>
               <span class="count mono">{g.count}</span>
             </button>
@@ -58,7 +59,7 @@
 
 <style>
   .sidebar {
-    width: 196px;
+    width: 220px;
     flex: none;
     display: flex;
     flex-direction: column;
@@ -76,14 +77,15 @@
     flex-direction: column;
     gap: 2px;
     padding: 6px;
-    border-radius: 15px;
+    border-radius: 22px;
   }
   .games-panel {
     min-height: 0;
   }
   .heading {
     padding: 8px 12px 4px;
-    font-size: 12px;
+    font-size: 12.5px;
+    font-weight: 700;
     color: var(--ghost);
   }
   .games {
@@ -93,24 +95,34 @@
     width: 100%;
     display: flex;
     align-items: center;
-    gap: 10px;
-    height: 34px;
-    padding: 0 10px;
+    gap: 11px;
+    height: 38px;
+    padding: 0 10px 0 12px;
     border: 0;
-    border-radius: 9px;
+    border-radius: 16px;
     background: transparent;
     color: var(--muted);
+    font-size: 14px;
+    font-weight: 600;
     text-align: left;
     transition: background-color 160ms ease, color 160ms ease;
   }
   .row:hover {
-    background: rgb(255 255 255 / 0.035);
+    background: var(--surface);
     color: var(--ink);
   }
   .row.current {
-    background: var(--raised);
-    color: var(--ink);
-    font-weight: 500;
+    background: var(--accent);
+    color: var(--on-accent);
+    font-weight: 700;
+  }
+  .row.current .count {
+    min-width: 22px;
+    padding: 1px 6px;
+    border-radius: 999px;
+    background: var(--on-accent);
+    color: var(--accent);
+    text-align: center;
   }
   .label {
     flex: 1;
@@ -125,14 +137,14 @@
     color: var(--ghost);
   }
   .initial {
-    width: 20px;
-    height: 20px;
+    width: 24px;
+    height: 24px;
+    margin-left: -4px;
     flex: none;
-    border-radius: 6px;
-    background: var(--surface);
-    color: var(--accent);
-    font-family: var(--mono);
-    font-size: 11px;
+    border-radius: 8px;
+    color: var(--on-sticker);
+    font-size: 12.5px;
+    font-weight: 800;
     display: grid;
     place-items: center;
   }

@@ -13,6 +13,17 @@ pub enum CaptureSource {
     App,
 }
 
+/// The screen corner notifications appear in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToastPosition {
+    TopLeft,
+    #[default]
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Quality {
@@ -77,6 +88,7 @@ pub struct Settings {
     pub launch_at_startup: bool,
     pub close_to_tray: bool,
     pub show_toast: bool,
+    pub toast_position: ToastPosition,
     /// Games and apps with their own settings.
     pub profiles: Vec<Profile>,
     /// The first-start setup was finished or skipped.
@@ -119,10 +131,11 @@ impl Default for Settings {
             clips_dir: default_clips_dir(),
             storage_limit_gb: 0,
             hotkeys: Hotkeys::default(),
-            accent: "#FF9A3C".into(),
+            accent: "#C5F26B".into(),
             launch_at_startup: false,
             close_to_tray: true,
             show_toast: true,
+            toast_position: ToastPosition::default(),
             profiles: Vec::new(),
             onboarded: false,
         }

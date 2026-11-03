@@ -42,7 +42,7 @@
     height: 11.5cqmin;
     padding: 0 3cqmin;
     border-radius: 3cqmin;
-    background: #1c1c1c;
+    background: #1d1627;
   }
   .tile {
     width: 7cqmin;

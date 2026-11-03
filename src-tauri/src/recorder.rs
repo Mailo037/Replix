@@ -5,14 +5,15 @@
 //! segments without re-encoding; a session keeps every segment from its start.
 
 use std::collections::VecDeque;
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Seek, SeekFrom, Write};
 use std::os::windows::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Stdio};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Weak};
 use std::time::{Duration, Instant};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result};
 use crossbeam_channel::{Receiver, RecvTimeoutError, Sender};
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -26,6 +27,9 @@ use crate::settings::{CaptureSource, Settings};
 use crate::win;
 
 const SEGMENT_SECONDS: f64 = 2.0;
+static SAVE_ID: AtomicU64 = AtomicU64::new(0);
+static PUBLISH_LOCK: Mutex<()> = parking_lot::const_mutex(());
+static STORAGE_LIMIT_LOCK: Mutex<()> = parking_lot::const_mutex(());
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -100,9 +104,17 @@ struct Session {
     since: u64,
 }
 
+struct BufferDir(PathBuf);
+
+impl Drop for BufferDir {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 struct Pipeline {
     target: Target,
-    dir: PathBuf,
+    dir: Arc<BufferDir>,
     child: Child,
     stdin: Option<ChildStdin>,
     router: Router,
@@ -111,8 +123,10 @@ struct Pipeline {
     /// The settings this capture runs with, including the target's own ones.
     settings: Settings,
     last_poll: Instant,
-    /// Lowest segment index a running save still needs.
-    pinned: Arc<Mutex<Option<u64>>>,
+    segments: VecDeque<Segment>,
+    list_offset: u64,
+    /// Each save owns its pin until it finishes reading the buffer.
+    pins: Vec<Weak<u64>>,
 }
 
 #[derive(Clone)]
@@ -124,6 +138,7 @@ struct Segment {
 impl Pipeline {
     fn start(dir: PathBuf, target: Target, settings: &Settings, encoder: &Encoder) -> Result<Self> {
         std::fs::create_dir_all(&dir)?;
+        let buffer = Arc::new(BufferDir(dir.clone()));
         let run = dir.file_name().and_then(|n| n.to_str()).unwrap_or("run").to_string();
         let keep = Duration::from_secs(settings.buffer_seconds as u64 + 15);
         let (mut router, pipes) = Router::new(&run, settings.record_mic, settings.mic_device.clone(), keep)?;
@@ -167,8 +182,9 @@ impl Pipeline {
         args.extend(
             [
                 "-force_key_frames", "expr:gte(t,n_forced*2)", "-c:a", "aac", "-b:a", "160k", "-max_muxing_queue_size",
-                "1024", "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", "-reset_timestamps", "1",
-                "-segment_list_type", "csv", "-segment_list",
+                // Timestamps run on across segments, so a save can read them back to back as one stream.
+                "1024", "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", "-segment_list_type",
+                "csv", "-segment_list",
             ]
             .map(String::from),
         );
@@ -201,7 +217,7 @@ impl Pipeline {
         }
         Ok(Self {
             target,
-            dir,
+            dir: buffer,
             child,
             stdin,
             router,
@@ -209,7 +225,9 @@ impl Pipeline {
             session: None,
             settings: settings.clone(),
             last_poll: Instant::now(),
-            pinned: Arc::new(Mutex::new(None)),
+            segments: VecDeque::new(),
+            list_offset: 0,
+            pins: Vec::new(),
         })
     }
 
@@ -223,7 +241,7 @@ impl Pipeline {
         ffmpeg::last_lines(&text.join("\n"), 3)
     }
 
-    fn stop(mut self) {
+    fn stop(&mut self) {
         if let Some(mut stdin) = self.stdin.take() {
             let _ = stdin.write_all(b"q");
         }
@@ -240,27 +258,42 @@ impl Pipeline {
     }
 
     /// Completed segments in order, plus the index of the one being written.
-    fn segments(&self) -> (Vec<Segment>, Option<u64>) {
-        let mut done = Vec::new();
-        if let Ok(text) = std::fs::read_to_string(self.dir.join("list.csv")) {
-            for line in text.lines() {
-                let mut parts = line.split(',');
-                let (Some(name), Some(start), Some(end)) = (parts.next(), parts.next(), parts.next()) else { continue };
-                let Some(index) = name.strip_prefix("seg").and_then(|s| s.strip_suffix(".ts")).and_then(|s| s.parse().ok())
-                else {
-                    continue;
-                };
-                let duration = end.parse::<f64>().unwrap_or(0.0) - start.parse::<f64>().unwrap_or(0.0);
-                done.push(Segment { index, duration: duration.max(0.0) });
+    fn segments(&mut self) -> (&VecDeque<Segment>, Option<u64>) {
+        if let Ok(mut file) = std::fs::File::open(self.dir.0.join("list.csv")) {
+            if file.seek(SeekFrom::Start(self.list_offset)).is_ok() {
+                self.read_segments(BufReader::new(file));
             }
         }
-        let next = done.last().map(|s| s.index + 1).unwrap_or(0);
-        let current = self.dir.join(segment_name(next)).exists().then_some(next);
-        (done, current)
+        let next = self.segments.back().map(|s| s.index + 1).unwrap_or(0);
+        let current = self.dir.0.join(segment_name(next)).exists().then_some(next);
+        (&self.segments, current)
+    }
+
+    fn read_segments(&mut self, mut reader: impl BufRead) {
+        let mut line = String::new();
+        while let Ok(bytes) = reader.read_line(&mut line) {
+            if !line.ends_with('\n') {
+                break;
+            }
+            self.list_offset += bytes as u64;
+            {
+                let line = line.trim_end();
+                let mut parts = line.split(',');
+                if let (Some(name), Some(start), Some(end)) = (parts.next(), parts.next(), parts.next()) {
+                    if let (Some(index), Ok(start), Ok(end)) =
+                        (segment_index(name), start.parse::<f64>(), end.parse::<f64>())
+                    {
+                        self.segments.push_back(Segment { index, duration: (end - start).max(0.0) });
+                    }
+                }
+            }
+            line.clear();
+        }
     }
 
     /// Deletes segments that fell out of the buffer and are not kept by a session or a save.
-    fn trim(&self, buffer_seconds: u32) {
+    fn trim(&mut self, buffer_seconds: u32) {
+        self.pins.retain(|pin| pin.strong_count() > 0);
         let (done, _) = self.segments();
         let keep = ((buffer_seconds as f64 + 6.0) / SEGMENT_SECONDS).ceil() as usize;
         if done.len() <= keep {
@@ -270,22 +303,32 @@ impl Pipeline {
         if let Some(s) = &self.session {
             floor = floor.min(s.first);
         }
-        if let Some(p) = *self.pinned.lock() {
+        if let Some(p) = self.pins.iter().filter_map(Weak::upgrade).map(|pin| *pin).min() {
             floor = floor.min(p);
         }
-        let Ok(entries) = std::fs::read_dir(&self.dir) else { return };
-        for entry in entries.flatten() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            let index = name.strip_prefix("seg").and_then(|s| s.strip_suffix(".ts")).and_then(|s| s.parse::<u64>().ok());
-            if index.is_some_and(|i| i < floor) {
-                let _ = std::fs::remove_file(entry.path());
+        while let Some(segment) = self.segments.front().filter(|s| s.index < floor) {
+            match std::fs::remove_file(self.dir.0.join(segment_name(segment.index))) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(_) => break,
             }
+            self.segments.pop_front();
         }
+    }
+
+    fn pin(&mut self, first: u64) -> Arc<u64> {
+        let pin = Arc::new(first);
+        self.pins.push(Arc::downgrade(&pin));
+        pin
     }
 }
 
 fn segment_name(index: u64) -> String {
     format!("seg{index:06}.ts")
+}
+
+fn segment_index(name: &str) -> Option<u64> {
+    name.strip_prefix("seg")?.strip_suffix(".ts")?.parse().ok()
 }
 
 pub struct Recorder {
@@ -354,8 +397,9 @@ impl Worker {
             }
             self.tick();
         }
-        if let Some(p) = self.pipeline.take() {
+        if let Some(mut p) = self.pipeline.take() {
             p.stop();
+            Self::finish_session(&self.app, &self.settings, &mut p);
         }
     }
 
@@ -388,11 +432,9 @@ impl Worker {
                 };
                 self.settings = *settings;
                 if restart {
-                    if let Some(p) = self.pipeline.take() {
-                        if p.session.is_some() {
-                            self.finish_session(&p);
-                        }
+                    if let Some(mut p) = self.pipeline.take() {
                         p.stop();
+                        Self::finish_session(&self.app, &self.settings, &mut p);
                     }
                     self.retry_at = None;
                 } else if let Some(p) = self.pipeline.as_mut() {
@@ -451,12 +493,10 @@ impl Worker {
         let desired = self.desired_target();
         let running = self.pipeline.as_ref().map(|p| p.target.clone());
         if desired != running {
-            if let Some(p) = self.pipeline.take() {
+            if let Some(mut p) = self.pipeline.take() {
                 // A session in progress is saved rather than lost.
-                if p.session.is_some() {
-                    self.finish_session(&p);
-                }
                 p.stop();
+                Self::finish_session(&self.app, &self.settings, &mut p);
             }
             if let Some(target) = desired.clone() {
                 if self.retry_at.is_none_or(|t| Instant::now() >= t) {
@@ -479,8 +519,9 @@ impl Worker {
         }
         if let Some(error) = failed {
             log::warn!("capture stopped: {error}");
-            if let Some(p) = self.pipeline.take() {
+            if let Some(mut p) = self.pipeline.take() {
                 p.stop();
+                Self::finish_session(&self.app, &self.settings, &mut p);
             }
             // The remembered encoder may no longer work, e.g. after a driver change Windows hid.
             if self.encoders_cached {
@@ -541,13 +582,13 @@ impl Worker {
     }
 
     fn save_clip(&mut self) {
-        let Some(p) = self.pipeline.as_ref() else {
+        let Some(p) = self.pipeline.as_mut() else {
             crate::toast(&self.app, "Nothing to save", "Replix is not recording right now.");
             return;
         };
         let seconds = p.settings.buffer_seconds as f64;
-        let (done, current) = p.segments();
-        let mut picked: Vec<u64> = current.into_iter().collect();
+        let (done, _) = p.segments();
+        let mut picked = Vec::new();
         let mut total = 0.0;
         for s in done.iter().rev() {
             if total >= seconds {
@@ -557,10 +598,10 @@ impl Worker {
             total += s.duration;
         }
         picked.reverse();
-        if picked.is_empty() {
+        let Some(&first) = picked.first() else {
             crate::toast(&self.app, "Nothing to save yet", "The buffer is still filling up.");
             return;
-        }
+        };
         let now = audio::now_ms();
         let tracks = p.router.tracks_between(now.saturating_sub((seconds as u64 + 2) * 1000), now);
         let job = SaveJob {
@@ -570,12 +611,14 @@ impl Worker {
             tracks,
             kind: Kind::Clip,
             name: p.target.label(),
-            keep_seconds: Some(seconds),
+            trim_to: (total > seconds + 0.25).then_some(seconds),
+            duration: total,
+            fps: p.settings.fps,
             clips_dir: self.settings.clips_dir.clone(),
             limit_gb: self.settings.storage_limit_gb,
-            pinned: p.pinned.clone(),
+            _pin: p.pin(first),
         };
-        std::thread::spawn(move || job.run());
+        job.start();
     }
 
     fn toggle_session(&mut self) {
@@ -584,42 +627,44 @@ impl Worker {
             return;
         };
         if p.session.is_some() {
-            let p = self.pipeline.as_ref().unwrap();
-            self.finish_session(p);
-            let p = self.pipeline.as_mut().unwrap();
+            Self::finish_session(&self.app, &self.settings, p);
             p.session = None;
             p.router.hold = false;
         } else {
             let (done, current) = p.segments();
-            let first = current.unwrap_or_else(|| done.last().map(|s| s.index + 1).unwrap_or(0));
+            let first = current.unwrap_or_else(|| done.back().map(|s| s.index + 1).unwrap_or(0));
             p.session = Some(Session { first, since: audio::now_ms() });
             p.router.hold = true;
             crate::toast(&self.app, "Session started", "Press the session key again to stop.");
         }
     }
 
-    fn finish_session(&self, p: &Pipeline) {
-        let Some(session) = &p.session else { return };
-        let (done, current) = p.segments();
-        let mut picked: Vec<u64> = done.iter().map(|s| s.index).filter(|&i| i >= session.first).collect();
-        picked.extend(current.filter(|&i| i >= session.first));
-        if picked.is_empty() {
+    fn finish_session(app: &AppHandle, settings: &Settings, p: &mut Pipeline) {
+        let Some(Session { first, since }) = p.session else { return };
+        let (done, _) = p.segments();
+        let segments = done.iter().filter(|s| s.index >= first);
+        let duration = segments.clone().map(|s| s.duration).sum();
+        let picked: Vec<u64> = segments.map(|s| s.index).collect();
+        let Some(&first) = picked.first() else {
+            crate::toast(app, "Nothing to save yet", "The session has no completed recording segments.");
             return;
-        }
-        let tracks = p.router.tracks_between(session.since, audio::now_ms());
+        };
+        let tracks = p.router.tracks_between(since, audio::now_ms());
         let job = SaveJob {
-            app: self.app.clone(),
+            app: app.clone(),
             dir: p.dir.clone(),
             segments: picked,
             tracks,
             kind: Kind::Session,
             name: p.target.label(),
-            keep_seconds: None,
-            clips_dir: self.settings.clips_dir.clone(),
-            limit_gb: self.settings.storage_limit_gb,
-            pinned: p.pinned.clone(),
+            trim_to: None,
+            duration,
+            fps: p.settings.fps,
+            clips_dir: settings.clips_dir.clone(),
+            limit_gb: settings.storage_limit_gb,
+            _pin: p.pin(first),
         };
-        std::thread::spawn(move || job.run());
+        job.start();
     }
 
     fn screenshot(&self) {
@@ -673,31 +718,41 @@ impl Worker {
 
 struct SaveJob {
     app: AppHandle,
-    dir: PathBuf,
+    dir: Arc<BufferDir>,
     segments: Vec<u64>,
     tracks: Vec<Track>,
     kind: Kind,
     name: String,
-    keep_seconds: Option<f64>,
+    trim_to: Option<f64>,
+    duration: f64,
+    fps: u32,
     clips_dir: PathBuf,
     limit_gb: u32,
-    pinned: Arc<Mutex<Option<u64>>>,
+    _pin: Arc<u64>,
 }
 
 impl SaveJob {
+    fn start(self) {
+        let title = if self.kind == Kind::Session { "Saving session…" } else { "Saving clip…" };
+        crate::toast(&self.app, title, &self.name);
+        std::thread::spawn(move || self.run());
+    }
+
     fn run(self) {
-        *self.pinned.lock() = self.segments.first().copied();
         let result = self.write();
-        *self.pinned.lock() = None;
+        drop(self._pin);
         match result {
-            Ok((path, meta)) => {
-                library::write_meta(&path, &meta);
-                if self.limit_gb > 0 {
-                    library::enforce_limit(&self.clips_dir, self.limit_gb as u64 * 1024 * 1024 * 1024);
-                }
-                let _ = self.app.emit("library-changed", ());
+            Ok(meta) => {
                 let what = if self.kind == Kind::Session { "Session saved" } else { "Clip saved" };
                 crate::toast(&self.app, what, &format!("{} · {}", self.name, library::format_duration(meta.duration)));
+                let _ = self.app.emit("library-changed", ());
+                drop(self.dir);
+                if self.limit_gb > 0 {
+                    let _cleanup = STORAGE_LIMIT_LOCK.lock();
+                    if library::enforce_limit(&self.clips_dir, self.limit_gb as u64 * 1024 * 1024 * 1024) {
+                        let _ = self.app.emit("library-changed", ());
+                    }
+                }
             }
             Err(e) => {
                 log::error!("saving failed: {e:#}");
@@ -706,72 +761,105 @@ impl SaveJob {
         }
     }
 
-    fn write(&self) -> Result<(PathBuf, Meta)> {
-        let stamp = audio::now_ms();
-        let list = self.dir.join(format!("save-{stamp}.txt"));
-        let text: String = self.segments.iter().map(|i| format!("file '{}'\n", segment_name(*i))).collect();
-        std::fs::write(&list, text)?;
+    fn write(&self) -> Result<Meta> {
+        let id = SAVE_ID.fetch_add(1, Ordering::Relaxed);
+        let stamp = format!("{}-{}-{id}", audio::now_ms(), std::process::id());
+        let list = self.dir.0.join(format!("save-{stamp}.txt"));
         let label = if self.kind == Kind::Session { Some("Session") } else { None };
-        let out = library::new_path(&self.clips_dir, &self.name, "mp4", label);
-        let joined = if self.keep_seconds.is_some() { self.dir.join(format!("save-{stamp}.mp4")) } else { out.clone() };
+        let folder = library::new_path(&self.clips_dir, &self.name, "mp4", label);
+        let joined = folder.with_file_name(format!(".replix-{stamp}.part"));
+        let trimmed = folder.with_file_name(format!(".replix-{stamp}-trimmed.part"));
+        let result = (|| {
+            let source = self.render(&list, &joined, &trimmed)?;
+            let info = ffmpeg::probe(source).context("Could not read the saved recording")?;
+            let _publish = PUBLISH_LOCK.lock();
+            let out = library::new_path(&self.clips_dir, &self.name, "mp4", label);
+            std::fs::rename(source, &out).context("Could not move the recording into the library")?;
+            let meta = Meta {
+                kind: self.kind,
+                title: library::default_title(self.kind, &self.name),
+                game: self.name.clone(),
+                created: audio::now_ms(),
+                duration: info.duration,
+                width: info.width,
+                height: info.height,
+                tracks: self.tracks.iter().map(|t| TrackMeta { name: t.name.clone(), kind: t.kind }).collect(),
+                ..Default::default()
+            };
+            library::write_meta(&out, &meta);
+            Ok(meta)
+        })();
+        for path in [list, joined, trimmed] {
+            let _ = std::fs::remove_file(path);
+        }
+        result
+    }
 
-        let mut args: Vec<String> = vec!["-f".into(), "concat".into(), "-safe".into(), "0".into(), "-i".into()];
-        args.push(ffmpeg::path_arg(&list));
+    fn render<'a>(&self, list: &Path, joined: &'a Path, trimmed: &'a Path) -> Result<&'a Path> {
+        // The segments share one timeline, so they are read back to back as a single stream.
+        // That skips opening and probing every segment on its own. Names in the list are
+        // relative to the buffer folder, which FFmpeg runs in.
+        let text: String = self.segments.iter().map(|i| segment_name(*i) + "\n").collect();
+        std::fs::write(list, text)?;
+        // MP4 does not carry a track title over when copied again, so every pass sets it.
+        let titles: Vec<String> = self
+            .tracks
+            .iter()
+            .enumerate()
+            .flat_map(|(k, t)| [format!("-metadata:s:a:{k}"), format!("title={}", t.name)])
+            .collect();
+        let mut args: Vec<String> = vec!["-i".into(), format!("concatf:{}", ffmpeg::path_arg(list))];
         args.extend(["-map".into(), "0:v:0".into()]);
         for t in &self.tracks {
             args.extend(["-map".into(), format!("0:a:{}", t.slot)]);
         }
-        args.extend(["-c".into(), "copy".into()]);
-        for (k, t) in self.tracks.iter().enumerate() {
-            args.extend([format!("-metadata:s:a:{k}"), format!("title={}", t.name)]);
-        }
-        args.extend(["-movflags".into(), "+faststart".into(), "-y".into(), ffmpeg::path_arg(&joined)]);
-        let joined_ok = ffmpeg::run(&args);
-        let _ = std::fs::remove_file(&list);
-        joined_ok?;
+        args.extend(titles.iter().cloned());
+        let Some(seconds) = self.trim_to else {
+            self.write_mp4(&args, joined, self.duration)?;
+            return Ok(joined);
+        };
+        // Only read once more, so the joined file needs no index at the front.
+        args.extend(["-c", "copy", "-f", "mp4", "-y"].map(String::from));
+        args.push(ffmpeg::path_arg(joined));
+        ffmpeg::run_in(&self.dir.0, &args)?;
 
-        if let Some(seconds) = self.keep_seconds {
-            let duration = ffmpeg::probe(&joined).map(|i| i.duration).unwrap_or(0.0);
-            if duration > seconds + 0.25 {
-                let args: Vec<String> = vec![
-                    "-sseof".into(),
-                    format!("-{seconds:.3}"),
-                    "-i".into(),
-                    ffmpeg::path_arg(&joined),
-                    "-map".into(),
-                    "0".into(),
-                    "-c".into(),
-                    "copy".into(),
-                    "-movflags".into(),
-                    "+faststart".into(),
-                    "-y".into(),
-                    ffmpeg::path_arg(&out),
-                ];
-                let trimmed = ffmpeg::run(&args);
-                if trimmed.is_err() {
-                    std::fs::rename(&joined, &out)?;
-                } else {
-                    let _ = std::fs::remove_file(&joined);
-                }
-            } else {
-                std::fs::rename(&joined, &out)?;
+        // Seeking from the end gives exactly the clip length: the cut starts at the keyframe
+        // before it and an edit list hides the frames up to it.
+        let mut args: Vec<String> =
+            vec!["-sseof".into(), format!("-{seconds:.3}"), "-i".into(), ffmpeg::path_arg(joined), "-map".into(), "0".into()];
+        args.extend(titles);
+        match self.write_mp4(&args, trimmed, seconds) {
+            Ok(()) => Ok(trimmed),
+            Err(e) => {
+                log::warn!("trimming the clip failed, keeping it whole: {e:#}");
+                Ok(joined)
             }
         }
-        if !out.exists() {
-            bail!("the clip file is missing");
-        }
-        let info = ffmpeg::probe(&out).unwrap_or_default();
-        let meta = Meta {
-            kind: self.kind,
-            title: library::default_title(self.kind, &self.name),
-            game: self.name.clone(),
-            created: audio::now_ms(),
-            duration: info.duration,
-            width: info.width,
-            height: info.height,
-            tracks: self.tracks.iter().map(|t| TrackMeta { name: t.name.clone(), kind: t.kind }).collect(),
-            ..Default::default()
-        };
-        Ok((out, meta))
     }
+
+    /// Writes an MP4 with its index at the front, so it plays before it has fully loaded,
+    /// e.g. after an upload. Room for the index is reserved up front: `+faststart` would
+    /// move it there afterwards by writing the whole file a second time.
+    fn write_mp4(&self, input: &[String], out: &Path, seconds: f64) -> Result<()> {
+        let room = moov_room(seconds, self.fps, self.tracks.len());
+        let mut args = input.to_vec();
+        args.extend(["-c".into(), "copy".into(), "-moov_size".into(), room.to_string()]);
+        args.extend(["-f", "mp4", "-y"].map(String::from));
+        args.push(ffmpeg::path_arg(out));
+        if ffmpeg::run_in(&self.dir.0, &args).is_ok() {
+            return Ok(());
+        }
+        log::warn!("the reserved MP4 index room was too small, writing it again");
+        let mut args = input.to_vec();
+        args.extend(["-c", "copy", "-movflags", "+faststart", "-f", "mp4", "-y"].map(String::from));
+        args.push(ffmpeg::path_arg(out));
+        ffmpeg::run_in(&self.dir.0, &args)
+    }
+}
+
+/// Bytes an MP4 index needs for this much video, with plenty of margin: a few bytes for
+/// each video frame and audio packet. Unused room stays behind as padding.
+fn moov_room(seconds: f64, fps: u32, tracks: usize) -> u64 {
+    let per_second = fps as u64 * 32 + tracks as u64 * 47 * 16;
+    64 * 1024 + (seconds.max(0.0) as u64 + 4) * per_second
 }

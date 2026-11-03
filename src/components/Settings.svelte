@@ -39,7 +39,7 @@
     ...mics.map((m) => ({ value: m.id as string | null, label: m.name })),
     ...(s.micDevice && !mics.some((m) => m.id === s.micDevice) ? [{ value: s.micDevice, label: "Not connected" }] : []),
   ]);
-  const accents = ["#FF9A3C", "#FF5FD2", "#F5D547", "#3DDC97", "#5AB4FF", "#A98BFF", "#FF6B6B"];
+  const accents = ["#C5F26B", "#FF9EC0", "#FFC56B", "#7EF0C0", "#9FD8FF", "#C9B6FF", "#FF8A7A"];
 
   let storage = $state<StorageInfo | null>(null);
   const usedShare = $derived.by(() => {
@@ -404,10 +404,26 @@
         <div class="row">
           <div class="text">
             <span>Notifications</span>
-            <span class="meta">Messages like “Clip saved” in the top right corner of your screen. Off shows none at all.</span>
+            <span class="meta">Messages like “Clip saved” in a corner of your screen. Off shows none at all.</span>
           </div>
           <Switch checked={s.showToast} label="Notifications" onchange={(v) => update({ showToast: v })} />
         </div>
+        {#if s.showToast}
+          <div class="row stack">
+            <div class="text"><span>Notification corner</span><span class="meta">Where on the screen they show up</span></div>
+            <Segmented
+              label="Notification corner"
+              value={s.toastPosition}
+              options={[
+                { value: "topLeft", label: "Top left" },
+                { value: "topRight", label: "Top right" },
+                { value: "bottomLeft", label: "Bottom left" },
+                { value: "bottomRight", label: "Bottom right" },
+              ]}
+              onchange={(v) => store.save({ ...s, toastPosition: v }).then(api.previewToast)}
+            />
+          </div>
+        {/if}
         <div class="row">
           <div class="text"><span>Start with Windows</span><span class="meta">Opens quietly in the tray</span></div>
           <Switch checked={s.launchAtStartup} label="Start with Windows" onchange={(v) => update({ launchAtStartup: v })} />
@@ -441,9 +457,10 @@
     min-height: 0;
   }
   h1 {
-    margin: 6px 6px 4px;
-    font-size: 16px;
-    font-weight: 600;
+    margin: 4px 12px 8px;
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -0.035em;
   }
   /* Scrolls edge to edge; the content sits in a centred column. */
   .body {
@@ -456,9 +473,9 @@
     margin: 0 auto;
   }
   h2 {
-    margin: 18px 6px 8px;
-    font-size: 14px;
-    font-weight: 600;
+    margin: 22px 8px 10px;
+    font-size: 19px;
+    font-weight: 800;
   }
   .group {
     display: flex;
@@ -471,8 +488,9 @@
     display: flex;
     align-items: center;
     gap: 16px;
-    min-height: 48px;
-    padding: 8px 12px;
+    min-height: 52px;
+    padding: 8px 14px;
+    font-weight: 600;
   }
   .row + .row {
     border-top: 1px solid var(--line);
@@ -544,10 +562,10 @@
   }
   .key {
     min-width: 110px;
-    height: 30px;
-    padding: 0 12px;
+    height: 32px;
+    padding: 0 14px;
     border: 0;
-    border-radius: 8px;
+    border-radius: 999px;
     background: var(--surface);
     font-family: var(--mono);
     font-size: 12.5px;
@@ -568,10 +586,10 @@
     gap: 8px;
   }
   .swatch {
-    width: 22px;
-    height: 22px;
+    width: 26px;
+    height: 26px;
     border: 0;
-    border-radius: 50%;
+    border-radius: 9px;
     transition: transform 160ms var(--travel), box-shadow 160ms ease;
   }
   .swatch.on {
@@ -595,8 +613,9 @@
     align-items: flex-start;
     padding: 8px 12px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 14px;
     background: transparent;
+    font-weight: 600;
     text-align: left;
   }
   .apps button:hover {

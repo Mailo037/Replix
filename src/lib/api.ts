@@ -4,6 +4,7 @@ export type Kind = "clip" | "session" | "screenshot";
 export type TrackKind = "game" | "app" | "mic" | "desktop";
 export type Source = "game" | "screen" | "app";
 export type Quality = "low" | "medium" | "high";
+export type ToastPosition = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
 
 export interface TrackMeta {
   name: string;
@@ -95,6 +96,7 @@ export interface Settings {
   launchAtStartup: boolean;
   closeToTray: boolean;
   showToast: boolean;
+  toastPosition: ToastPosition;
   profiles: Profile[];
   onboarded: boolean;
 }
@@ -173,6 +175,7 @@ export const api = {
   saveClipNow: () => invoke<void>("save_clip_now"),
   takeScreenshot: () => invoke<void>("take_screenshot"),
   toggleSession: () => invoke<void>("toggle_session"),
+  previewToast: () => invoke<void>("preview_toast"),
   hotkeyConflicts: () => invoke<string[]>("hotkey_conflicts"),
   listMics: () => invoke<InputDevice[]>("list_mics"),
   storageInfo: () => invoke<StorageInfo>("storage_info"),

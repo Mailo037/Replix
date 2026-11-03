@@ -37,7 +37,6 @@
   let audios: HTMLAudioElement[] = $state([]);
   let strip = $state<HTMLDivElement>();
   let preview = $state<HTMLDivElement>();
-  let frame = 0;
 
   type Part = { start: number; end: number; removed: boolean };
   const EPS = 0.001;
@@ -85,7 +84,6 @@
       cuts = d.draft?.cuts ?? [];
       vertical = d.draft?.vertical ?? false;
       cropX = d.draft?.cropX ?? 0.5;
-      loop();
     } catch (e) {
       failure = String(e);
     }
@@ -100,33 +98,43 @@
   });
 
   onDestroy(() => {
-    cancelAnimationFrame(frame);
     unlisten.then((f) => f());
     unlistenStrip.then((f) => f());
   });
 
-  function loop() {
-    frame = requestAnimationFrame(loop);
-    if (!video) return;
-    current = video.currentTime;
-    if (playing) {
+  $effect(() => {
+    if (!playing) return;
+    let frame = requestAnimationFrame(tick);
+
+    function tick() {
+      if (!playing || !video) return;
+      current = video.currentTime;
       // Removed parts are jumped over, as they will be in the export.
       const cut = cuts.find(([a, b]) => current >= a && current < b - 0.02);
       if (cut && cut[1] < playEnd) seek(cut[1]);
       else if (current >= playEnd - 0.02) {
         pause();
         seek(playStart);
+        return;
       }
+      syncAudio(false);
+      frame = requestAnimationFrame(tick);
     }
-    syncAudio(false);
-  }
+    return () => cancelAnimationFrame(frame);
+  });
+
+  $effect(() => {
+    audios.forEach((audio, i) => {
+      if (!audio) return;
+      const edit = edits[i];
+      audio.volume = edit?.enabled ? Math.min(1, edit.volume) : 0;
+    });
+  });
 
   function syncAudio(force: boolean) {
     if (!video) return;
-    audios.forEach((a, i) => {
+    audios.forEach((a) => {
       if (!a) return;
-      const e = edits[i];
-      a.volume = e && e.enabled ? Math.min(1, e.volume) : 0;
       if (force || (playing && Math.abs(a.currentTime - video!.currentTime) > 0.12)) a.currentTime = video!.currentTime;
     });
   }
@@ -141,7 +149,10 @@
 
   function pause() {
     playing = false;
-    video?.pause();
+    if (video) {
+      video.pause();
+      current = video.currentTime;
+    }
     audios.forEach((a) => a?.pause());
   }
 
@@ -429,7 +440,15 @@
     <div class="viewer">
       <div class="preview" bind:this={preview} style:--ratio={data.width && data.height ? data.width / data.height : 16 / 9}>
         <!-- svelte-ignore a11y_media_has_caption -->
-        <video bind:this={video} src={fileUrl(data.path)} muted preload="auto" onloadedmetadata={() => seek(trimStart)} onclick={() => (playing ? pause() : play())}></video>
+        <video
+          bind:this={video}
+          src={fileUrl(data.path)}
+          muted
+          preload="auto"
+          onloadedmetadata={() => seek(trimStart)}
+          onseeked={(e) => { if (!playing) current = e.currentTarget.currentTime; }}
+          onclick={() => (playing ? pause() : play())}
+        ></video>
         {#each data.tracks as track, i (i)}
           <audio bind:this={audios[i]} src={fileUrl(track.audio)} preload="auto"></audio>
         {/each}
@@ -667,10 +686,11 @@
     padding: 3px 6px;
     margin-left: -6px;
     border: 0;
-    border-radius: 7px;
+    border-radius: 10px;
     background: transparent;
-    font-size: 15px;
-    font-weight: 600;
+    font-size: 22px;
+    font-weight: 800;
+    letter-spacing: -0.025em;
     outline: none;
   }
   .title:hover,
@@ -693,22 +713,22 @@
     gap: 2px;
   }
   .split .btn.primary:first-child {
-    border-radius: 8px 3px 3px 8px;
+    border-radius: 999px 6px 6px 999px;
     min-width: 80px;
   }
   .caret {
-    width: 26px;
-    padding: 0;
-    border-radius: 3px 8px 8px 3px;
+    width: 34px;
+    padding: 0 2px 0 0;
+    border-radius: 6px 999px 999px 6px;
   }
   .menu {
     position: absolute;
     right: 0;
     top: calc(100% + 6px);
     z-index: 20;
-    width: 230px;
-    padding: 4px;
-    border-radius: 12px;
+    width: 240px;
+    padding: 6px;
+    border-radius: 20px;
     background: var(--raised);
     box-shadow:
       0 0 0 1px rgb(255 255 255 / 0.04),
@@ -721,10 +741,11 @@
     display: flex;
     flex-direction: column;
     align-items: flex-start;
-    padding: 7px 10px;
+    padding: 8px 12px;
     border: 0;
-    border-radius: 8px;
+    border-radius: 14px;
     background: transparent;
+    font-weight: 700;
     text-align: left;
   }
   .menu button:hover {
@@ -743,7 +764,7 @@
     position: relative;
     width: min(100cqw, 100cqh * var(--ratio));
     aspect-ratio: var(--ratio);
-    border-radius: 12px;
+    border-radius: 20px;
     overflow: hidden;
     background: var(--black);
   }
@@ -788,7 +809,7 @@
     bottom: 0;
     padding: 0;
     border: 2px solid var(--accent);
-    border-radius: 6px;
+    border-radius: 10px;
     background: transparent;
     cursor: grab;
     touch-action: none;
@@ -802,7 +823,7 @@
     left: 50%;
     transform: translateX(-50%);
     padding: 2px 6px;
-    border-radius: 5px;
+    border-radius: 8px;
     background: var(--accent);
     color: var(--on-accent);
     font-size: 11px;
@@ -814,8 +835,8 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 6px 10px 10px;
-    border-radius: 14px;
+    padding: 8px 12px 12px;
+    border-radius: 24px;
     background: var(--overlay);
   }
   .toolbar {
@@ -828,13 +849,14 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    height: 28px;
-    padding: 0 9px;
+    height: 30px;
+    padding: 0 11px;
     border: 0;
-    border-radius: 7px;
+    border-radius: 999px;
     background: transparent;
     color: var(--muted);
-    font-size: 12.5px;
+    font-size: 13px;
+    font-weight: 600;
     white-space: nowrap;
   }
   .tool:hover:not(:disabled) {
@@ -846,7 +868,7 @@
     cursor: default;
   }
   .tool.icon {
-    width: 28px;
+    width: 30px;
     padding: 0;
     justify-content: center;
   }
@@ -905,7 +927,7 @@
     display: grid;
     place-items: center;
     border: 0;
-    border-radius: 7px;
+    border-radius: 10px;
     background: var(--surface);
     color: var(--accent);
   }
@@ -927,8 +949,8 @@
     flex-direction: column;
   }
   .name {
-    font-size: 12.5px;
-    font-weight: 500;
+    font-size: 13px;
+    font-weight: 700;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -938,7 +960,7 @@
   }
   .lane {
     position: relative;
-    border-radius: 7px;
+    border-radius: 10px;
     background: var(--black);
     cursor: pointer;
     touch-action: none;
@@ -974,7 +996,7 @@
     top: 0;
     bottom: 0;
     border: 2px solid var(--accent);
-    border-radius: 7px;
+    border-radius: 10px;
     pointer-events: none;
   }
   .handle {
@@ -985,14 +1007,14 @@
     width: 9px;
     padding: 0;
     border: 0;
-    border-radius: 7px 0 0 7px;
+    border-radius: 10px 0 0 10px;
     background: var(--accent);
     cursor: ew-resize;
     touch-action: none;
   }
   .handle.end {
     margin-left: -9px;
-    border-radius: 0 7px 7px 0;
+    border-radius: 0 10px 10px 0;
   }
   .handle::after {
     content: "";

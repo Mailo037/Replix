@@ -172,7 +172,7 @@
     min-height: 48px;
     padding: 8px 12px;
     border: 0;
-    border-radius: 12px;
+    border-radius: 20px;
     background: transparent;
     color: var(--muted);
     text-align: left;
@@ -195,7 +195,7 @@
     width: 28px;
     height: 28px;
     flex: none;
-    border-radius: 8px;
+    border-radius: 10px;
     background: var(--surface);
     color: var(--accent);
     font-family: var(--mono);
@@ -277,7 +277,7 @@
     align-items: flex-start;
     padding: 8px 12px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 14px;
     background: transparent;
     text-align: left;
   }

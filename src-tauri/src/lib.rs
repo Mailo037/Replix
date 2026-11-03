@@ -11,8 +11,7 @@ mod win;
 
 use std::path::PathBuf;
 use std::str::FromStr;
-use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -24,7 +23,7 @@ use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 use library::{Draft, Index, Item};
 use recorder::{Command, Recorder, Status};
-use settings::Settings;
+use settings::{Settings, ToastPosition};
 
 pub struct AppState {
     settings: Mutex<Settings>,
@@ -61,31 +60,48 @@ struct Toast {
     detail: String,
 }
 
-static TOAST_GENERATION: AtomicU64 = AtomicU64::new(0);
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ToastShown {
+    title: String,
+    detail: String,
+    position: ToastPosition,
+    accent: String,
+}
 
 /// A small note in the corner of the screen that does not take focus from the game.
+/// The toast window hides itself once its timer runs out.
 pub fn toast(app: &AppHandle, title: &str, detail: &str) {
-    let show = app.state::<AppState>().settings.lock().show_toast;
     let _ = app.emit("notice", Toast { title: title.into(), detail: detail.into() });
+    corner_toast(app, title, detail);
+}
+
+fn corner_toast(app: &AppHandle, title: &str, detail: &str) {
+    let state = app.state::<AppState>();
+    let (show, position, accent) = {
+        let s = state.settings.lock();
+        (s.show_toast, s.toast_position, s.accent.clone())
+    };
     if !show {
         return;
     }
     let Some(window) = app.get_webview_window("toast") else { return };
-    let _ = window.emit("toast", Toast { title: title.into(), detail: detail.into() });
-    if let Some((x, y, w, _)) = win::foreground_work_area() {
-        let size = window.outer_size().map(|s| s.width as i32).unwrap_or(340);
-        let _ = window.set_position(PhysicalPosition::new(x + w - size - 24, y + 24));
+    let _ = window.emit("toast", ToastShown { title: title.into(), detail: detail.into(), position, accent });
+    if let Some((x, y, w, h)) = win::foreground_work_area() {
+        let size = window.outer_size().map(|s| (s.width as i32, s.height as i32)).unwrap_or((340, 76));
+        let left = match position {
+            ToastPosition::TopLeft | ToastPosition::BottomLeft => x + 24,
+            ToastPosition::TopRight | ToastPosition::BottomRight => x + w - size.0 - 24,
+        };
+        let top = match position {
+            ToastPosition::TopLeft | ToastPosition::TopRight => y + 24,
+            ToastPosition::BottomLeft | ToastPosition::BottomRight => y + h - size.1 - 24,
+        };
+        let _ = window.set_position(PhysicalPosition::new(left, top));
     }
     if let Ok(hwnd) = window.hwnd() {
         win::show_passive(hwnd.0 as u64);
     }
-    let generation = TOAST_GENERATION.fetch_add(1, Ordering::SeqCst) + 1;
-    std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(2800));
-        if TOAST_GENERATION.load(Ordering::SeqCst) == generation {
-            let _ = window.hide();
-        }
-    });
 }
 
 #[tauri::command]
@@ -403,6 +419,12 @@ fn take_screenshot(state: State<AppState>) {
     state.recorder.send(Command::Screenshot);
 }
 
+/// Shows a sample in the chosen corner, without the note inside the app.
+#[tauri::command]
+fn preview_toast(app: AppHandle) {
+    corner_toast(&app, "Notifications show up here", "Hover to keep one on screen");
+}
+
 #[tauri::command]
 fn toggle_session(state: State<AppState>) {
     state.recorder.send(Command::ToggleSession);
@@ -629,6 +651,7 @@ pub fn run() {
             save_clip_now,
             take_screenshot,
             toggle_session,
+            preview_toast,
             hotkey_conflicts,
             list_mics,
             storage_info,

@@ -213,7 +213,7 @@
   img {
     max-width: 100%;
     max-height: 100%;
-    border-radius: 10px;
+    border-radius: 20px;
     transform-origin: center;
     transition: transform 160ms var(--travel);
     animation: pop 220ms var(--travel);
@@ -269,7 +269,7 @@
     align-items: center;
     gap: 2px;
     padding: 3px;
-    border-radius: 12px;
+    border-radius: 999px;
     background: var(--overlay);
   }
   .zoom button {
@@ -278,7 +278,7 @@
     display: grid;
     place-items: center;
     border: 0;
-    border-radius: 9px;
+    border-radius: 999px;
     background: transparent;
     color: var(--ink);
   }
@@ -308,7 +308,7 @@
   .actions .icon-btn {
     width: 36px;
     height: 36px;
-    border-radius: 10px;
+    border-radius: 20px;
   }
   @keyframes fade {
     from {

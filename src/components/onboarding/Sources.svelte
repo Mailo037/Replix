@@ -47,8 +47,8 @@
     position: relative;
     aspect-ratio: 16 / 10;
     border-radius: 3cqmin;
-    border: 1.4cqmin solid #2c2c2c;
-    background: #161616;
+    border: 1.4cqmin solid #2e243c;
+    background: #140f1b;
     overflow: hidden;
     transition: border-color 300ms ease;
   }
@@ -61,13 +61,13 @@
     width: 22cqmin;
     height: 7cqmin;
     margin: 0 auto;
-    background: linear-gradient(#2c2c2c, #222);
+    background: linear-gradient(#2e243c, #221a2c);
     clip-path: polygon(30% 0, 70% 0, 100% 100%, 0 100%);
   }
   .game {
     position: absolute;
     inset: 0;
-    background: linear-gradient(#232323, #191919 64%, #2c2c2c 64.5%);
+    background: linear-gradient(#231b2e, #18121f 64%, #2e243c 64.5%);
     animation: fade 300ms var(--travel);
   }
   .sun {
@@ -85,7 +85,7 @@
     right: -10%;
     bottom: 30%;
     height: 22%;
-    background: #3a3a3a;
+    background: #3a2f4f;
     clip-path: polygon(0 100%, 18% 30%, 34% 70%, 52% 10%, 70% 60%, 86% 25%, 100% 100%);
   }
   .hud {
@@ -146,7 +146,7 @@
   .desk {
     position: absolute;
     inset: 0;
-    background: radial-gradient(circle at 30% 30%, #222, #161616);
+    background: radial-gradient(circle at 30% 30%, #221a2c, #140f1b);
     animation: fade 300ms var(--travel);
   }
   .win {
@@ -156,7 +156,7 @@
     gap: 1.4cqmin;
     padding: 4.6cqmin 2.4cqmin 2cqmin;
     border-radius: 1.6cqmin;
-    background: #2a2a2a;
+    background: #2c2239;
     transition: opacity 300ms ease, box-shadow 300ms ease;
   }
   .win i {
@@ -166,12 +166,12 @@
     width: 8cqmin;
     height: 1.4cqmin;
     border-radius: 1cqmin;
-    background: #3c3c3c;
+    background: #3d3152;
   }
   .win b {
     height: 1.4cqmin;
     border-radius: 1cqmin;
-    background: #383838;
+    background: #382c4c;
   }
   .win b.short {
     width: 60%;
@@ -209,7 +209,7 @@
     right: 0;
     bottom: 0;
     height: 7%;
-    background: #222;
+    background: #221a2c;
   }
   .tag {
     position: absolute;

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { startDrag } from "@crabnebula/tauri-plugin-drag";
   import { api, fileUrl, type Item } from "../lib/api";
-  import { duration, time } from "../lib/format";
+  import { duration, gameColor, time } from "../lib/format";
   import { share } from "../lib/share";
   import { store } from "../lib/store.svelte";
   import { fit } from "../lib/place";
@@ -32,7 +32,7 @@
 
   const thumbUrl = $derived(item.thumb ? fileUrl(item.thumb) : null);
   const isNew = $derived(!item.seen && Date.now() - item.created < 86_400_000 && item.kind !== "screenshot");
-  const badge = $derived(isNew ? "[ NEW ]" : item.draft ? "[ DRAFT ]" : item.kind === "session" ? "[ SESSION ]" : null);
+  const badge = $derived(isNew ? "new" : item.draft ? "draft" : item.kind === "session" ? "session" : null);
   const label = $derived(item.kind === "screenshot" ? "PNG" : duration(item.duration));
 
   // At the cursor on right-click, under the ⋯ button otherwise; always inside the window.
@@ -93,14 +93,15 @@
     ondragstart={drag}
     onpointerenter={() => item.kind !== "screenshot" && store.warm(item.id)}
   >
+    {#if !selecting && badge}
+      <span class="sticker {badge}">{badge}</span>
+    {/if}
     <span class="thumb">
       {#if thumbUrl}
         <img src={thumbUrl} alt="" class="real" class:loaded loading="lazy" onload={() => (loaded = true)} />
       {/if}
       {#if selecting}
-        <span class="label badge top check" class:accent={selected} aria-hidden="true">{selected ? "[×]" : "[ ]"}</span>
-      {:else if badge}
-        <span class="label badge top" class:accent={isNew}>{badge}</span>
+        <span class="check" class:on={selected} aria-hidden="true">{#if selected}<Icon name="check" size={14} />{/if}</span>
       {/if}
       {#if item.favorite}
         <span class="fav" aria-label="Favorite"><Icon name="star" size={14} filled /></span>
@@ -109,7 +110,10 @@
     </span>
     <span class="text">
       <span class="title">{item.title}</span>
-      <span class="meta">{item.game && !item.title.includes(item.game) ? `${item.game} · ` : ""}{time(item.created)}</span>
+      <span class="meta">
+        {#if item.game}<span class="swatch" style:background={gameColor(item.game)} aria-hidden="true"></span>{/if}
+        {item.game && !item.title.includes(item.game) ? `${item.game} · ` : ""}{time(item.created)}
+      </span>
     </span>
   </button>
 
@@ -156,18 +160,37 @@
     width: 100%;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 10px;
     padding: 0;
     border: 0;
     background: transparent;
     text-align: left;
-    border-radius: 14px;
+    border-radius: var(--r-thumb);
+  }
+  /* Stuck over the thumbnail's top-left corner, poking out a little. */
+  .sticker {
+    position: absolute;
+    top: -7px;
+    left: -7px;
+    z-index: 2;
+    transition: transform 220ms var(--travel);
+  }
+  .open:hover .sticker {
+    transform: rotate(-8deg) scale(1.05);
+  }
+  .sticker.draft {
+    background: var(--pink);
+    color: var(--on-sticker);
+  }
+  .sticker.session {
+    background: var(--lavender);
+    color: var(--on-sticker);
   }
   .thumb {
     position: relative;
     display: block;
     aspect-ratio: 16 / 9;
-    border-radius: 14px;
+    border-radius: var(--r-thumb);
     overflow: hidden;
     background: var(--black);
     transition: transform 220ms var(--travel);
@@ -184,7 +207,21 @@
     transform: scale(0.97);
   }
   .check {
-    font-size: 12px;
+    position: absolute;
+    top: 10px;
+    left: 10px;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid #fff;
+    background: rgb(23 17 31 / 0.5);
+    color: var(--on-accent);
+    display: grid;
+    place-items: center;
+  }
+  .check.on {
+    border-color: var(--accent);
+    background: var(--accent);
   }
   .real {
     position: absolute;
@@ -200,30 +237,26 @@
   }
   .label {
     position: absolute;
-    padding: 2px 7px;
-    border-radius: 6px;
-    background: rgba(0, 0, 0, 0.65);
-    color: #fff;
-  }
-  .label.top {
-    top: 8px;
-    left: 8px;
-  }
-  .label.accent {
-    color: var(--accent);
+    padding: 3px 9px;
+    border-radius: 999px;
+    background: rgb(23 17 31 / 0.82);
+    color: var(--ink);
   }
   .label.bottom {
-    right: 8px;
-    bottom: 8px;
-    font-size: 11px;
+    right: 10px;
+    bottom: 10px;
   }
   .fav {
     position: absolute;
-    top: 8px;
-    right: 8px;
+    top: 10px;
+    right: 10px;
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    background: var(--canvas);
     color: var(--accent);
-    display: flex;
-    filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.6));
+    display: grid;
+    place-items: center;
   }
   .text {
     display: flex;
@@ -231,8 +264,22 @@
     padding: 0 4px;
     min-width: 0;
   }
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin-top: 2px;
+    font-size: 12.5px;
+  }
+  .swatch {
+    width: 8px;
+    height: 8px;
+    flex: none;
+    border-radius: 3px;
+  }
   .title {
-    font-weight: 500;
+    font-size: 15px;
+    font-weight: 700;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -244,7 +291,7 @@
     width: 32px;
     height: 32px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 50%;
     background: transparent;
     color: var(--ghost);
     display: grid;
@@ -265,10 +312,10 @@
     position: fixed;
     inset: auto;
     margin: 0;
-    min-width: 210px;
-    padding: 4px;
+    min-width: 220px;
+    padding: 6px;
     border: 0;
-    border-radius: 14px;
+    border-radius: 20px;
     background: var(--raised);
     color: var(--ink);
     box-shadow:
@@ -301,12 +348,13 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    height: 32px;
-    padding: 0 10px;
+    height: 34px;
+    padding: 0 12px;
     border: 0;
-    border-radius: 8px;
+    border-radius: 14px;
     background: transparent;
     color: var(--ink);
+    font-weight: 600;
     text-align: left;
   }
   .menu button:hover {

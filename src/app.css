@@ -1,30 +1,36 @@
-@import "@fontsource-variable/inter";
-@import "@fontsource/jetbrains-mono/400.css";
-@import "@fontsource/jetbrains-mono/500.css";
+@import "@fontsource-variable/bricolage-grotesque/opsz.css";
+@import "@fontsource/dm-mono/400.css";
+@import "@fontsource/dm-mono/500.css";
 
-/* Surfaces step up in lightness: canvas → overlay → surface → raised. */
+/* Plum: surfaces step up in lightness, canvas → overlay → surface → raised. */
 :root {
-  --canvas: #141414;
-  --overlay: #1e1e1e;
-  --surface: #262626;
-  --raised: #2d2d2d;
-  --hover: #343434;
-  --line: #363636;
-  --black: #0a0a09;
-  --ink: #eeeeee;
-  --muted: #aaaaaa;
-  --ghost: #8a8a8a;
-  --red: #f08080;
-  --accent: #ff9a3c;
-  --on-accent: #1a0f04;
+  --canvas: #17111f;
+  --overlay: #211a2c;
+  --surface: #2a2038;
+  --raised: #33284a;
+  --hover: #3b2f52;
+  --line: #3a2f4f;
+  --black: #0e0a14;
+  --ink: #f3eefc;
+  --muted: #c4bad6;
+  --ghost: #a397b8;
+  --red: #ff8a8a;
+  --accent: #c5f26b;
+  --on-accent: #17111f;
 
-  --sans: "Inter Variable", "Inter", system-ui, sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, monospace;
+  /* Sticker colours: labels, game initials. Dark text on all of them. */
+  --pink: #ff9ec0;
+  --lavender: #c9b6ff;
+  --on-sticker: #17111f;
+  --sticker-shadow: 3px 3px 0 #0b0810;
 
-  --r-panel: 20px;
-  --r-row: 16px;
-  --r-control: 14px;
-  --r-thumb: 10px;
+  --sans: "Bricolage Grotesque Variable", "Bricolage Grotesque", system-ui, sans-serif;
+  --mono: "DM Mono", ui-monospace, monospace;
+
+  --r-panel: 24px;
+  --r-row: 18px;
+  --r-control: 16px;
+  --r-thumb: 20px;
 
   --travel: cubic-bezier(0.22, 0.61, 0.36, 1);
 
@@ -42,7 +48,7 @@ body {
   background: var(--canvas);
   color: var(--ink);
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: 13.5px;
   line-height: 1.45;
   -webkit-font-smoothing: antialiased;
   user-select: none;
@@ -80,9 +86,32 @@ button {
 
 .badge {
   font-family: var(--mono);
-  font-size: 10.5px;
-  letter-spacing: 0.02em;
+  font-size: 11.5px;
+  font-weight: 500;
   white-space: nowrap;
+}
+
+/* A tilted label stuck on a picture: NEW, DRAFT, SESSION. */
+.sticker {
+  display: inline-block;
+  padding: 3px 9px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--on-accent);
+  font-family: var(--sans);
+  font-size: 11.5px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transform: rotate(-5deg);
+  box-shadow: var(--sticker-shadow);
+}
+
+h1,
+h2,
+h3 {
+  letter-spacing: -0.02em;
 }
 
 .meta {
@@ -126,7 +155,7 @@ button {
 
 ::-webkit-scrollbar-thumb:hover {
   border-width: 3px;
-  background-color: #4a4a4a;
+  background-color: #4a3d63;
 }
 
 /* Buttons: primary (accent), neutral (surface), ghost. */
@@ -136,13 +165,13 @@ button {
   justify-content: center;
   gap: 8px;
   height: 36px;
-  padding: 0 16px;
+  padding: 0 18px;
   border: 0;
-  border-radius: 10px;
+  border-radius: 999px;
   background: var(--surface);
   color: var(--ink);
-  font-size: 12.5px;
-  font-weight: 560;
+  font-size: 13.5px;
+  font-weight: 700;
   white-space: nowrap;
   transition: transform 120ms var(--travel), background-color 160ms ease;
 }
@@ -178,8 +207,8 @@ button {
   height: 30px;
   padding: 0 12px;
   gap: 6px;
-  font-size: 12px;
-  border-radius: 8px;
+  font-size: 12.5px;
+  border-radius: 999px;
 }
 
 .btn:disabled {
@@ -194,10 +223,10 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 34px;
+  height: 34px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 50%;
   background: var(--surface);
   color: var(--ink);
   transition: transform 120ms var(--travel), background-color 160ms ease;
@@ -223,15 +252,16 @@ button {
   inset: auto;
   margin: 0;
   max-width: 280px;
-  padding: 6px 10px;
+  padding: 6px 12px;
   border: 0;
-  border-radius: 9px;
+  border-radius: 12px;
   background: var(--raised);
   color: var(--ink);
-  font-size: 12.5px;
+  font-size: 13px;
+  font-weight: 600;
   line-height: 1.35;
   box-shadow:
-    0 0 0 1px rgb(255 255 255 / 0.04),
+    0 0 0 1px rgb(255 255 255 / 0.05),
     0 8px 24px rgb(0 0 0 / 0.45);
   pointer-events: none;
   overflow: visible;

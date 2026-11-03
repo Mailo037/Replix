@@ -95,12 +95,15 @@
     aria-label="Recording: {headline}"
     onclick={() => (open ? close() : (open = true))}
   >
-    <span
-      class="dot"
-      class:live={store.status.state === "recording"}
-      class:session={!!store.status.sessionSince}
-      class:error={store.status.state === "error"}
-    ></span>
+    {#if store.status.state === "recording" && !store.status.sessionSince}
+      <span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+    {:else}
+      <span
+        class="dot"
+        class:session={!!store.status.sessionSince}
+        class:error={store.status.state === "error"}
+      ></span>
+    {/if}
     <span>{headline}</span>
     <Icon name="chevronDown" size={14} />
   </button>
@@ -166,22 +169,21 @@
   .pill {
     display: flex;
     align-items: center;
-    gap: 8px;
-    height: 26px;
-    padding: 0 8px 0 10px;
+    gap: 9px;
+    height: 30px;
+    padding: 0 10px 0 12px;
     border: 0;
-    border-radius: 13px;
-    background: transparent;
-    color: var(--muted);
-    font-size: 12px;
-    font-weight: 500;
+    border-radius: 15px;
+    background: var(--surface);
+    color: var(--ink);
+    font-size: 13px;
+    font-weight: 600;
     white-space: nowrap;
     transition: background-color 140ms ease, color 140ms ease;
   }
   .pill:hover,
   .pill.open {
-    background: var(--surface);
-    color: var(--ink);
+    background: var(--raised);
   }
   .dot {
     width: 7px;
@@ -190,9 +192,41 @@
     border-radius: 50%;
     background: var(--ghost);
   }
-  .dot.live {
+  /* The buffer is running: four bars that rise and fall like a level meter. */
+  .bars {
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+    height: 12px;
+  }
+  .bars i {
+    width: 3px;
+    height: 100%;
+    border-radius: 2px;
     background: var(--accent);
-    animation: breathe 2.4s ease-in-out infinite;
+    transform-origin: bottom;
+    animation: level 1.6s ease-in-out infinite;
+  }
+  .bars i:nth-child(1) {
+    animation-delay: -0.4s;
+  }
+  .bars i:nth-child(2) {
+    animation-delay: -1.1s;
+  }
+  .bars i:nth-child(3) {
+    animation-delay: -0.7s;
+  }
+  .bars i:nth-child(4) {
+    animation-delay: -0.2s;
+  }
+  @keyframes level {
+    0%,
+    100% {
+      transform: scaleY(0.4);
+    }
+    50% {
+      transform: scaleY(1);
+    }
   }
   .dot.session {
     background: #ff5a4e;
@@ -211,9 +245,9 @@
     top: calc(100% + 6px);
     right: 0;
     z-index: 30;
-    width: 272px;
-    padding: 12px;
-    border-radius: 18px;
+    width: 280px;
+    padding: 14px;
+    border-radius: 24px;
     background: var(--raised);
     box-shadow: 0 16px 40px rgb(0 0 0 / 0.45);
     display: flex;
@@ -231,7 +265,7 @@
     display: flex;
     flex-direction: column;
     min-width: 0;
-    font-weight: 500;
+    font-weight: 700;
   }
   .pop-title .meta {
     font-weight: 400;
@@ -253,11 +287,12 @@
     justify-content: space-between;
     gap: 8px;
     min-height: 36px;
-    padding: 6px 10px;
+    padding: 6px 12px;
     border: 0;
-    border-radius: 10px;
+    border-radius: 14px;
     background: transparent;
     color: var(--muted);
+    font-weight: 600;
     text-align: left;
   }
   .choice:hover,
@@ -290,7 +325,7 @@
     padding: 8px 10px;
   }
   @media (prefers-reduced-motion: reduce) {
-    .dot.live,
+    .bars i,
     .dot.session {
       animation: none;
     }

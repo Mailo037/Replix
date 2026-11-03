@@ -51,18 +51,18 @@
     outline: none;
   }
   .slider::-webkit-slider-runnable-track {
-    height: 4px;
-    border-radius: 2px;
+    height: 6px;
+    border-radius: 3px;
     background: linear-gradient(to right, var(--accent) var(--fill), var(--black) var(--fill));
   }
   .slider::-webkit-slider-thumb {
     appearance: none;
-    width: 14px;
-    height: 14px;
+    width: 16px;
+    height: 16px;
     margin-top: -5px;
     border-radius: 50%;
     background: var(--ink);
-    box-shadow: 0 1px 4px rgb(0 0 0 / 0.5);
+    box-shadow: 0 0 0 3px var(--canvas);
     transition: transform 140ms var(--travel);
   }
   .slider:hover::-webkit-slider-thumb,

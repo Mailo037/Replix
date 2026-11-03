@@ -12,7 +12,7 @@
 </script>
 
 <div class="titlebar" data-tauri-drag-region>
-  <span class="mark" data-tauri-drag-region><Mark size={13} /></span>
+  <span class="mark" data-tauri-drag-region><Mark size={11} color="var(--on-accent)" /></span>
   {#if store.settings?.onboarded}
     <div class="tools">
       <StatusMenu />
@@ -49,43 +49,49 @@
     z-index: 20;
     display: flex;
     align-items: center;
-    height: 34px;
+    height: 44px;
     flex: none;
-    padding-left: 14px;
+    padding-left: 16px;
   }
   .mark {
-    display: flex;
+    width: 22px;
+    height: 22px;
+    border-radius: 8px;
+    background: var(--accent);
+    display: grid;
+    place-items: center;
+    padding-left: 2px;
   }
   .tools {
     margin-left: auto;
     margin-right: 8px;
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: 6px;
   }
   .gear {
     position: relative;
-    width: 30px;
-    height: 26px;
+    width: 34px;
+    height: 30px;
     border: 0;
-    border-radius: 13px;
-    background: transparent;
-    color: var(--muted);
+    border-radius: 15px;
+    background: var(--surface);
+    color: var(--ink);
     display: grid;
     place-items: center;
     transition: background-color 140ms ease, color 140ms ease;
   }
   .gear:hover {
-    background: var(--surface);
-    color: var(--ink);
+    background: var(--raised);
   }
   .gear.current {
-    color: var(--accent);
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .badge-dot {
     position: absolute;
-    top: 4px;
-    right: 6px;
+    top: 5px;
+    right: 7px;
     width: 6px;
     height: 6px;
     border-radius: 50%;
@@ -99,8 +105,8 @@
     margin-left: 0;
   }
   .controls button {
-    width: 42px;
-    height: 34px;
+    width: 46px;
+    height: 44px;
     border: 0;
     background: transparent;
     color: var(--muted);

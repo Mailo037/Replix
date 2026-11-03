@@ -332,7 +332,7 @@
     margin: 0;
     font-size: clamp(24px, 2.8vw, 30px);
     line-height: 1.12;
-    font-weight: 650;
+    font-weight: 800;
     letter-spacing: -0.02em;
     text-wrap: balance;
   }
@@ -351,7 +351,7 @@
     font-family: var(--mono);
     font-size: 12.5px;
     padding: 2px 7px;
-    border-radius: 6px;
+    border-radius: 10px;
     background: var(--surface);
     color: var(--ink);
     white-space: nowrap;
@@ -394,7 +394,7 @@
     width: 32px;
     height: 32px;
     flex: none;
-    border-radius: 9px;
+    border-radius: 12px;
     background: var(--raised);
     color: var(--accent);
     display: grid;

@@ -33,18 +33,18 @@
     grid-auto-flow: column;
     grid-auto-columns: minmax(0, 1fr);
     gap: 2px;
-    padding: 3px;
-    border-radius: 10px;
+    padding: 4px;
+    border-radius: 999px;
   }
   button {
-    height: 26px;
-    padding: 0 10px;
+    height: 28px;
+    padding: 0 12px;
     border: 0;
-    border-radius: 7px;
+    border-radius: 999px;
     background: transparent;
     color: var(--muted);
-    font-size: 12px;
-    font-weight: 500;
+    font-size: 12.5px;
+    font-weight: 700;
     white-space: nowrap;
     transition: background-color 220ms ease, color 220ms ease;
   }
@@ -52,7 +52,7 @@
     color: var(--ink);
   }
   button.active {
-    background: var(--hover);
-    color: var(--ink);
+    background: var(--accent);
+    color: var(--on-accent);
   }
 </style>

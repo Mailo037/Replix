@@ -54,7 +54,8 @@
   const clipKey = $derived(store.settings?.hotkeys.clip.replace("+", " + ") ?? "Alt + C");
 
   const totalSize = $derived(visible.reduce((sum, i) => sum + i.size, 0));
-  const picked = $derived(visible.filter((i) => selected.includes(i.id)));
+  const selectedIds = $derived(new Set(selected));
+  const picked = $derived(visible.filter((i) => selectedIds.has(i.id)));
   const pickedSize = $derived(picked.reduce((sum, i) => sum + i.size, 0));
 
   // A different list starts a fresh selection.
@@ -143,11 +144,12 @@
     {:else}
       <h1>{game ?? titles[filter]}</h1>
       {#if visible.length}
-        <span class="meta mono">{visible.length} · {size(totalSize)}</span>
+        <span class="chip mono">{visible.length} {visible.length === 1 ? "clip" : "clips"}</span>
+        <span class="chip mono">{size(totalSize)}</span>
       {/if}
       <div class="tools">
         {#if visible.length}
-          <button type="button" class="btn ghost small" onclick={() => (selecting = true)}>Select</button>
+          <button type="button" class="btn" onclick={() => (selecting = true)}>Select</button>
         {/if}
         <label class="search">
           <Icon name="search" size={16} />
@@ -189,11 +191,11 @@
       <section class="group" aria-label={group.label}>
         <div class="group-head">
           <h2>{group.label}</h2>
-          <span class="mono meta">{group.items.length}</span>
+          <span class="ring mono">{group.items.length}</span>
         </div>
         <div class="grid">
           {#each group.items as item (item.id)}
-            <ClipTile {item} onopen={open} onselect={select} {selecting} selected={selected.includes(item.id)} />
+            <ClipTile {item} onopen={open} onselect={select} {selecting} selected={selectedIds.has(item.id)} />
           {/each}
         </div>
       </section>
@@ -217,9 +219,16 @@
   header {
     display: flex;
     align-items: center;
-    gap: 12px;
-    min-height: 44px;
-    padding: 0 6px 8px;
+    gap: 10px;
+    min-height: 48px;
+    padding: 0 12px 10px;
+  }
+  .chip {
+    padding: 3px 10px;
+    border-radius: 999px;
+    background: var(--surface);
+    font-size: 12px;
+    white-space: nowrap;
   }
   header > .meta {
     white-space: nowrap;
@@ -234,9 +243,9 @@
   .actions {
     display: flex;
     gap: 2px;
-    padding: 3px;
+    padding: 4px;
     margin-right: 6px;
-    border-radius: 14px;
+    border-radius: 22px;
     background: var(--overlay);
     animation: appear 180ms var(--travel);
   }
@@ -251,12 +260,12 @@
     align-items: center;
     gap: 8px;
     height: 34px;
-    padding: 0 12px;
+    padding: 0 14px;
     border: 0;
-    border-radius: 11px;
+    border-radius: 18px;
     background: transparent;
     color: var(--ink);
-    font-weight: 500;
+    font-weight: 700;
     white-space: nowrap;
   }
   .actions button:hover {
@@ -266,9 +275,10 @@
     color: var(--red);
   }
   h1 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
+    margin: 0 6px 0 0;
+    font-size: 30px;
+    font-weight: 800;
+    letter-spacing: -0.035em;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -279,13 +289,16 @@
     gap: 10px;
     flex: 0 1 280px;
     min-width: 160px;
-    height: 32px;
-    padding: 0 12px;
-    border-radius: 9px;
+    height: 38px;
+    padding: 0 14px;
+    border: 2px solid var(--line);
+    border-radius: 999px;
     background: var(--overlay);
     color: var(--ghost);
+    transition: border-color 160ms ease;
   }
   .search:focus-within {
+    border-color: var(--accent);
     color: var(--accent);
   }
   .search input {
@@ -309,7 +322,7 @@
     height: 24px;
     margin-right: -6px;
     border: 0;
-    border-radius: 7px;
+    border-radius: 50%;
     background: transparent;
     color: var(--ghost);
   }
@@ -320,10 +333,10 @@
   .body {
     flex: 1;
     min-height: 0;
-    padding: 0 6px 24px;
+    padding: 0 12px 24px;
     display: flex;
     flex-direction: column;
-    gap: 28px;
+    gap: 24px;
     mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 28px), transparent 100%);
   }
   .group {
@@ -333,19 +346,30 @@
   }
   .group-head {
     display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    padding: 16px 6px 0;
+    align-items: center;
+    gap: 10px;
+    padding: 16px 0 4px;
   }
   .group h2 {
     margin: 0;
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 21px;
+    font-weight: 800;
+  }
+  .ring {
+    min-width: 24px;
+    height: 24px;
+    padding: 0 7px;
+    border: 2px solid var(--accent);
+    border-radius: 999px;
+    color: var(--accent);
+    font-size: 12px;
+    display: grid;
+    place-items: center;
   }
   .grid {
     display: grid;
     grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
-    gap: 20px 16px;
+    gap: 26px 18px;
   }
   .empty {
     margin: auto;
@@ -359,16 +383,16 @@
   .empty-mark {
     width: 96px;
     height: 96px;
-    border-radius: 24px;
-    background: var(--black);
+    border-radius: 32px;
+    background: var(--overlay);
     display: grid;
     place-items: center;
     margin-bottom: 18px;
   }
   .empty h2 {
     margin: 0 0 6px;
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 20px;
+    font-weight: 800;
   }
   .empty p {
     margin: 0;

@@ -10,6 +10,9 @@ use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// Helper jobs (saving, thumbnails, probing) yield the CPU to the game. The capture
+/// itself is started elsewhere and keeps normal priority so it never drops frames.
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 
 /// The sidecar sits next to the app executable; during development fall back to PATH.
 fn tool(name: &str) -> PathBuf {
@@ -30,7 +33,7 @@ pub fn exe() -> PathBuf {
 
 pub fn command() -> Command {
     let mut cmd = Command::new(exe());
-    cmd.creation_flags(CREATE_NO_WINDOW).arg("-hide_banner").args(["-loglevel", "error", "-nostdin"]);
+    cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS).arg("-hide_banner").args(["-loglevel", "error", "-nostdin"]);
     cmd
 }
 
@@ -39,8 +42,19 @@ pub fn run(args: &[String]) -> Result<()> {
     run_with_timeout(args, Duration::from_secs(600))
 }
 
+/// Like `run`, with relative paths resolved against `dir`.
+pub fn run_in(dir: &Path, args: &[String]) -> Result<()> {
+    let mut cmd = command();
+    cmd.current_dir(dir);
+    run_command(cmd, args, Duration::from_secs(600))
+}
+
 pub fn run_with_timeout(args: &[String], timeout: Duration) -> Result<()> {
-    let mut child = command()
+    run_command(command(), args, timeout)
+}
+
+fn run_command(mut cmd: Command, args: &[String], timeout: Duration) -> Result<()> {
+    let mut child = cmd
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -109,7 +123,7 @@ struct ProbeFormat {
 
 pub fn probe(path: &Path) -> Result<MediaInfo> {
     let out = Command::new(tool("ffprobe"))
-        .creation_flags(CREATE_NO_WINDOW)
+        .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
         .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height:stream_tags=title,name", "-of", "json"])
         .arg(path)
         .stdin(Stdio::null())

@@ -55,8 +55,8 @@
     border-radius: 2.4cqmin;
     background:
       radial-gradient(circle at var(--x) 34%, var(--accent) 0 7%, transparent 7.5%),
-      linear-gradient(170deg, transparent 58%, #3a3a3a 58.5% 70%, transparent 70.5%),
-      linear-gradient(#262626, #1b1b1b 62%, #303030 62.5%);
+      linear-gradient(170deg, transparent 58%, #3a2f4f 58.5% 70%, transparent 70.5%),
+      linear-gradient(#2a2038, #1c1526 62%, #31263f 62.5%);
   }
   .keep {
     position: absolute;

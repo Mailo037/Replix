@@ -229,11 +229,16 @@ pub fn make_thumb(item_path: &Path, kind: Kind, duration: f64, out: &Path) -> an
     if let Some(dir) = out.parent() {
         std::fs::create_dir_all(dir)?;
     }
-    let mut args: Vec<String> = Vec::new();
+    // One thread and only the keyframe at the seek point: a new clip's thumbnail is made
+    // while the game is still running and should not cost it a frame.
+    let mut args: Vec<String> = vec!["-threads".into(), "1".into()];
     if kind != Kind::Screenshot {
-        args.extend(["-ss".into(), format!("{:.2}", (duration / 3.0).min(2.0))]);
+        args.extend(["-ss".into(), format!("{:.2}", (duration / 3.0).min(2.0)), "-noaccurate_seek".into()]);
+        args.extend(["-skip_frame".into(), "nokey".into()]);
     }
     args.extend([
+        "-filter_threads".into(),
+        "1".into(),
         "-i".into(),
         ffmpeg::path_arg(item_path),
         "-frames:v".into(),
@@ -307,7 +312,7 @@ pub fn format_duration(seconds: f64) -> String {
 }
 
 /// Deletes the oldest clips until the folder fits the limit. Favourites and drafts stay.
-pub fn enforce_limit(root: &Path, limit_bytes: u64) {
+pub fn enforce_limit(root: &Path, limit_bytes: u64) -> bool {
     let mut files: Vec<(PathBuf, Meta, u64)> = media_files(root)
         .into_iter()
         .filter_map(|p| {
@@ -318,9 +323,10 @@ pub fn enforce_limit(root: &Path, limit_bytes: u64) {
         .collect();
     let mut total: u64 = files.iter().map(|f| f.2).sum();
     if total <= limit_bytes {
-        return;
+        return false;
     }
     files.sort_by_key(|f| f.1.created);
+    let mut changed = false;
     for (path, meta, size) in files {
         if total <= limit_bytes {
             break;
@@ -329,11 +335,13 @@ pub fn enforce_limit(root: &Path, limit_bytes: u64) {
             continue;
         }
         if trash::delete(&path).is_ok() {
+            changed = true;
             let _ = std::fs::remove_file(sidecar(&path));
             total = total.saturating_sub(size);
             log::info!("storage limit: moved {} to the recycle bin", path.display());
         }
     }
+    changed
 }
 
 pub fn delete(path: &Path) -> anyhow::Result<()> {

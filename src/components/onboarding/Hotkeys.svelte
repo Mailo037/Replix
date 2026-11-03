@@ -34,7 +34,7 @@
     gap: 4cqmin;
     padding: 2.4cqmin;
     border-radius: 3.6cqmin;
-    background: #1c1c1c;
+    background: #1d1627;
     animation: light 3.6s var(--travel) infinite;
   }
   .tile {
@@ -63,8 +63,8 @@
     display: grid;
     place-items: center;
     border-radius: 2.6cqmin;
-    background: linear-gradient(#3a3a3a, #262626);
-    box-shadow: 0 0.8cqmin 0 #161616;
+    background: linear-gradient(#3a2f4f, #2a2038);
+    box-shadow: 0 0.8cqmin 0 #140f1b;
     font-size: 3.8cqmin;
   }
   .taken .cap {

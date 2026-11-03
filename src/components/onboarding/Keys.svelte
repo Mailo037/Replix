@@ -45,9 +45,9 @@
     width: 16cqmin;
     height: 16cqmin;
     border-radius: 3.6cqmin;
-    background: linear-gradient(#333, #262626);
+    background: linear-gradient(#33284a, #2a2038);
     box-shadow:
-      0 1.2cqmin 0 #161616,
+      0 1.2cqmin 0 #140f1b,
       0 2cqmin 4cqmin rgb(0 0 0 / 0.4);
     font-size: 5.4cqmin;
     color: var(--ink);
@@ -80,8 +80,8 @@
     outline-offset: 0.8cqmin;
     background:
       radial-gradient(circle at 70% 35%, var(--accent) 0 7%, transparent 7.5%),
-      linear-gradient(165deg, transparent 55%, #3a3a3a 55.5% 68%, transparent 68.5%),
-      linear-gradient(#2a2a2a, #1b1b1b 60%, #333 60.5%);
+      linear-gradient(165deg, transparent 55%, #3a2f4f 55.5% 68%, transparent 68.5%),
+      linear-gradient(#2c2239, #1c1526 60%, #33284a 60.5%);
   }
   .len {
     position: absolute;
@@ -122,14 +122,14 @@
     8% {
       transform: translateY(0);
       box-shadow:
-        0 1.2cqmin 0 #161616,
+        0 1.2cqmin 0 #140f1b,
         0 2cqmin 4cqmin rgb(0 0 0 / 0.4);
     }
     12%,
     20% {
       transform: translateY(1cqmin);
       box-shadow:
-        0 0.4cqmin 0 #161616,
+        0 0.4cqmin 0 #140f1b,
         0 1cqmin 2cqmin rgb(0 0 0 / 0.5);
       color: var(--accent);
     }
