@@ -209,8 +209,24 @@ pub fn run<T>(demand: &Demand, work: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> 
     outcome
 }
 
+/// Like `run` for work made ahead of time that can as well be left for later: when the
+/// turn is taken, by an editor's long waveform say, it stops at once instead of waiting.
+pub fn run_if_free<T>(demand: &Demand, work: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> anyhow::Result<T>) -> Outcome<T> {
+    let Some(turn) = TURN.try_lock() else { return Outcome::Stopped };
+    let outcome = run_holding(turn, demand, work);
+    wake();
+    outcome
+}
+
 fn run_in_turn<T>(demand: &Demand, work: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> anyhow::Result<T>) -> Outcome<T> {
-    let _turn = turn(demand);
+    run_holding(turn(demand), demand, work)
+}
+
+fn run_holding<T>(
+    _turn: MutexGuard<'static, ()>,
+    demand: &Demand,
+    work: impl FnOnce(&(dyn Fn() -> bool + Sync)) -> anyhow::Result<T>,
+) -> Outcome<T> {
     let stopped = AtomicBool::new(false);
     let go = || {
         let wanted = demand.wanted();

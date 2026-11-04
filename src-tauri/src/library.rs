@@ -240,7 +240,8 @@ fn probe_in_turn(path: &Path) -> anyhow::Result<ffmpeg::MediaInfo> {
     if PROBE_FAILURES.recent(path) {
         anyhow::bail!("could not be read a moment ago");
     }
-    let probed = crate::media::run(&crate::media::Demand::new(crate::media::AHEAD), |go| ffmpeg::probe_while(path, go)).result();
+    // A scan does not wait behind an editor's long job: the file is left for the next one.
+    let probed = crate::media::run_if_free(&crate::media::Demand::new(crate::media::AHEAD), |go| ffmpeg::probe_while(path, go)).result();
     match &probed {
         Err(e) if crate::media::is_stopped(e) => {
             DEFERRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

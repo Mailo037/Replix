@@ -145,14 +145,19 @@
   // Hidden in the tray or minimised, nobody is watching: stop decoding video and audio.
   /** The window was hidden since the filmstrip was last asked for. */
   let hiddenSince = false;
+  /** This hide already ended the editor's round. */
+  let endedForHide = false;
 
   $effect(() => {
     if (!store.visible) {
+      // Once per hide: pausing changes `playing`, which runs this again.
+      if (!endedForHide) endEditorRound();
+      endedForHide = true;
       hiddenSince = true;
       if (playing) pause();
-      endEditorRound();
       return;
     }
+    endedForHide = false;
     // Hiding ended the round and stopped what it was making; back on screen, ask in the new
     // one. The stop may only be reported after the window is back; this runs again then.
     if (interrupted && store.visible) {

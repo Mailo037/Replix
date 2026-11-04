@@ -1062,6 +1062,11 @@ pub fn run() {
                     set_page_visible(&main, shown);
                 }
                 WindowEvent::Focused(focused) => {
+                    // The page reports its focus; gaining the window's is a backstop, should
+                    // that report be missed after a restore.
+                    if *focused {
+                        FOCUSED.store(true, Ordering::Relaxed);
+                    }
                     // Restored by the taskbar or Alt-Tab rather than the tray: the window's own
                     // state decides, in case a resize went unreported, and the page is asked
                     // to show again in case an earlier request did not take.
