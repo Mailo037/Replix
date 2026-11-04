@@ -177,6 +177,7 @@ class Store {
     }
     this.refreshing = (async () => {
       try {
+        let passes = 0;
         do {
           // The window may have been hidden, or left for a game, while the last scan ran.
           if (document.visibilityState === "hidden" || (!now && !document.hasFocus())) {
@@ -187,10 +188,19 @@ class Store {
           const before = this.changes;
           const items = await api.listLibrary();
           // A change that landed while the scan ran may be missing from it: scan again
-          // rather than show the older state.
-          if (this.changes !== before) this.refreshAgain = true;
-          else this.items = this.reconcile(items);
-
+          // rather than show the older state. A run of changes does not keep it scanning:
+          // after a few passes the patched items stay, and the next refresh catches up.
+          if (this.changes !== before) {
+            this.refreshAgain = ++passes < 3;
+            if (!this.refreshAgain) {
+              // Clips the scan found are shown all the same; the ones it may have read
+              // before a change stay as patched, and the next refresh catches up.
+              const known = new Set(this.items.map((i) => i.id));
+              const found = items.filter((i) => !known.has(i.id));
+              if (found.length) this.items = [...found, ...this.items].sort((a, b) => b.created - a.created);
+              this.stale = true;
+            }
+          } else this.items = this.reconcile(items);
         } while (this.refreshAgain);
       } finally {
         this.loaded = true;

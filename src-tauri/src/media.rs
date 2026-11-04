@@ -251,7 +251,13 @@ impl Pending {
     pub fn claim(&self, key: &str, need: u64, yields: bool) -> Option<Arc<Demand>> {
         let mut jobs = self.0.lock();
         if let Some(demand) = jobs.get(key) {
-            demand.need.fetch_max(need, Ordering::Relaxed);
+            // The job's editor round ended and it is on its way out: the new need takes its
+            // place, also one made ahead of time, which a plain maximum would keep out.
+            if demand.for_editor() && !demand.alive() {
+                demand.need.store(need, Ordering::Relaxed);
+            } else {
+                demand.need.fetch_max(need, Ordering::Relaxed);
+            }
             return None;
         }
         let demand = if yields { Demand::yielding(need) } else { Demand::new(need) };
@@ -297,6 +303,17 @@ mod tests {
         assert!(pending.claim("clip", round + 1, false).is_some());
         pending.finish("clip");
         assert!(pending.claim("clip", AHEAD, false).is_some());
+        pending.finish("clip");
+
+        // A job of an ended round still on its way out, joined by work ahead of time: that
+        // need takes over, and the job goes on rather than vanishing under the warm-up.
+        let next = round + 1;
+        let old = pending.claim("clip", next, false).expect("a new job");
+        end_round(next);
+        assert!(pending.claim("clip", AHEAD, false).is_none(), "joins");
+        assert!(!old.for_editor(), "now made ahead of time");
+        assert!(pending.stopped("clip"), "still wanted, so it runs again");
+        pending.finish("clip");
     }
 
     /// Opening a clip while its warm-up holds the turn: the warm-up stops at once, and the

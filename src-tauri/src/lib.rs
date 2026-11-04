@@ -871,9 +871,6 @@ fn on_hotkey(app: &AppHandle, shortcut: &Shortcut) {
     }
 }
 
-/// A hidden or minimised window's page keeps rendering and running its animations unless
-/// the webview itself is hidden too, which would cost the game frames while Replix sits in
-/// the tray. Hidden, WebView2 stops painting and throttles the page's timers.
 /// Whether the main window is on screen. Work done ahead of time stops when it is not:
 /// then a game is likely running.
 pub fn page_visible() -> bool {
@@ -893,6 +890,9 @@ pub fn app_focused() -> bool {
 
 pub(crate) static PAGE_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
+/// A hidden or minimised window's page keeps rendering and running its animations unless
+/// the webview itself is hidden too, which would cost the game frames while Replix sits in
+/// the tray. Hidden, WebView2 stops painting and throttles the page's timers.
 fn set_page_visible(window: &tauri::WebviewWindow, visible: bool) {
     // Resizing reports many sizes in a row; only a change is passed on.
     if PAGE_VISIBLE.load(Ordering::Relaxed) == visible {
