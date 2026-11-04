@@ -13,6 +13,7 @@
 //! 2. the media turn, held while one job runs;
 //! 3. `library::META_LOCK`, held only for a sidecar's read, change and write;
 //! 4. short-lived locks (`Pending`, `WAKE`, queues), never held while waiting on another.
+//!
 //! Waiting for the turn or a wake-up never happens while holding `META_LOCK`.
 
 use std::collections::HashMap;

@@ -254,7 +254,10 @@ fn probe_in_turn(path: &Path) -> anyhow::Result<ffmpeg::MediaInfo> {
 
 /// Files some work failed on, with their size and change time then and when it was. A
 /// broken file is tried again after a while, or as soon as it changes, not on every scan.
-pub struct Failures(parking_lot::Mutex<std::collections::BTreeMap<PathBuf, (u64, Option<std::time::SystemTime>, std::time::Instant)>>);
+/// Size and change time of a file when work on it failed, and when that was.
+type Failure = (u64, Option<std::time::SystemTime>, std::time::Instant);
+
+pub struct Failures(parking_lot::Mutex<std::collections::BTreeMap<PathBuf, Failure>>);
 const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(10 * 60);
 
 impl Failures {
