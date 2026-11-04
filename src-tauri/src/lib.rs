@@ -655,14 +655,13 @@ async fn export_clip(app: AppHandle, id: String, title: String, request: editor:
         // One export at a time, from choosing its name to the software retry: a second
         // one waits instead of doubling the load beside a game.
         static ONE_AT_A_TIME: Mutex<()> = parking_lot::const_mutex(());
-        RUNNING_EXPORTS.lock().insert(ticket);
-        let cancelled = || CANCELLED_EXPORTS.lock().contains(&ticket);
-        // Forgotten on every way out, so the set stays small.
+        let cancelled = || CANCELLED_EXPORTS.lock().has(ticket);
+        // Forgotten on every way out; a cancel that comes later finds nothing to stop and
+        // is dropped after a while.
         struct Forget(u64);
         impl Drop for Forget {
             fn drop(&mut self) {
-                RUNNING_EXPORTS.lock().remove(&self.0);
-                CANCELLED_EXPORTS.lock().remove(&self.0);
+                CANCELLED_EXPORTS.lock().forget(self.0);
             }
         }
         let _forget = Forget(ticket);
@@ -703,8 +702,33 @@ async fn export_clip(app: AppHandle, id: String, title: String, request: editor:
     .map_err(err)?
 }
 
-/// Exports asked to stop, running or still waiting for their turn, by ticket.
-static CANCELLED_EXPORTS: Mutex<std::collections::BTreeSet<u64>> = parking_lot::const_mutex(std::collections::BTreeSet::new());
+/// Exports asked to stop, by ticket and when. A cancel can arrive before its export has
+/// started on its thread, or after it ended; both are kept a while rather than lost or
+/// kept for good.
+struct Cancels(std::collections::BTreeMap<u64, std::time::Instant>);
+
+impl Cancels {
+    const KEPT: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+    const fn new() -> Self {
+        Self(std::collections::BTreeMap::new())
+    }
+
+    fn cancel(&mut self, ticket: u64, now: std::time::Instant) {
+        self.0.retain(|_, at| now.duration_since(*at) < Self::KEPT);
+        self.0.insert(ticket, now);
+    }
+
+    fn has(&self, ticket: u64) -> bool {
+        self.0.contains_key(&ticket)
+    }
+
+    fn forget(&mut self, ticket: u64) {
+        self.0.remove(&ticket);
+    }
+}
+
+static CANCELLED_EXPORTS: Mutex<Cancels> = parking_lot::const_mutex(Cancels::new());
 
 #[tauri::command]
 fn report_focus(focused: bool) {
@@ -712,16 +736,9 @@ fn report_focus(focused: bool) {
     media::wake();
 }
 
-/// Exports running or waiting for their turn, by ticket.
-static RUNNING_EXPORTS: Mutex<std::collections::BTreeSet<u64>> = parking_lot::const_mutex(std::collections::BTreeSet::new());
-
 #[tauri::command]
 fn cancel_export(ticket: u64) {
-    // One that already ended has nothing to stop, and would stay in the set for good.
-    let running = RUNNING_EXPORTS.lock();
-    if running.contains(&ticket) {
-        CANCELLED_EXPORTS.lock().insert(ticket);
-    }
+    CANCELLED_EXPORTS.lock().cancel(ticket, std::time::Instant::now());
 }
 
 #[tauri::command]
@@ -1105,6 +1122,21 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A cancel that arrives before its export started still stops it; old cancels of
+    /// exports that never came, or had ended, are dropped.
+    #[test]
+    fn a_cancel_holds_whenever_it_arrives() {
+        let start = std::time::Instant::now();
+        let mut cancels = Cancels::new();
+        cancels.cancel(1, start);
+        assert!(cancels.has(1), "cancelled before it started");
+        cancels.forget(1);
+        assert!(!cancels.has(1));
+        cancels.cancel(2, start);
+        cancels.cancel(3, start + Cancels::KEPT + std::time::Duration::from_secs(1));
+        assert!(!cancels.has(2) && cancels.has(3), "an old cancel is dropped");
+    }
 
     /// Changes that overtake each other on the way: the newest stands, an older one that
     /// arrives later is dropped, and a later one after a take is kept again.
