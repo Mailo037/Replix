@@ -84,9 +84,11 @@ class Store {
     // Files are read only while Replix is in use; coming back to it finishes what a scan
     // had to leave unread.
     // Without the focus, the background animations rest too: Replix may sit beside a game.
+    // Replix goes by the same answer for its own work ahead of time.
     const rest = () => {
       this.focused = document.hasFocus();
       document.documentElement.classList.toggle("resting", !this.focused);
+      api.reportFocus(this.focused).catch(() => {});
     };
     rest();
     window.addEventListener("blur", rest);
@@ -103,8 +105,8 @@ class Store {
     // moment of lost focus), scan again now; else when Replix is back or the editor closes.
     await listen("scan-deferred", () => {
       this.stale = true;
-      // Should Replix and the page disagree on whether it is in front, every scan would be
-      // deferred again: at most one follow-up a few seconds, the rest waits for a return.
+      // At most one follow-up every few seconds, should the window keep coming and going;
+      // the rest waits for a return.
       const now = performance.now();
       if (!away() && this.view.name !== "editor" && now - this.deferredAt > 5000) {
         this.deferredAt = now;

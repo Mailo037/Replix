@@ -706,6 +706,12 @@ async fn export_clip(app: AppHandle, id: String, title: String, request: editor:
 /// Exports asked to stop, running or still waiting for their turn, by ticket.
 static CANCELLED_EXPORTS: Mutex<std::collections::BTreeSet<u64>> = parking_lot::const_mutex(std::collections::BTreeSet::new());
 
+#[tauri::command]
+fn report_focus(focused: bool) {
+    FOCUSED.store(focused, Ordering::Relaxed);
+    media::wake();
+}
+
 /// Exports running or waiting for their turn, by ticket.
 static RUNNING_EXPORTS: Mutex<std::collections::BTreeSet<u64>> = parking_lot::const_mutex(std::collections::BTreeSet::new());
 
@@ -858,7 +864,9 @@ pub fn page_visible() -> bool {
 }
 
 /// Whether Replix's window has the keyboard focus. Visible alone is not enough to do work
-/// ahead of time: Replix may sit on a second monitor next to a running game.
+/// ahead of time: Replix may sit on a second monitor next to a running game. The page says
+/// so (`report_focus`), so the page and Replix go by the same answer: the window's own
+/// focus events and the page's can disagree, the WebView being a window of its own.
 pub(crate) static FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 pub fn app_focused() -> bool {
@@ -1006,10 +1014,6 @@ pub fn run() {
                 .visible(false)
                 .build()?;
 
-            // Focus events report changes only: start from what the window has now.
-            if let Some(main) = app.get_webview_window("main") {
-                FOCUSED.store(main.is_focused().unwrap_or(false), Ordering::Relaxed);
-            }
             if std::env::args().any(|a| a == "--minimized") {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.hide();
@@ -1041,7 +1045,6 @@ pub fn run() {
                     set_page_visible(&main, shown);
                 }
                 WindowEvent::Focused(focused) => {
-                    FOCUSED.store(*focused, Ordering::Relaxed);
                     // Restored by the taskbar or Alt-Tab rather than the tray: the window's own
                     // state decides, in case a resize went unreported, and the page is asked
                     // to show again in case an earlier request did not take.
@@ -1072,6 +1075,7 @@ pub fn run() {
             end_editor_round,
             first_editor_round,
             cancel_export,
+            report_focus,
             save_draft,
             rename_item,
             set_favorite,

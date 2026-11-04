@@ -198,6 +198,8 @@ export const api = {
   /** `ticket` names this export in its "export-progress" events. */
   exportClip: (id: string, title: string, request: Draft & { preset: Preset }, ticket: number) =>
     invoke<string>("export_clip", { id, title, request, ticket }),
+  /** Tells Replix whether the page has the focus; its work ahead of time goes by this. */
+  reportFocus: (focused: boolean) => invoke<void>("report_focus", { focused }),
   /** Stops an export, running or still waiting for its turn. */
   cancelExport: (ticket: number) => invoke<void>("cancel_export", { ticket }),
   saveFrame: (id: string, time: number) => invoke<string>("save_frame", { id, time }),
