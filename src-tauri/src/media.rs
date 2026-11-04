@@ -153,7 +153,7 @@ pub fn new_page() -> u64 {
 pub fn test_rounds() -> (MutexGuard<'static, ()>, u64) {
     static ROUNDS: Mutex<()> = parking_lot::const_mutex(());
     let held = ROUNDS.lock();
-    // Editor work runs only while Replix has the focus; tests start with it.
+    // Work ahead of time runs only while Replix has the focus; tests start with it.
     crate::FOCUSED.store(true, Ordering::Relaxed);
     (held, STOPPED_ROUND.load(Ordering::Relaxed) + 1)
 }
@@ -230,7 +230,7 @@ fn run_in_turn<T>(demand: &Demand, work: impl FnOnce(&(dyn Fn() -> bool + Sync))
 }
 
 /// Like `run`, for work its editor still needs after a pause: when it had to give way (to
-/// other editor work, or because Replix lost the focus), it waits and runs again, until it
+/// other editor work, or because the window was hidden), it waits and runs again, until it
 /// is done or its round ends. `work` is started afresh each time.
 pub fn run_needed<T>(demand: &Demand, work: impl Fn(&(dyn Fn() -> bool + Sync)) -> anyhow::Result<T>) -> Outcome<T> {
     loop {

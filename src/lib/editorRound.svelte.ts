@@ -21,5 +21,6 @@ export const currentRound = () => untrack(() => editorRound.n);
 export function endEditorRound() {
   const ended = currentRound();
   editorRound.n = ended + 1;
-  api.endEditorRound(ended);
+  // Nothing to do if it fails: the next page load ends every round before it anyway.
+  api.endEditorRound(ended).catch(() => {});
 }

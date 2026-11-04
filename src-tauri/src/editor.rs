@@ -84,8 +84,8 @@ pub fn prepare(
         Some(p) => p,
         None => {
             // Even reading the header waits on the disk; it takes its turn like the rest.
-            // For the editor it waits out a moment without the focus, like the rest of its
-            // work; made ahead of time, it simply stops.
+            // For the editor it waits while the window is hidden, like the rest of its work;
+            // made ahead of time, it simply stops.
             let demand = media::Demand::new(need);
             let probe = |go: &(dyn Fn() -> bool + Sync)| ffmpeg::probe_while(path, go);
             let i = if need == media::AHEAD { media::run(&demand, probe) } else { media::run_needed(&demand, probe) }.result()?;

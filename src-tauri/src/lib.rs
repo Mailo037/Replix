@@ -160,7 +160,7 @@ impl<T> Newest<T> {
 }
 
 /// The page sends every change at once; while one is applied only the newest waits behind
-/// it, so a slider's steps cost one write instead of one each, and nothing is left behind
+/// it, so a slider's steps cost a few writes rather than one each, and nothing is left behind
 /// in the page when it reloads or Replix quits.
 static SETTINGS_WAITING: Mutex<Newest<Settings>> = parking_lot::const_mutex(Newest::new());
 /// One change at a time, all of it: the file, the copy in memory, the hotkeys and the
@@ -655,11 +655,13 @@ async fn export_clip(app: AppHandle, id: String, title: String, request: editor:
         // One export at a time, from choosing its name to the software retry: a second
         // one waits instead of doubling the load beside a game.
         static ONE_AT_A_TIME: Mutex<()> = parking_lot::const_mutex(());
+        RUNNING_EXPORTS.lock().insert(ticket);
         let cancelled = || CANCELLED_EXPORTS.lock().contains(&ticket);
         // Forgotten on every way out, so the set stays small.
         struct Forget(u64);
         impl Drop for Forget {
             fn drop(&mut self) {
+                RUNNING_EXPORTS.lock().remove(&self.0);
                 CANCELLED_EXPORTS.lock().remove(&self.0);
             }
         }
@@ -704,9 +706,16 @@ async fn export_clip(app: AppHandle, id: String, title: String, request: editor:
 /// Exports asked to stop, running or still waiting for their turn, by ticket.
 static CANCELLED_EXPORTS: Mutex<std::collections::BTreeSet<u64>> = parking_lot::const_mutex(std::collections::BTreeSet::new());
 
+/// Exports running or waiting for their turn, by ticket.
+static RUNNING_EXPORTS: Mutex<std::collections::BTreeSet<u64>> = parking_lot::const_mutex(std::collections::BTreeSet::new());
+
 #[tauri::command]
 fn cancel_export(ticket: u64) {
-    CANCELLED_EXPORTS.lock().insert(ticket);
+    // One that already ended has nothing to stop, and would stay in the set for good.
+    let running = RUNNING_EXPORTS.lock();
+    if running.contains(&ticket) {
+        CANCELLED_EXPORTS.lock().insert(ticket);
+    }
 }
 
 #[tauri::command]
@@ -997,6 +1006,10 @@ pub fn run() {
                 .visible(false)
                 .build()?;
 
+            // Focus events report changes only: start from what the window has now.
+            if let Some(main) = app.get_webview_window("main") {
+                FOCUSED.store(main.is_focused().unwrap_or(false), Ordering::Relaxed);
+            }
             if std::env::args().any(|a| a == "--minimized") {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.hide();

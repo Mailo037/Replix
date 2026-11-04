@@ -103,7 +103,13 @@ class Store {
     // moment of lost focus), scan again now; else when Replix is back or the editor closes.
     await listen("scan-deferred", () => {
       this.stale = true;
-      if (!away() && this.view.name !== "editor") this.refresh();
+      // Should Replix and the page disagree on whether it is in front, every scan would be
+      // deferred again: at most one follow-up a few seconds, the rest waits for a return.
+      const now = performance.now();
+      if (!away() && this.view.name !== "editor" && now - this.deferredAt > 5000) {
+        this.deferredAt = now;
+        this.refresh();
+      }
     });
     // A favourite, a rename or a draft changes one item; no need to scan the folder for that.
     await listen<[string, Partial<Item>][]>("items-meta", (e) => {
@@ -220,6 +226,8 @@ class Store {
   /** Changes on their way, by revision, until Replix says which one is in effect. */
   private sent = new Map<number, Settings>();
   private lastRevision = 0;
+  /** When a deferred scan last asked for a follow-up. */
+  private deferredAt = -Infinity;
 
   /** Rises with every change, and across reloads: it counts on from Replix's newest. */
   private nextRevision() {
@@ -231,7 +239,8 @@ class Store {
   /**
    * Applies settings at once and hands them to Replix straight away. A slider sends a value
    * per step; Replix applies one at a time and keeps only the newest of those waiting, so
-   * the steps cost one write, not one each. Says whether the newest settings were applied.
+   * the steps cost a few writes rather than one each. Says whether the newest settings were
+   * applied.
    */
   save(next: Settings): Promise<boolean> {
     this.settings = next;
@@ -251,13 +260,23 @@ class Store {
         // This change or a later one is in effect; an older one means this one was dropped.
         return effective >= change;
       },
-      (e) => {
+      async (e) => {
         this.sent.delete(change);
+        if (change !== this.lastRevision) return false;
         // The newest settings could not be applied; say so, and show the ones in effect
-        // instead of passing these off as saved.
-        if (change === this.lastRevision) {
-          this.notify("Settings not saved", String(e));
-          if (this.applied) {
+        // instead of passing these off as saved. Those come from Replix itself: an earlier
+        // change may have gone through while its answer is still on the way.
+        this.notify("Settings not saved", String(e));
+        try {
+          const [current, revision] = await api.getSettings();
+          // A newer change made meanwhile shows what was asked for; its own answer decides.
+          if (change === this.lastRevision) {
+            [this.settings, this.applied] = [current, $state.snapshot(current) as Settings];
+            this.appliedRevision = Math.max(this.appliedRevision, revision);
+            this.applyAccent();
+          }
+        } catch {
+          if (change === this.lastRevision && this.applied) {
             this.settings = this.applied;
             this.applyAccent();
           }
