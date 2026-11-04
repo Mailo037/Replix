@@ -166,9 +166,8 @@ function inOrder<T>(change: () => Promise<T>): Promise<T> {
 }
 
 export const api = {
-  getSettings: () => invoke<Settings>("get_settings"),
-  /** The newest settings revision Replix has seen; a page counts on from there. */
-  settingsRevision: () => invoke<number>("settings_revision"),
+  /** The settings in effect, with their revision: a page counts on from there. */
+  getSettings: () => invoke<[Settings, number]>("get_settings"),
   /** Answers with the revision in effect afterwards: this one or a later one. */
   setSettings: (settings: Settings, revision: number) => invoke<number>("set_settings", { settings, revision }),
   getStatus: () => invoke<Status>("get_status"),

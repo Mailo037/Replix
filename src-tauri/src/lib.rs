@@ -107,9 +107,23 @@ fn corner_toast(app: &AppHandle, title: &str, detail: &str) {
     }
 }
 
+/// The settings in effect and the revision they belong to, for a page that just loaded.
+/// Changes already handed over are applied first, so a page reloaded during a save starts
+/// from that save, not from the settings before it. Off the main thread: a hotkey change
+/// waits for it.
 #[tauri::command]
-fn get_settings(state: State<AppState>) -> Settings {
-    state.settings.lock().clone()
+async fn get_settings(app: AppHandle) -> Res<(Settings, u64)> {
+    blocking(move || {
+        let newest = SETTINGS_WAITING.lock().revision;
+        if let Err(e) = apply_waiting_settings(&app, newest) {
+            log::warn!("settings waiting for a reloaded page not saved: {e}");
+        }
+        // Held while the settings are read, so no change lands between the two.
+        let applied = SETTINGS_APPLIED.lock();
+        let settings = app.state::<AppState>().settings.lock().clone();
+        Ok((settings, applied.0.max(newest)))
+    })
+    .await
 }
 
 /// Writes a file and may touch the registry; hotkeys are handed to the main thread by the plugin.
@@ -145,19 +159,14 @@ impl<T> Newest<T> {
     }
 }
 
-/// The newest revision Replix has seen, for a reloaded page to count on from: the clock
-/// alone could go back between two page loads.
-#[tauri::command]
-fn settings_revision() -> u64 {
-    SETTINGS_WAITING.lock().revision.max(SETTINGS_APPLIED.lock().0)
-}
-
 /// The page sends every change at once; while one is applied only the newest waits behind
 /// it, so a slider's steps cost one write instead of one each, and nothing is left behind
 /// in the page when it reloads or Replix quits.
 static SETTINGS_WAITING: Mutex<Newest<Settings>> = parking_lot::const_mutex(Newest::new());
 /// One change at a time, all of it: the file, the copy in memory, the hotkeys and the
 /// recorder then always agree. Holds the revision applied last, and whether that went well.
+/// Lock order: this one, then `SETTINGS_WAITING` or the settings in memory, never the
+/// other way round; and never taken on the main thread, which a hotkey change waits for.
 static SETTINGS_APPLIED: Mutex<(u64, Res<()>)> = parking_lot::const_mutex((0, Ok(())));
 
 /// Applies the newest settings waiting, unless a revision from `mine` on already went
@@ -847,16 +856,8 @@ pub fn app_focused() -> bool {
     FOCUSED.load(Ordering::Relaxed)
 }
 
-/// When Replix last lost the focus.
-static FOCUS_LOST: Mutex<Option<std::time::Instant>> = parking_lot::const_mutex(None);
-const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
-/// Focused, or was until a moment ago.
-pub fn focused_lately() -> bool {
-    app_focused() || FOCUS_LOST.lock().is_some_and(|at| at.elapsed() < FOCUS_GRACE)
-}
-
-static PAGE_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+pub(crate) static PAGE_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
 
 fn set_page_visible(window: &tauri::WebviewWindow, visible: bool) {
     // Resizing reports many sizes in a row; only a change is passed on.
@@ -1028,10 +1029,6 @@ pub fn run() {
                 }
                 WindowEvent::Focused(focused) => {
                     FOCUSED.store(*focused, Ordering::Relaxed);
-                    if !*focused {
-                        // Running work notices once the grace is over, when it next checks.
-                        *FOCUS_LOST.lock() = Some(std::time::Instant::now());
-                    }
                     // Restored by the taskbar or Alt-Tab rather than the tray: the window's own
                     // state decides, in case a resize went unreported, and the page is asked
                     // to show again in case an earlier request did not take.
@@ -1062,7 +1059,6 @@ pub fn run() {
             end_editor_round,
             first_editor_round,
             cancel_export,
-            settings_revision,
             save_draft,
             rename_item,
             set_favorite,

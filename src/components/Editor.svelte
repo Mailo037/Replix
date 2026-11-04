@@ -155,8 +155,7 @@
     }
     // Hiding ended the round and stopped what it was making; back on screen, ask in the new
     // one. The stop may only be reported after the window is back; this runs again then.
-    // Only once Replix has the focus again: while a game has it, a retry would stop at once.
-    if (interrupted && store.focused) {
+    if (interrupted && store.visible) {
       hiddenSince = false;
       load();
     } else if (hiddenSince && data && !data.filmstrip) {

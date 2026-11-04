@@ -20,9 +20,10 @@
   let now = $state(performance.now());
 
   $effect(() => {
-    // Nobody watches the meter while Replix is hidden or in the background; the
-    // microphone rests too, and the test starts again on return.
-    if (!store.visible || !store.focused) return;
+    // Nobody watches the meter while Replix is hidden; the microphone rests too, and the
+    // test starts again on return. Beside another program it goes on: the test may be of
+    // that program's voice chat.
+    if (!store.visible) return;
     api.startMicTest(device);
     startedAt = performance.now();
     soundAt = 0;

@@ -67,13 +67,9 @@ class Store {
   });
 
   async init() {
-    const [settings, status, revision] = await Promise.all([
-      api.getSettings(),
-      api.getStatus(),
-      api.settingsRevision(),
-      syncEditorRound(),
-    ]);
+    const [[settings, revision], status] = await Promise.all([api.getSettings(), api.getStatus(), syncEditorRound()]);
     this.lastRevision = Math.max(this.lastRevision, revision);
+    this.appliedRevision = revision;
     this.settings = settings;
     this.applied = $state.snapshot(settings) as Settings;
     this.status = status;

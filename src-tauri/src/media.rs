@@ -113,12 +113,11 @@ impl Demand {
         crate::page_visible()
             && match self.need() {
                 AHEAD => crate::app_focused() && EDITOR_WAITING.load(Ordering::Relaxed) == 0,
-                // Editor work pauses too while another program has the focus, a game on the
-                // next monitor say, and goes on once Replix has it again. A glance away of a
-                // second or two does not stop it: a stopped job starts over from the beginning.
+                // Work for an open editor goes on while Replix is in sight, also beside
+                // another program: someone asked for it, and a stopped job starts over from
+                // the beginning. Hiding the window pauses it.
                 round => {
                     STOPPED_ROUND.load(Ordering::Relaxed) < round
-                        && crate::focused_lately()
                         && (!self.yields || EDITOR_WAITING.load(Ordering::Relaxed) == 0)
                 }
             }
@@ -406,27 +405,31 @@ mod tests {
 
     /// Losing the focus pauses editor work; it goes on once Replix has the focus again.
     #[test]
-    fn editor_work_pauses_without_the_focus_and_goes_on() {
+    fn editor_work_goes_on_beside_other_programs_and_pauses_while_hidden() {
         let (_rounds, round) = test_rounds();
         let demand = Demand::new(round);
+        crate::FOCUSED.store(false, Ordering::Relaxed);
+        assert!(demand.wanted(), "in sight without the focus: goes on");
+        assert!(!Demand::new(AHEAD).wanted(), "work ahead of time waits for the focus");
         let tries = AtomicUsize::new(0);
         let outcome = std::thread::scope(|s| {
             let job = s.spawn(|| {
                 run_needed(&demand, |go| {
                     if tries.fetch_add(1, Ordering::Relaxed) == 0 {
-                        crate::FOCUSED.store(false, Ordering::Relaxed);
+                        crate::PAGE_VISIBLE.store(false, Ordering::Relaxed);
                         anyhow::ensure!(go(), "paused");
                     }
                     Ok(())
                 })
             });
             std::thread::sleep(std::time::Duration::from_millis(100));
-            crate::FOCUSED.store(true, Ordering::Relaxed);
+            crate::PAGE_VISIBLE.store(true, Ordering::Relaxed);
             wake();
             job.join().unwrap()
         });
+        crate::FOCUSED.store(true, Ordering::Relaxed);
         assert!(matches!(outcome, Outcome::Done(())));
-        assert_eq!(tries.load(Ordering::Relaxed), 2, "ran again after the pause");
+        assert_eq!(tries.load(Ordering::Relaxed), 2, "ran again once shown");
     }
 
     #[test]

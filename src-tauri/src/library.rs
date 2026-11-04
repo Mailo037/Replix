@@ -284,7 +284,6 @@ fn stamp(path: &Path) -> (u64, Option<std::time::SystemTime>) {
     std::fs::metadata(path).map(|m| (m.len(), m.modified().ok())).unwrap_or((0, None))
 }
 
-
 /// Counts files a scan left unread because its reading gave way.
 static DEFERRED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
