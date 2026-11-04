@@ -211,12 +211,8 @@ fn stream(source: &Source, stop: &AtomicBool, mut sink: impl FnMut(&mut Vec<f32>
         }
         let whole = bytes.len() / 4 * 4;
         floats.clear();
-        let (a, b) = bytes.as_slices();
-        let mut tmp: Vec<u8> = Vec::with_capacity(whole);
-        tmp.extend_from_slice(a);
-        tmp.extend_from_slice(b);
-        tmp.truncate(whole);
-        floats.extend(tmp.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)));
+        // Usually contiguous already, so this neither moves nor allocates.
+        floats.extend(bytes.make_contiguous()[..whole].as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)));
         bytes.drain(..whole);
         sink(&mut floats);
     }
@@ -299,7 +295,9 @@ fn spawn_writer(pipe: PipeServer, ring: Arc<Ring>, stop: Arc<AtomicBool>) -> Joi
             let mut samples: Vec<f32> = Vec::new();
             let mut bytes: Vec<u8> = Vec::new();
             while !stop.load(Ordering::Relaxed) {
-                std::thread::sleep(Duration::from_millis(10));
+                // Every slot has its own writer; 20 ms batches keep their wake-ups low
+                // while staying far inside what FFmpeg buffers.
+                std::thread::sleep(Duration::from_millis(20));
                 let due = (start.elapsed().as_secs_f64() * RATE as f64) as u64;
                 if due <= sent {
                     continue;
@@ -307,9 +305,7 @@ fn spawn_writer(pipe: PipeServer, ring: Arc<Ring>, stop: Arc<AtomicBool>) -> Joi
                 let frames = (due - sent) as usize;
                 ring.take(frames * CHANNELS, &mut samples);
                 bytes.clear();
-                for s in &samples {
-                    bytes.extend_from_slice(&s.to_le_bytes());
-                }
+                bytes.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
                 if pipe.write_all(&bytes).is_err() {
                     break;
                 }
@@ -435,9 +431,8 @@ impl Router {
         let processes = win::processes();
         let mut seen: HashSet<String> = HashSet::new();
         let own = std::process::id();
-        let children: HashSet<u32> = processes.iter().filter(|p| p.parent == own).map(|p| p.pid).collect();
         for (pid, active) in audio_sessions() {
-            if pid == 0 || pid == own || children.contains(&pid) {
+            if pid == 0 || pid == own || processes.get(&pid).is_some_and(|p| p.parent == own) {
                 continue;
             }
             let root = win::root_of(pid, &processes);
@@ -445,8 +440,8 @@ impl Router {
             if root == own {
                 continue;
             }
-            let Some(entry) = processes.iter().find(|p| p.pid == root) else { continue };
-            let key = entry.exe.to_lowercase();
+            let Some(entry) = processes.get(&root) else { continue };
+            let key = entry.exe_lower.clone();
             if Some(&key) == self.game_key.as_ref() || key == "audiodg.exe" {
                 continue;
             }

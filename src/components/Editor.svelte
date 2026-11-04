@@ -11,6 +11,7 @@
   import Segmented from "./Segmented.svelte";
   import Slider from "./Slider.svelte";
   import Waveform from "./Waveform.svelte";
+  import { currentRound, endEditorRound } from "../lib/editorRound.svelte";
 
   let { id }: { id: string } = $props();
 
@@ -72,9 +73,19 @@
 
   const icons: Record<string, string> = { game: "game", mic: "mic", app: "app", desktop: "desktop" };
 
-  onMount(async () => {
+  /** Opening was stopped by hiding the window; it is tried again once the window is back. */
+  let interrupted = $state(false);
+  /** Counts loads, so an answer to an earlier one cannot overwrite a newer one. */
+  let loads = 0;
+
+  onMount(load);
+
+  async function load() {
+    interrupted = false;
+    const mine = ++loads;
     try {
-      const d = await api.openEditor(id);
+      const d = await api.openEditor(id, currentRound());
+      if (mine !== loads) return;
       data = d;
       title = d.title;
       trimStart = d.draft?.trimStart ?? 0;
@@ -85,12 +96,18 @@
       vertical = d.draft?.vertical ?? false;
       cropX = d.draft?.cropX ?? 0.5;
     } catch (e) {
-      failure = String(e);
+      if (mine !== loads) return;
+      // Stopped, not failed: the window was hidden while the tracks were being prepared.
+      if (e === "stopped") interrupted = true;
+      else failure = String(e);
     }
-  });
+  }
 
-  const unlisten = listen<number>("export-progress", (e) => {
-    if (progress !== null) progress = e.payload;
+  // Which export this editor waits for; others may run before it.
+  let ticket = 0;
+  const unlisten = listen<[number, number]>("export-progress", (e) => {
+    const [of, share] = e.payload;
+    if (progress !== null && of === ticket) progress = share;
   });
   // The filmstrip is made in the background the first time a clip opens.
   const unlistenStrip = listen<[string, string]>("filmstrip", (e) => {
@@ -98,6 +115,8 @@
   });
 
   onDestroy(() => {
+    // A long session's filmstrip and waveforms take a while; nobody needs them now.
+    endEditorRound();
     unlisten.then((f) => f());
     unlistenStrip.then((f) => f());
   });
@@ -121,6 +140,29 @@
       frame = requestAnimationFrame(tick);
     }
     return () => cancelAnimationFrame(frame);
+  });
+
+  // Hidden in the tray or minimised, nobody is watching: stop decoding video and audio.
+  /** The window was hidden since the filmstrip was last asked for. */
+  let hiddenSince = false;
+
+  $effect(() => {
+    if (!store.visible) {
+      hiddenSince = true;
+      if (playing) pause();
+      endEditorRound();
+      return;
+    }
+    // Hiding ended the round and stopped what it was making; back on screen, ask in the new
+    // one. The stop may only be reported after the window is back; this runs again then.
+    // Only once Replix has the focus again: while a game has it, a retry would stop at once.
+    if (interrupted && store.focused) {
+      hiddenSince = false;
+      load();
+    } else if (hiddenSince && data && !data.filmstrip) {
+      hiddenSince = false;
+      api.openEditor(id, currentRound()).then((d) => data && !data.filmstrip && (data.filmstrip = d.filmstrip)).catch(() => {});
+    }
   });
 
   $effect(() => {
@@ -358,14 +400,15 @@
     pause();
     progress = 0;
     try {
-      const out = await api.exportClip(id, title.trim() || "Clip", { ...draft(), preset });
+      ticket = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+      const out = await api.exportClip(id, title.trim() || "Clip", { ...draft(), preset }, ticket);
       const done = { original: "Saved as MP4.", discord: "Small enough for Discord.", gif: "Saved as GIF." }[preset];
       store.notify("Export finished", vertical ? `${done} Vertical 9:16.` : done, [
         { label: "Copy", run: () => share.copy(out) },
         { label: "Show in folder", run: () => api.revealPath(out) },
       ]);
     } catch (e) {
-      store.notify("Export failed", String(e));
+      if (String(e) !== "Export cancelled") store.notify("Export failed", String(e));
     } finally {
       progress = null;
     }
@@ -396,6 +439,9 @@
         </span>
       </div>
       <div class="actions">
+        {#if progress !== null}
+          <button type="button" class="btn small ghost" onclick={() => api.cancelExport(ticket)}>Cancel export</button>
+        {/if}
         <button type="button" class="btn small ghost" onclick={saveDraft} use:tip={"Ctrl + S"}>Save draft</button>
         <div class="split">
           <button type="button" class="btn small primary" disabled={progress !== null} onclick={() => exportAs("original")}>
@@ -623,7 +669,7 @@
                 </div>
               </div>
               <div class="lane audio-lane" role="presentation" onpointerdown={(e) => drag("head", e)}>
-                <Waveform src={fileUrl(track.audio)} muted={!edits[i].enabled} enabled={data.duration <= 600} />
+                <Waveform {id} track={i} duration={data.duration} muted={!edits[i].enabled} />
               </div>
             </div>
           {/if}

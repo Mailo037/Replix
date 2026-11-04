@@ -1,5 +1,6 @@
 <script lang="ts">
   import { startDrag } from "@crabnebula/tauri-plugin-drag";
+  import { onDestroy, tick } from "svelte";
   import { api, fileUrl, type Item } from "../lib/api";
   import { duration, gameColor, time } from "../lib/format";
   import { share } from "../lib/share";
@@ -24,7 +25,12 @@
   } = $props();
 
   let loaded = $state(false);
+  // Passing over a row of tiles on the way somewhere is no hint; resting on one is.
+  let resting: ReturnType<typeof setTimeout> | undefined;
+  onDestroy(() => clearTimeout(resting));
   let menu = $state(false);
+  /** The menu is built the first time it opens; most tiles never need one. */
+  let menuMounted = $state(false);
   let menuEl = $state<HTMLDivElement>();
   let moreBtn = $state<HTMLButtonElement>();
   /** The menu was open when the ⋯ button was pressed, so the click closes it rather than reopening. */
@@ -36,7 +42,11 @@
   const label = $derived(item.kind === "screenshot" ? "PNG" : duration(item.duration));
 
   // At the cursor on right-click, under the ⋯ button otherwise; always inside the window.
-  function showMenu(at: DOMRect, align: "start" | "end") {
+  async function showMenu(at: DOMRect, align: "start" | "end") {
+    if (!menuMounted) {
+      menuMounted = true;
+      await tick();
+    }
     if (!menuEl) return;
     if (!menuEl.matches(":popover-open")) menuEl.showPopover();
     fit(menuEl, at, { align, gap: align === "start" ? 2 : 6 });
@@ -53,7 +63,7 @@
 
   async function act(what: "favorite" | "reveal" | "delete" | "copy" | "link") {
     menuEl?.hidePopover();
-    if (what === "favorite") await api.setFavorite(item.id, !item.favorite);
+    if (what === "favorite") await api.setFavorite([item.id], !item.favorite);
     if (what === "reveal") await api.revealItem(item.id);
     if (what === "copy") await share.copy(item.path);
     if (what === "link") await share.link(item.path);
@@ -91,14 +101,15 @@
     aria-pressed={selecting ? selected : undefined}
     draggable="true"
     ondragstart={drag}
-    onpointerenter={() => item.kind !== "screenshot" && store.warm(item.id)}
+    onpointerenter={() => (resting = setTimeout(() => store.warm(item), 350))}
+    onpointerleave={() => clearTimeout(resting)}
   >
     {#if !selecting && badge}
       <span class="sticker {badge}">{badge}</span>
     {/if}
     <span class="thumb">
       {#if thumbUrl}
-        <img src={thumbUrl} alt="" class="real" class:loaded loading="lazy" onload={() => (loaded = true)} />
+        <img src={thumbUrl} alt="" class="real" class:loaded loading="lazy" decoding="async" onload={() => (loaded = true)} />
       {/if}
       {#if selecting}
         <span class="check" class:on={selected} aria-hidden="true">{#if selected}<Icon name="check" size={14} />{/if}</span>
@@ -131,7 +142,7 @@
       <Icon name="more" size={18} />
     </button>
   {/if}
-  {#if !selecting}
+  {#if !selecting && menuMounted}
     <div class="menu" role="menu" popover="auto" bind:this={menuEl}>
       <button type="button" role="menuitem" onclick={() => act("copy")}>
         <Icon name="copy" size={16} />Copy

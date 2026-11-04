@@ -41,13 +41,31 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # The build script only checks that the sidecars exist; empty files are enough here.
-      - name: Placeholder FFmpeg
+      # The same FFmpeg the release ships: the media tests run against it.
+      - name: Fetch FFmpeg
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force src-tauri/binaries | Out-Null
-          foreach ($n in "ffmpeg", "ffprobe") { New-Item -Force "src-tauri/binaries/$n-x86_64-pc-windows-msvc.exe" | Out-Null }
+          ./scripts/fetch-ffmpeg.ps1 -Triple x86_64-pc-windows-msvc
+          $bin = Join-Path $env:RUNNER_TEMP "ffmpeg-bin"
+          New-Item -ItemType Directory -Force $bin | Out-Null
+          foreach ($n in "ffmpeg", "ffprobe") { Copy-Item "src-tauri/binaries/$n-x86_64-pc-windows-msvc.exe" "$bin/$n.exe" }
+          Add-Content $env:GITHUB_PATH $bin
 
       - name: Clippy
         working-directory: src-tauri
         run: cargo clippy --locked --all-targets -- -D warnings
+
+      # The test binary links the Tauri UI, which needs version 6 of the Common Controls;
+      # outside an app bundle that takes a manifest next to the executable.
+      - name: Tests
+        working-directory: src-tauri
+        shell: pwsh
+        env:
+          REPLIX_TESTS_NEED_FFMPEG: "1"
+        run: |
+          $built = cargo test --locked --lib --no-run --message-format=json | ConvertFrom-Json |
+            Where-Object { $_.reason -eq "compiler-artifact" -and $_.executable -and $_.profile.test }
+          $exe = $built[-1].executable
+          Set-Content "$exe.manifest" '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"><dependency><dependentAssembly><assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/></dependentAssembly></dependency></assembly>'
+          & $exe --test-threads 1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

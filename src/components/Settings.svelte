@@ -420,7 +420,7 @@
                 { value: "bottomLeft", label: "Bottom left" },
                 { value: "bottomRight", label: "Bottom right" },
               ]}
-              onchange={(v) => store.save({ ...s, toastPosition: v }).then(api.previewToast)}
+              onchange={(v) => store.save({ ...s, toastPosition: v }).then((saved) => void (saved && api.previewToast()))}
             />
           </div>
         {/if}

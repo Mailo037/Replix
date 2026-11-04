@@ -2,6 +2,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import { api } from "../lib/api";
+  import { store } from "../lib/store.svelte";
 
   // Live microphone level while it is on screen, drawn as a row of characters.
   let { device }: { device: string | null } = $props();
@@ -19,12 +20,17 @@
   let now = $state(performance.now());
 
   $effect(() => {
+    // Nobody watches the meter while Replix is hidden or in the background; the
+    // microphone rests too, and the test starts again on return.
+    if (!store.visible || !store.focused) return;
     api.startMicTest(device);
     startedAt = performance.now();
     soundAt = 0;
     signalAt = 0;
+    const timer = setInterval(() => (now = performance.now()), 500);
     return () => {
       api.stopMicTest();
+      clearInterval(timer);
     };
   });
 
@@ -41,10 +47,8 @@
       if (e.payload >= 0.98) clippedAt = t;
       now = t;
     });
-    const timer = setInterval(() => (now = performance.now()), 500);
     return () => {
       unlisten.then((f) => f());
-      clearInterval(timer);
     };
   });
 

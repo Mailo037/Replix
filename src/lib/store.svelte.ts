@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, type Item, type Settings, type Status } from "./api";
 import { onColor } from "./format";
+import { syncEditorRound } from "./editorRound.svelte";
 import { updates } from "./updates.svelte";
 
 export type Filter = "all" | "clips" | "screenshots" | "sessions" | "drafts" | "favorites";
@@ -21,6 +22,15 @@ export interface Notice {
   actions: NoticeAction[];
 }
 
+/** Replix is hidden or another program has the focus, say a game. */
+const away = () => document.visibilityState === "hidden" || !document.hasFocus();
+
+/**
+ * Worth preparing on a hunch: a video short enough that its tracks and filmstrip are made
+ * in moments. A long session's are made when it is opened. Replix checks this again.
+ */
+const warmable = (i: Item) => i.kind !== "screenshot" && i.duration > 0 && i.duration <= 300;
+
 class Store {
   settings = $state<Settings | null>(null);
   status = $state<Status>({ state: "starting", target: null, sessionSince: null, encoder: null, error: null, clipSeconds: null });
@@ -30,6 +40,10 @@ class Store {
   notice = $state<Notice | null>(null);
   /** Hotkeys another program already owns. */
   conflicts = $state<string[]>([]);
+  /** The window is on screen; hidden in the tray or minimised, Replix keeps quiet. */
+  visible = $state(document.visibilityState === "visible");
+  /** Replix has the focus; without it a game may be running on another monitor. */
+  focused = $state(document.hasFocus());
   private noticeTimer: number | undefined;
 
   games = $derived.by(() => {
@@ -40,27 +54,92 @@ class Store {
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
   });
 
-  counts = $derived({
-    clips: this.items.filter((i) => i.kind === "clip").length,
-    screenshots: this.items.filter((i) => i.kind === "screenshot").length,
-    sessions: this.items.filter((i) => i.kind === "session").length,
-    drafts: this.items.filter((i) => i.draft).length,
-    favorites: this.items.filter((i) => i.favorite).length,
+  counts = $derived.by(() => {
+    const c = { clips: 0, screenshots: 0, sessions: 0, drafts: 0, favorites: 0 };
+    for (const i of this.items) {
+      if (i.kind === "clip") c.clips++;
+      else if (i.kind === "screenshot") c.screenshots++;
+      else c.sessions++;
+      if (i.draft) c.drafts++;
+      if (i.favorite) c.favorites++;
+    }
+    return c;
   });
 
   async init() {
-    const [settings, status] = await Promise.all([api.getSettings(), api.getStatus()]);
+    const [settings, status, revision] = await Promise.all([
+      api.getSettings(),
+      api.getStatus(),
+      api.settingsRevision(),
+      syncEditorRound(),
+    ]);
+    this.lastRevision = Math.max(this.lastRevision, revision);
     this.settings = settings;
+    this.applied = $state.snapshot(settings) as Settings;
     this.status = status;
     this.applyAccent();
-    await this.refresh();
+    const conflicts = api.hotkeyConflicts();
+    // In the tray Replix's page is hidden, often with a game running. The library is
+    // scanned, and new clips are prepared, once someone opens the window to look at them.
+    document.addEventListener("visibilitychange", () => {
+      this.visible = document.visibilityState === "visible";
+      if (this.visible && this.stale) this.refresh();
+    });
+    // Files are read only while Replix is in use; coming back to it finishes what a scan
+    // had to leave unread.
+    // Without the focus, the background animations rest too: Replix may sit beside a game.
+    const rest = () => {
+      this.focused = document.hasFocus();
+      document.documentElement.classList.toggle("resting", !this.focused);
+    };
+    rest();
+    window.addEventListener("blur", rest);
+    window.addEventListener("focus", rest);
+    window.addEventListener("focus", () => {
+      // Only a scan cut short is repeated; a file that cannot be read at all is not
+      // scanned again on every return.
+      if (this.stale) this.refresh();
+    });
+    // Listening first, each subscription confirmed: the first scan may already report.
+    await listen<Status>("status", (e) => (this.status = e.payload));
+    await listen("library-changed", () => this.refresh());
+    // Replix says when a scan had to leave files unread. Free again right away (it was a
+    // moment of lost focus), scan again now; else when Replix is back or the editor closes.
+    await listen("scan-deferred", () => {
+      this.stale = true;
+      if (!away() && this.view.name !== "editor") this.refresh();
+    });
+    // A favourite, a rename or a draft changes one item; no need to scan the folder for that.
+    await listen<[string, Partial<Item>][]>("items-meta", (e) => {
+      this.changes++;
+      const byId = new Map(this.items.map((i) => [i.id, i]));
+      for (const [id, meta] of e.payload) {
+        const item = byId.get(id);
+        if (item) Object.assign(item, meta);
+      }
+    });
+    await listen<string[]>("items-removed", (e) => {
+      this.changes++;
+      const gone = new Set(e.payload);
+      if (gone.size) this.items = this.items.filter((i) => !gone.has(i.id));
+    });
+    await listen<[string, string]>("thumb", (e) => {
+      const [id, path] = e.payload;
+      const item = this.items.find((i) => i.id === id);
+      if (item) item.thumb = path;
+    });
+    await listen<{ title: string; detail: string }>("notice", (e) => {
+      // The corner toast covers the game; inside the app a quieter note is enough.
+      if (document.hasFocus()) this.notify(e.payload.title, e.payload.detail);
+    });
+    await this.refresh(true);
     updates.init((version) =>
       this.notify(`Replix ${version} is ready`, "Takes a few seconds, then Replix opens again.", {
         label: "Update",
         run: () => updates.install(),
       }),
     );
-    this.conflicts = await api.hotkeyConflicts();
+    this.conflicts = await conflicts;
     if (this.conflicts.length) {
       this.notify("Hotkey unavailable", `${this.conflicts.join(", ")} is used by another program.`, {
         label: "Change",
@@ -68,34 +147,128 @@ class Store {
       });
     }
 
-    listen<Status>("status", (e) => (this.status = e.payload));
-    listen("library-changed", () => this.refresh());
-    listen<[string, string]>("thumb", (e) => {
-      const [id, path] = e.payload;
-      const item = this.items.find((i) => i.id === id);
-      if (item) item.thumb = path;
-    });
-    listen<{ title: string; detail: string }>("notice", (e) => {
-      // The corner toast covers the game; inside the app a quieter note is enough.
-      if (document.hasFocus()) this.notify(e.payload.title, e.payload.detail);
-    });
   }
 
-  async refresh() {
-    try {
-      this.items = await api.listLibrary();
-    } finally {
-      this.loaded = true;
+  private refreshing: Promise<void> | null = null;
+  private refreshAgain = false;
+  /** The library changed while the page was hidden. */
+  private stale = false;
+  /** Counts changes to single items, so a scan can tell it raced one. */
+  private changes = 0;
+
+  /**
+   * Scans the library. Calls while a scan runs fold into one more scan after it. While
+   * Replix is hidden or another program has the focus, say a game after a saved clip, the
+   * scan waits for Replix to be back; `now` scans anyway, as on start, if the page shows.
+   */
+  refresh(now = false): Promise<void> {
+    if (document.visibilityState === "hidden" || (!now && !document.hasFocus())) {
+      this.stale = true;
+      return Promise.resolve();
     }
-    // The newest clips are the ones most likely to be opened next.
-    for (const item of this.items.filter((i) => i.kind !== "screenshot").slice(0, 2)) this.warm(item.id);
+    this.stale = false;
+    if (this.refreshing) {
+      this.refreshAgain = true;
+      return this.refreshing;
+    }
+    this.refreshing = (async () => {
+      try {
+        do {
+          // The window may have been hidden, or left for a game, while the last scan ran.
+          if (document.visibilityState === "hidden" || (!now && !document.hasFocus())) {
+            this.stale = true;
+            break;
+          }
+          this.refreshAgain = false;
+          const before = this.changes;
+          const items = await api.listLibrary();
+          // A change that landed while the scan ran may be missing from it: scan again
+          // rather than show the older state.
+          if (this.changes !== before) this.refreshAgain = true;
+          else this.items = this.reconcile(items);
+
+        } while (this.refreshAgain);
+      } finally {
+        this.loaded = true;
+        this.refreshing = null;
+      }
+      // The newest clips are the ones most likely to be opened next.
+      for (const item of this.items.filter(warmable).slice(0, 2)) this.warm(item);
+    })();
+    return this.refreshing;
   }
 
-  async save(next: Settings) {
+  /**
+   * Keeps the objects of items that are still there and changes only what differs, so a
+   * scan only updates the tiles whose data changed, not every tile in the library.
+   */
+  private reconcile(next: Item[]): Item[] {
+    const known = new Map(this.items.map((i) => [i.id, i]));
+    return next.map((fresh) => {
+      const item = known.get(fresh.id);
+      if (!item) return fresh;
+      for (const key of Object.keys(fresh) as (keyof Item)[]) {
+        const [a, b] = [item[key], fresh[key]];
+        // A thumbnail that arrived while the scan ran is newer than the scan's "none yet".
+        if (key === "thumb" && a && !b) continue;
+        const same = a === b || (typeof b === "object" && b !== null && JSON.stringify(a) === JSON.stringify(b));
+        if (!same) (item as Record<keyof Item, unknown>)[key] = b;
+      }
+      return item;
+    });
+  }
+
+  /** The settings Replix last applied, and the revision they came from. */
+  private applied: Settings | null = null;
+  private appliedRevision = 0;
+  /** Changes on their way, by revision, until Replix says which one is in effect. */
+  private sent = new Map<number, Settings>();
+  private lastRevision = 0;
+
+  /** Rises with every change, and across reloads: it counts on from Replix's newest. */
+  private nextRevision() {
+    const now = Math.floor((performance.timeOrigin + performance.now()) * 1000);
+    this.lastRevision = Math.max(now, this.lastRevision + 1);
+    return this.lastRevision;
+  }
+
+  /**
+   * Applies settings at once and hands them to Replix straight away. A slider sends a value
+   * per step; Replix applies one at a time and keeps only the newest of those waiting, so
+   * the steps cost one write, not one each. Says whether the newest settings were applied.
+   */
+  save(next: Settings): Promise<boolean> {
     this.settings = next;
     this.applyAccent();
-    await api.setSettings($state.snapshot(next) as Settings);
-    this.conflicts = await api.hotkeyConflicts();
+    const settings = $state.snapshot(next) as Settings;
+    const change = this.nextRevision();
+    this.sent.set(change, settings);
+    return api.setSettings(settings, change).then(
+      async (effective) => {
+        // A later change may have been applied in this one's place, and answers can
+        // arrive out of order: what counts is the revision Replix names.
+        if (effective > this.appliedRevision && this.sent.has(effective)) {
+          [this.applied, this.appliedRevision] = [this.sent.get(effective)!, effective];
+        }
+        for (const revision of this.sent.keys()) if (revision <= this.appliedRevision) this.sent.delete(revision);
+        if (change === this.lastRevision) this.conflicts = await api.hotkeyConflicts();
+        // This change or a later one is in effect; an older one means this one was dropped.
+        return effective >= change;
+      },
+      (e) => {
+        this.sent.delete(change);
+        // The newest settings could not be applied; say so, and show the ones in effect
+        // instead of passing these off as saved.
+        if (change === this.lastRevision) {
+          this.notify("Settings not saved", String(e));
+          if (this.applied) {
+            this.settings = this.applied;
+            this.applyAccent();
+          }
+        }
+        return false;
+      },
+    );
   }
 
   applyAccent() {
@@ -115,14 +288,23 @@ class Store {
   private warmed = new Set<string>();
 
   /** Gets a clip ready for the editor in the background, once. */
-  warm(id: string) {
-    if (this.warmed.has(id)) return;
+  warm(item: Item) {
+    const id = item.id;
+    // Never while hidden: that is when a game is likely running.
+    if (!warmable(item) || this.warmed.has(id) || document.visibilityState === "hidden") return;
     this.warmed.add(id);
-    api.warmEditor(id).catch(() => this.warmed.delete(id));
+    // Skipped (Replix in the background) or stopped: free to try again later.
+    api.warmEditor(id).then(
+      (prepared) => prepared || this.warmed.delete(id),
+      () => this.warmed.delete(id),
+    );
   }
 
   go(view: View) {
+    const leaving = this.view.name === "editor" && view.name !== "editor";
     this.view = view;
+    // The editor had the media turn; a scan that waited for it can finish now.
+    if (leaving && this.stale) this.refresh();
   }
 }
 

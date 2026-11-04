@@ -2,6 +2,7 @@
   import { api, type AppWindow, type Source } from "../lib/api";
   import { lengthLabel } from "../lib/format";
   import { store } from "../lib/store.svelte";
+  import { ticker } from "../lib/ticker.svelte";
   import { pop } from "../lib/motion";
   import Icon from "./Icon.svelte";
   import Segmented from "./Segmented.svelte";
@@ -15,10 +16,17 @@
   let root = $state<HTMLElement>();
 
   $effect(() => {
-    if (!store.status.sessionSince) return;
+    // The clock is read off the start time, so it is right again when the window returns.
+    if (!store.status.sessionSince || !store.visible) return;
+    now = Date.now();
     const timer = setInterval(() => (now = Date.now()), 1000);
     return () => clearInterval(timer);
   });
+
+  // The level bars and the session dot move a few times a second, like a real meter.
+  const LEVELS = [40, 55, 70, 85, 100, 85, 70, 55];
+  const OFFSETS = [2, 6, 3, 1];
+  const beat = ticker(200, () => store.status.state === "recording" || !!store.status.sessionSince);
 
   const settings = $derived(store.settings);
   const appLabel = $derived(settings?.appExe?.replace(/\.exe$/i, "") ?? "the app");
@@ -96,11 +104,14 @@
     onclick={() => (open ? close() : (open = true))}
   >
     {#if store.status.state === "recording" && !store.status.sessionSince}
-      <span class="bars" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span class="bars" aria-hidden="true"
+        >{#each OFFSETS as offset, i (i)}<i style:height="{LEVELS[(beat.n + offset) % LEVELS.length]}%"></i>{/each}</span
+      >
     {:else}
       <span
         class="dot"
         class:session={!!store.status.sessionSince}
+        class:dim={!!store.status.sessionSince && beat.n % 6 >= 3}
         class:error={store.status.state === "error"}
       ></span>
     {/if}
@@ -201,44 +212,18 @@
   }
   .bars i {
     width: 3px;
-    height: 100%;
     border-radius: 2px;
     background: var(--accent);
-    transform-origin: bottom;
-    animation: level 1.6s ease-in-out infinite;
-  }
-  .bars i:nth-child(1) {
-    animation-delay: -0.4s;
-  }
-  .bars i:nth-child(2) {
-    animation-delay: -1.1s;
-  }
-  .bars i:nth-child(3) {
-    animation-delay: -0.7s;
-  }
-  .bars i:nth-child(4) {
-    animation-delay: -0.2s;
-  }
-  @keyframes level {
-    0%,
-    100% {
-      transform: scaleY(0.4);
-    }
-    50% {
-      transform: scaleY(1);
-    }
+    height: 70%;
   }
   .dot.session {
     background: #ff5a4e;
-    animation: breathe 1.2s ease-in-out infinite;
+  }
+  .dot.dim {
+    opacity: 0.35;
   }
   .dot.error {
     background: var(--red);
-  }
-  @keyframes breathe {
-    50% {
-      opacity: 0.35;
-    }
   }
   .popover {
     position: absolute;
@@ -323,11 +308,5 @@
   }
   .empty {
     padding: 8px 10px;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    .bars i,
-    .dot.session {
-      animation: none;
-    }
   }
 </style>

@@ -289,6 +289,14 @@ h3 {
   }
 }
 
+/* Replix without the focus, perhaps beside a game: looping animations stand still. Only
+   the setup scenes loop; a page or toast that was fading in finishes as usual. */
+.resting .onboarding *,
+.resting .onboarding *::before,
+.resting .onboarding *::after {
+  animation-play-state: paused !important;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

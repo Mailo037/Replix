@@ -760,7 +760,7 @@ impl Worker {
                         height: info.height,
                         ..Default::default()
                     };
-                    library::write_meta(&path, &meta);
+                    let _ = library::write_meta(&path, &meta);
                     let _ = app.emit("library-changed", ());
                     crate::toast(&app, "Screenshot saved", &name);
                 }
@@ -826,11 +826,17 @@ impl SaveJob {
         let joined = folder.with_file_name(format!(".replix-{stamp}.part"));
         let trimmed = folder.with_file_name(format!(".replix-{stamp}-trimmed.part"));
         let result = (|| {
-            let source = self.render(&list, &joined, &trimmed)?;
-            let info = ffmpeg::probe(source).context("Could not read the saved recording")?;
+            let (source, length) = self.render(&list, &joined, &trimmed)?;
+            // The recording is finished; a probe that fails (a busy drive) only costs the
+            // details it would add, never the clip. A later scan fills them in.
+            let probed = ffmpeg::probe(source);
+            let unread = probed.is_err();
+            let info = probed.unwrap_or_else(|e| {
+                log::warn!("could not read the saved recording back: {e:#}");
+                ffmpeg::MediaInfo { duration: length, ..Default::default() }
+            });
             let _publish = PUBLISH_LOCK.lock();
             let out = library::new_path(&self.clips_dir, &self.name, "mp4", label);
-            std::fs::rename(source, &out).context("Could not move the recording into the library")?;
             let meta = Meta {
                 kind: self.kind,
                 title: library::default_title(self.kind, &self.name),
@@ -840,9 +846,19 @@ impl SaveJob {
                 width: info.width,
                 height: info.height,
                 tracks: self.tracks.iter().map(|t| TrackMeta { name: t.name.clone(), kind: t.kind }).collect(),
+                unread,
                 ..Default::default()
             };
-            library::write_meta(&out, &meta);
+            // The sidecar comes first: a library scan that finds the clip then never has to
+            // guess what it is.
+            if let Err(e) = library::write_meta(&out, &meta) {
+                // The clip still goes in; a scan then describes it from the file.
+                log::warn!("could not write the details of {}: {e}", out.display());
+            }
+            if let Err(e) = std::fs::rename(source, &out) {
+                library::remove_meta(&out);
+                return Err(e).context("Could not move the recording into the library");
+            }
             Ok(meta)
         })();
         for path in [list, joined, trimmed] {
@@ -851,54 +867,27 @@ impl SaveJob {
         result
     }
 
-    fn render<'a>(&self, list: &Path, joined: &'a Path, trimmed: &'a Path) -> Result<&'a Path> {
+    /// The finished file and its length: trimmed if that worked, whole if not.
+    fn render<'a>(&self, list: &Path, joined: &'a Path, trimmed: &'a Path) -> Result<(&'a Path, f64)> {
         // The segments share one timeline, so they are read back to back as a single stream.
         // That skips opening and probing every segment on its own. Names in the list are
         // relative to the buffer folder, which FFmpeg runs in.
         let text: String = self.segments.iter().map(|i| segment_name(*i) + "\n").collect();
         std::fs::write(list, text)?;
-        // MP4 does not carry a track title over when copied again, so every pass sets it.
-        let titles: Vec<String> = self
-            .tracks
-            .iter()
-            .enumerate()
-            .flat_map(|(k, t)| [format!("-metadata:s:a:{k}"), format!("title={}", t.name)])
-            .collect();
-        let mut args: Vec<String> = vec!["-i".into(), format!("concatf:{}", ffmpeg::path_arg(list))];
-        args.extend(["-map".into(), "0:v:0".into()]);
-        for t in &self.tracks {
-            args.extend(["-map".into(), format!("0:a:{}", t.slot)]);
-        }
-        args.extend(titles.iter().cloned());
-        let Some((skip, seconds)) = self.trim_to else {
-            self.write_mp4(&args, joined, self.duration)?;
-            return Ok(joined);
-        };
-        // Only read once more, so the joined file needs no index at the front.
-        args.extend(["-c", "copy", "-f", "mp4", "-y"].map(String::from));
-        args.push(ffmpeg::path_arg(joined));
-        ffmpeg::run_in(&self.dir.0, &args)?;
-
-        // The cut starts at the keyframe before the clip and an edit list hides the frames up
-        // to it; reading stops at the key press.
-        let mut args: Vec<String> = vec![
-            "-ss".into(),
-            format!("{skip:.3}"),
-            "-t".into(),
-            format!("{seconds:.3}"),
-            "-i".into(),
-            ffmpeg::path_arg(joined),
-            "-map".into(),
-            "0".into(),
-        ];
-        args.extend(titles);
-        match self.write_mp4(&args, trimmed, seconds) {
-            Ok(()) => Ok(trimmed),
-            Err(e) => {
-                log::warn!("trimming the clip failed, keeping it whole: {e:#}");
-                Ok(joined)
+        let tracks: Vec<(usize, &str)> = self.tracks.iter().map(|t| (t.slot, t.name.as_str())).collect();
+        let input = |trim| joined_input(list, &tracks, trim);
+        if let Some(trim) = self.trim_to {
+            match self.write_mp4(&input(Some(trim)), trimmed, trim.1) {
+                Ok(()) => return Ok((trimmed, trim.1)),
+                Err(e) => {
+                    log::warn!("trimming the clip failed, keeping it whole: {e:#}");
+                    // Whatever the failed pass wrote is no clip; it must not take up room.
+                    let _ = std::fs::remove_file(trimmed);
+                }
             }
         }
+        self.write_mp4(&input(None), joined, self.duration)?;
+        Ok((joined, self.duration))
     }
 
     /// Writes an MP4 with its index at the front, so it plays before it has fully loaded,
@@ -921,9 +910,96 @@ impl SaveJob {
     }
 }
 
+/// Reads the segments in `list` as one stream with the chosen audio streams and their titles.
+/// With `trim` (seconds to skip, seconds to keep), the clip is cut in the same pass: the
+/// first segment starts on a keyframe, and shifting the stream back by the part before the
+/// clip leaves that keyframe at a negative time, which the MP4 hides with an edit list.
+/// Writing stops at the key press. No joined copy is written first.
+fn joined_input(list: &Path, tracks: &[(usize, &str)], trim: Option<(f64, f64)>) -> Vec<String> {
+    let mut args: Vec<String> = Vec::new();
+    if let Some((skip, _)) = trim {
+        args.extend(["-itsoffset".into(), format!("{:.3}", -skip)]);
+    }
+    args.extend(["-i".into(), format!("concatf:{}", ffmpeg::path_arg(list)), "-map".into(), "0:v:0".into()]);
+    for (k, (slot, name)) in tracks.iter().enumerate() {
+        args.extend(["-map".into(), format!("0:a:{slot}")]);
+        args.extend([format!("-metadata:s:a:{k}"), format!("title={name}")]);
+    }
+    if let Some((_, seconds)) = trim {
+        args.extend(["-t".into(), format!("{seconds:.3}")]);
+    }
+    args
+}
+
 /// Bytes an MP4 index needs for this much video, with plenty of margin: a few bytes for
 /// each video frame and audio packet. Unused room stays behind as padding.
 fn moov_room(seconds: f64, fps: u32, tracks: usize) -> u64 {
     let per_second = fps as u64 * 32 + tracks as u64 * 47 * 16;
     64 * 1024 + (seconds.max(0.0) as u64 + 4) * per_second
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::process::Command;
+
+    /// FFmpeg as used by the tests: the one on PATH. Tests that need it skip without it.
+    fn run(dir: &Path, args: &[&str]) {
+        let ok = Command::new("ffmpeg").current_dir(dir).args(["-hide_banner", "-loglevel", "error", "-y"]).args(args).status().unwrap();
+        assert!(ok.success(), "ffmpeg {args:?}");
+    }
+
+    /// Every frame and packet with its timestamp, so timing differences show up too.
+    fn frames(dir: &Path, file: &str) -> String {
+        let out = Command::new("ffmpeg").current_dir(dir).args(["-hide_banner", "-loglevel", "error", "-i", file, "-map", "0", "-f", "framemd5", "-"]).output().unwrap();
+        assert!(out.status.success() && out.stderr.is_empty(), "decoding {file}: {}", String::from_utf8_lossy(&out.stderr));
+        // Headers included: they carry each stream's time base, which timestamps depend on.
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    /// The one-pass trim must give exactly what joining the segments and then trimming the
+    /// joined file gave: same frames, same samples, same timestamps.
+    #[test]
+    fn one_pass_trim_matches_join_then_trim() {
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("replix-trim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // Like the recorder: keyframes every two seconds, two-second MPEG-TS segments,
+        // several audio streams. B-frames on, as hardware encoders may use them.
+        run(&dir, &[
+            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=60", "-f", "lavfi", "-i", "sine=f=440:r=48000",
+            "-f", "lavfi", "-i", "sine=f=880:r=48000", "-t", "10", "-map", "0:v", "-map", "1:a", "-map", "2:a",
+            "-c:v", "libx264", "-preset", "ultrafast", "-bf", "2", "-force_key_frames", "expr:gte(t,n_forced*2)",
+            "-c:a", "aac", "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", "seg%06d.ts",
+        ]);
+        std::fs::write(dir.join("list.txt"), "seg000001.ts\nseg000002.ts\nseg000003.ts\n").unwrap();
+        let tracks = [(0, "Game"), (1, "Microphone")];
+        let list = Path::new("list.txt");
+        // Skips near the start, in the middle and just before the next keyframe.
+        for (skip, length) in [(0.02, 5.0), (0.979, 4.5), (1.98, 3.9)] {
+            // The old way: join, then trim the joined file.
+            let mut old = joined_input(list, &tracks, None);
+            old.extend(["-c", "copy", "-f", "mp4", "joined.mp4"].map(String::from));
+            run(&dir, &old.iter().map(String::as_str).collect::<Vec<_>>());
+            let (ss, t) = (format!("{skip:.3}"), format!("{length:.3}"));
+            run(&dir, &["-ss", &ss, "-t", &t, "-i", "joined.mp4", "-map", "0", "-c", "copy", "-f", "mp4", "old.mp4"]);
+            // What the recorder runs now.
+            let mut new = joined_input(list, &tracks, Some((skip, length)));
+            new.extend(["-c", "copy", "-moov_size", "200000", "-f", "mp4", "new.mp4"].map(String::from));
+            run(&dir, &new.iter().map(String::as_str).collect::<Vec<_>>());
+            let (a, b) = (frames(&dir, "old.mp4"), frames(&dir, "new.mp4"));
+            assert!(!a.is_empty());
+            assert_eq!(a, b, "skip {skip}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn moov_room_grows_with_length() {
+        assert!(moov_room(60.0, 60, 6) > moov_room(30.0, 60, 6));
+        assert!(moov_room(-1.0, 60, 0) >= 64 * 1024);
+    }
 }

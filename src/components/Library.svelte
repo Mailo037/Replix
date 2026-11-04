@@ -92,8 +92,10 @@
 
   async function favoritePicked() {
     const on = picked.some((i) => !i.favorite);
-    await Promise.all(picked.map((i) => api.setFavorite(i.id, on)));
-    store.notify(on ? "Added to favorites" : "Removed from favorites", `${picked.length} ${picked.length === 1 ? "item" : "items"}`);
+    // Counted first: in Favorites, unstarred items leave the selection once the change lands.
+    const count = picked.length;
+    await api.setFavorite(picked.map((i) => i.id), on);
+    store.notify(on ? "Added to favorites" : "Removed from favorites", `${count} ${count === 1 ? "item" : "items"}`);
   }
 
   async function copyPicked() {
@@ -339,10 +341,17 @@
     gap: 24px;
     mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 28px), transparent 100%);
   }
+  /* Days scrolled out of view are skipped by layout and paint, which keeps a big library
+     smooth. The side padding leaves room for stickers, outlines and the hover zoom, which
+     poke out of the tiles and would otherwise be clipped. */
   .group {
     display: flex;
     flex-direction: column;
     gap: 12px;
+    margin-inline: -10px;
+    padding-inline: 10px;
+    content-visibility: auto;
+    contain-intrinsic-size: auto 640px;
   }
   .group-head {
     display: flex;

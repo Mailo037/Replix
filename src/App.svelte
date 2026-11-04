@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { raster } from "./lib/ascii";
   import { store } from "./lib/store.svelte";
+  import { ticker } from "./lib/ticker.svelte";
   import Editor from "./components/Editor.svelte";
   import Library from "./components/Library.svelte";
   import Onboarding from "./components/Onboarding.svelte";
@@ -10,6 +11,8 @@
   import TitleBar from "./components/TitleBar.svelte";
 
   const field = raster();
+  // The field drifts up one pixel every second and a half.
+  const drift = ticker(1500);
   let error = $state<string | null>(null);
 
   onMount(() => {
@@ -21,7 +24,7 @@
 </script>
 
 <div class="shell">
-  <pre class="raster" aria-hidden="true">{field}</pre>
+  <pre class="raster" aria-hidden="true" style:margin-top="-{drift.n % 16}px">{field}</pre>
 
   <TitleBar />
 
@@ -92,15 +95,6 @@
     color: var(--ghost);
     opacity: 0.22;
     mask-image: linear-gradient(to bottom, #000, transparent);
-    animation: drift 24s linear infinite;
-  }
-  @keyframes drift {
-    from {
-      transform: translateY(0);
-    }
-    to {
-      transform: translateY(-16px);
-    }
   }
   .body {
     position: relative;

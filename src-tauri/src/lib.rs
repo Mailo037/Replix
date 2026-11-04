@@ -3,6 +3,7 @@ mod editor;
 mod encoder;
 mod ffmpeg;
 mod library;
+mod media;
 mod pipe;
 mod recorder;
 mod settings;
@@ -34,6 +35,8 @@ pub struct AppState {
     thumbs_pending: Mutex<std::collections::HashSet<String>>,
     /// Hotkeys another program already owns.
     hotkey_conflicts: Mutex<Vec<String>>,
+    /// Counts items sent to the recycle bin, so a scan can tell it raced one.
+    removals: std::sync::atomic::AtomicU64,
     /// Stops the running microphone test.
     mic_test: Mutex<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>>,
 }
@@ -109,15 +112,87 @@ fn get_settings(state: State<AppState>) -> Settings {
     state.settings.lock().clone()
 }
 
+/// Writes a file and may touch the registry; hotkeys are handed to the main thread by the plugin.
+/// `revision` is the page's number for this change, rising with every change and across
+/// reloads; the answer is the revision now in effect, this one or a later one.
 #[tauri::command]
-fn set_settings(app: AppHandle, state: State<AppState>, settings: Settings) -> Res<()> {
+async fn set_settings(app: AppHandle, settings: Settings, revision: u64) -> Res<u64> {
+    SETTINGS_WAITING.lock().offer(revision, settings);
+    blocking(move || apply_waiting_settings(&app, revision)).await
+}
+
+/// The newest value offered and not taken yet. One offered after a newer one, as two
+/// requests can overtake each other on the way, is dropped: the newer one stands.
+struct Newest<T> {
+    revision: u64,
+    value: Option<T>,
+}
+
+impl<T> Newest<T> {
+    const fn new() -> Self {
+        Self { revision: 0, value: None }
+    }
+
+    fn offer(&mut self, revision: u64, value: T) {
+        if revision > self.revision {
+            self.revision = revision;
+            self.value = Some(value);
+        }
+    }
+
+    fn take(&mut self) -> Option<(u64, T)> {
+        self.value.take().map(|v| (self.revision, v))
+    }
+}
+
+/// The newest revision Replix has seen, for a reloaded page to count on from: the clock
+/// alone could go back between two page loads.
+#[tauri::command]
+fn settings_revision() -> u64 {
+    SETTINGS_WAITING.lock().revision.max(SETTINGS_APPLIED.lock().0)
+}
+
+/// The page sends every change at once; while one is applied only the newest waits behind
+/// it, so a slider's steps cost one write instead of one each, and nothing is left behind
+/// in the page when it reloads or Replix quits.
+static SETTINGS_WAITING: Mutex<Newest<Settings>> = parking_lot::const_mutex(Newest::new());
+/// One change at a time, all of it: the file, the copy in memory, the hotkeys and the
+/// recorder then always agree. Holds the revision applied last, and whether that went well.
+static SETTINGS_APPLIED: Mutex<(u64, Res<()>)> = parking_lot::const_mutex((0, Ok(())));
+
+/// Applies the newest settings waiting, unless a revision from `mine` on already went
+/// through; says which revision is in effect, or why the newest one is not. Not on the
+/// main thread: a hotkey change waits for it.
+fn apply_waiting_settings(app: &AppHandle, mine: u64) -> Res<u64> {
+    let mut applied = SETTINGS_APPLIED.lock();
+    if applied.0 < mine {
+        let waiting = SETTINGS_WAITING.lock().take();
+        if let Some((revision, settings)) = waiting {
+            *applied = (revision, apply_settings(app, settings));
+        }
+    }
+    applied.1.clone().map(|()| applied.0)
+}
+
+fn apply_settings(app: &AppHandle, settings: Settings) -> Res<()> {
+    let state = app.state::<AppState>();
     let previous = state.settings.lock().clone();
     settings.save(&state.settings_path).map_err(err)?;
     *state.settings.lock() = settings.clone();
     audio::set_mic_gain(settings.mic_volume);
     audio::set_mic_denoise(settings.mic_noise_suppression);
     if previous.hotkeys != settings.hotkeys {
-        register_hotkeys(&app, &settings);
+        // The shortcut plugin holds its lock while it waits for the main thread, and a key
+        // press handled there wants the same lock. Doing the whole update on the main thread,
+        // as before, keeps that from deadlocking; this thread only waits for it.
+        let (done, wait) = std::sync::mpsc::channel();
+        let (handle, next) = (app.clone(), settings.clone());
+        app.run_on_main_thread(move || {
+            register_hotkeys(&handle, &next);
+            let _ = done.send(());
+        })
+        .map_err(err)?;
+        let _ = wait.recv();
     }
     if previous.launch_at_startup != settings.launch_at_startup {
         let launcher = app.autolaunch();
@@ -157,14 +232,19 @@ struct AppWindow {
     title: String,
 }
 
+/// Reads every program's version resource for its name, so it stays off the main thread.
 #[tauri::command]
-fn list_apps() -> Vec<AppWindow> {
-    let mut seen = std::collections::HashSet::new();
-    win::list_windows()
-        .into_iter()
-        .filter(|w| seen.insert(w.exe.to_lowercase()))
-        .map(|w| AppWindow { name: win::app_name(&w.exe_path), exe: w.exe, title: w.title })
-        .collect()
+async fn list_apps() -> Vec<AppWindow> {
+    tauri::async_runtime::spawn_blocking(|| {
+        let mut seen = std::collections::HashSet::new();
+        win::list_windows()
+            .into_iter()
+            .filter(|w| seen.insert(w.exe.to_lowercase()))
+            .map(|w| AppWindow { name: win::app_name(&w.exe_path), exe: w.exe, title: w.title })
+            .collect()
+    })
+    .await
+    .unwrap_or_default()
 }
 
 #[tauri::command]
@@ -178,9 +258,18 @@ async fn list_library(app: AppHandle) -> Res<Vec<Item>> {
         let state = app.state::<AppState>();
         let root = state.settings.lock().clips_dir.clone();
         let _ = std::fs::create_dir_all(&root);
-        let items = library::scan(&root, &state.thumbs_dir());
+        let removals = state.removals.load(Ordering::Relaxed);
+        let (mut items, deferred) = library::scan(&root, &state.thumbs_dir());
+        // Some files waited to be read; the page scans again once Replix is free.
+        if deferred {
+            let _ = app.emit("scan-deferred", ());
+        }
         {
             let mut index = state.index.lock();
+            // Something went to the recycle bin while the scan ran; leave it out.
+            if state.removals.load(Ordering::Relaxed) != removals {
+                items.retain(|i| std::path::Path::new(&i.path).exists());
+            }
             index.paths = items.iter().map(|i| (i.id.clone(), PathBuf::from(&i.path))).collect();
         }
         queue_thumbs(&app, &items);
@@ -190,50 +279,160 @@ async fn list_library(app: AppHandle) -> Res<Vec<Item>> {
     .map_err(err)
 }
 
-/// Makes missing thumbnails one after another and tells the UI about each.
+type ThumbJob = (String, PathBuf, library::Kind, f64);
+
+/// Missing thumbnails wait here for the one thread that makes them.
+static THUMBS: (Mutex<std::collections::VecDeque<ThumbJob>>, parking_lot::Condvar) =
+    (parking_lot::const_mutex(std::collections::VecDeque::new()), parking_lot::Condvar::new());
+
+/// Queues missing thumbnails; one thread makes them one after another and tells the UI
+/// about each. A second scan adds to the queue rather than starting a thread of its own.
 fn queue_thumbs(app: &AppHandle, items: &[Item]) {
     let state = app.state::<AppState>();
-    let dir = state.thumbs_dir();
     let mut pending = state.thumbs_pending.lock();
-    let todo: Vec<(String, PathBuf, library::Kind, f64)> = items
+    let todo: Vec<ThumbJob> = items
         .iter()
         .filter(|i| i.thumb.is_none() && pending.insert(i.id.clone()))
         .map(|i| (i.id.clone(), PathBuf::from(&i.path), i.meta.kind, i.meta.duration))
         .collect();
+    drop(pending);
     if todo.is_empty() {
         return;
     }
+    static WORKER: std::sync::Once = std::sync::Once::new();
     let app = app.clone();
-    std::thread::spawn(move || {
-        for (id, path, kind, duration) in todo {
-            let out = dir.join(format!("{id}.jpg"));
-            if library::make_thumb(&path, kind, duration, &out).is_ok() {
-                let _ = app.emit("thumb", (id.clone(), out.to_string_lossy().into_owned()));
-            }
-            app.state::<AppState>().thumbs_pending.lock().remove(&id);
-        }
+    WORKER.call_once(move || {
+        std::thread::Builder::new().name("thumbnails".into()).spawn(move || make_thumbs(app)).expect("thread");
     });
+    THUMBS.0.lock().extend(todo);
+    THUMBS.1.notify_one();
 }
 
-fn update_meta(state: &AppState, id: &str, change: impl FnOnce(&mut library::Meta)) -> Res<()> {
-    let path = state.path_of(id)?;
-    let mut meta = library::read_meta(&path).unwrap_or_default();
+fn make_thumbs(app: AppHandle) {
+    let dir = app.state::<AppState>().thumbs_dir();
+    // Thumbnails are made ahead of time, for the library: they give way to the editor and
+    // wait while Replix is hidden or in the background, then pick up where they were.
+    let demand = media::Demand::new(media::AHEAD);
+    loop {
+        let (id, path, kind, duration) = {
+            let mut queue = THUMBS.0.lock();
+            loop {
+                if let Some(job) = queue.pop_front() {
+                    break job;
+                }
+                THUMBS.1.wait(&mut queue);
+            }
+        };
+        let out = dir.join(format!("{id}.jpg"));
+        // Made meanwhile, e.g. queued again by a scan that listed the folder before it was.
+        if out.exists() {
+            let _ = app.emit("thumb", (id.clone(), out.to_string_lossy().into_owned()));
+            app.state::<AppState>().thumbs_pending.lock().remove(&id);
+            continue;
+        }
+        // Failed a moment ago and unchanged since: a scan asks again, but it would fail again.
+        if library::THUMB_FAILURES.recent(&path) {
+            app.state::<AppState>().thumbs_pending.lock().remove(&id);
+            continue;
+        }
+        loop {
+            match media::run(&demand, |go| library::make_thumb(&path, kind, duration, &out, go)) {
+                media::Outcome::Done(()) => {
+                    library::THUMB_FAILURES.forget(&path);
+                    let _ = app.emit("thumb", (id.clone(), out.to_string_lossy().into_owned()));
+                    break;
+                }
+                // Hidden, unfocused or the editor's turn: wait until it may run again.
+                media::Outcome::Stopped => media::wait_until_ahead_may_run(),
+                media::Outcome::Failed(_) => {
+                    library::THUMB_FAILURES.note(&path);
+                    break;
+                }
+            }
+        }
+        app.state::<AppState>().thumbs_pending.lock().remove(&id);
+    }
+}
+
+/// The fields of an item that changed, by their names in the UI.
+type Patch = serde_json::Map<String, serde_json::Value>;
+
+/// Changes one item's sidecar and returns which fields changed. Callers tell the UI about
+/// those fields only, instead of making it scan the whole library again; a patch holds no
+/// other field, so one sent late cannot put back an older value of something else.
+fn update_meta(app: &AppHandle, id: &str, change: impl FnOnce(&mut library::Meta)) -> Res<(String, Patch)> {
+    let path = app.state::<AppState>().path_of(id)?;
+    let _held = library::META_LOCK.lock();
+    // The clip may have gone to the recycle bin since its path was looked up.
+    if !path.exists() {
+        return Err("That clip no longer exists.".into());
+    }
+    let root = app.state::<AppState>().settings.lock().clips_dir.clone();
+    let mut meta = library::meta_or_describe(&path, &root);
+    let fields = |m: &library::Meta| match serde_json::to_value(m) {
+        Ok(serde_json::Value::Object(map)) => map,
+        _ => Patch::new(),
+    };
+    let before = fields(&meta);
     change(&mut meta);
-    library::write_meta(&path, &meta);
-    Ok(())
+    library::write_meta(&path, &meta).map_err(err)?;
+    let patch = fields(&meta).into_iter().filter(|(k, v)| before.get(k) != Some(v)).collect();
+    Ok((id.to_string(), patch))
+}
+
+/// Runs file work off the main thread, where commands without `async` run and would hold
+/// up the window.
+async fn blocking<T: Send + 'static>(work: impl FnOnce() -> Res<T> + Send + 'static) -> Res<T> {
+    tauri::async_runtime::spawn_blocking(work).await.map_err(err)?
+}
+
+type Job = Box<dyn FnOnce() + Send>;
+
+/// Changes to the library (titles, drafts, favourites, the recycle bin) run one after
+/// another on one thread, so a change never races a delete. The UI sends them one at a
+/// time, which keeps them in the order they were made. The thread is Replix's own, so the
+/// recycle bin can set up COM on it the way it needs to.
+async fn in_order<T: Send + 'static>(work: impl FnOnce() -> Res<T> + Send + 'static) -> Res<T> {
+    static QUEUE: std::sync::OnceLock<std::sync::mpsc::Sender<Job>> = std::sync::OnceLock::new();
+    let queue = QUEUE.get_or_init(|| {
+        let (tx, rx) = std::sync::mpsc::channel::<Job>();
+        std::thread::Builder::new()
+            .name("library".into())
+            .spawn(move || rx.into_iter().for_each(|job| job()))
+            .expect("thread");
+        tx
+    });
+    let (done, mut result) = tauri::async_runtime::channel(1);
+    queue
+        .send(Box::new(move || {
+            let _ = done.blocking_send(work());
+        }))
+        .map_err(err)?;
+    result.recv().await.unwrap_or_else(|| Err("The task failed.".into()))
+}
+
+/// Like `blocking`, on a thread of its own: the audio device list sets up COM in a way a
+/// pooled thread may already be set up differently for.
+async fn own_thread<T: Send + 'static>(work: impl FnOnce() -> Res<T> + Send + 'static) -> Res<T> {
+    blocking(move || std::thread::spawn(work).join().map_err(|_| "The task failed.".to_string())?).await
 }
 
 #[tauri::command]
-async fn open_editor(app: AppHandle, id: String) -> Res<editor::EditorData> {
+async fn open_editor(app: AppHandle, id: String, round: u64) -> Res<editor::EditorData> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let path = state.path_of(&id)?;
+        let root = state.settings.lock().clips_dir.clone();
         let mut meta = library::read_meta(&path).unwrap_or_default();
         if !meta.seen {
+            let _held = library::META_LOCK.lock();
+            meta = library::meta_or_describe(&path, &root);
             meta.seen = true;
-            library::write_meta(&path, &meta);
+            if library::write_meta(&path, &meta).is_ok() {
+                let _ = app.emit("items-meta", [(&id, serde_json::json!({ "seen": true }))]);
+            }
         }
-        editor::prepare(&id, &path, &meta, &state.cache, strip_ready(&app, &id)).map_err(err)
+        editor::prepare(&id, &path, &meta, &state.cache, round.max(1), strip_ready(&app, &id)).map_err(err)
     })
     .await
     .map_err(err)?
@@ -247,51 +446,132 @@ fn strip_ready(app: &AppHandle, id: &str) -> impl FnOnce(std::path::PathBuf) + S
     }
 }
 
+/// One track's peaks for the editor, made from the track split off by `open_editor`.
+#[tauri::command]
+async fn waveform(app: AppHandle, id: String, track: usize, duration: f64, round: u64) -> Res<Vec<f32>> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        state.path_of(&id)?;
+        let audio = state.cache.join("editor").join(&id).join(format!("a{track}.m4a"));
+        editor::waveform(&audio, duration, round).map_err(err)
+    })
+    .await
+}
+
+/// Starts a page load's editor rounds: every round an earlier load of the page used ends,
+/// with its work, and the page counts on from here, so it never reuses one.
+#[tauri::command]
+fn first_editor_round() -> u64 {
+    media::new_page()
+}
+
+/// Ends an editor round: its media work, and that of earlier rounds, stops. The editor
+/// closed or the window was hidden.
+#[tauri::command]
+fn end_editor_round(round: u64) {
+    media::end_round(round);
+}
+
 /// Prepares a clip's preview material ahead of time, e.g. while the pointer rests on its tile.
 #[tauri::command]
-async fn warm_editor(app: AppHandle, id: String) -> Res<()> {
+/// Says whether the clip was prepared; skipped or stopped, it may be tried again later.
+async fn warm_editor(app: AppHandle, id: String) -> Res<bool> {
     tauri::async_runtime::spawn_blocking(move || {
+        // Only on a hunch that the clip opens next; never while a game is likely running.
+        if !page_visible() || !app_focused() {
+            return Ok(false);
+        }
+        // Hovering over a row of tiles asks for each; two warm-ups at a time are plenty,
+        // and the rest are skipped rather than queued.
+        static WARMING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        if WARMING.fetch_add(1, Ordering::Relaxed) >= 2 {
+            WARMING.fetch_sub(1, Ordering::Relaxed);
+            return Ok(false);
+        }
+        struct Slot;
+        impl Drop for Slot {
+            fn drop(&mut self) {
+                WARMING.fetch_sub(1, Ordering::Relaxed);
+            }
+        }
+        let _slot = Slot;
         let state = app.state::<AppState>();
         let path = state.path_of(&id)?;
         let meta = library::read_meta(&path).unwrap_or_default();
-        editor::prepare(&id, &path, &meta, &state.cache, strip_ready(&app, &id)).map(|_| ()).map_err(err)
+        // The longest clip, in seconds, prepared before it is opened.
+        const WARM_LONGEST: f64 = 300.0;
+        // A long session's tracks and filmstrip take a while: they are made when it opens.
+        if meta.duration <= 0.0 || meta.duration > WARM_LONGEST {
+            return Ok(true);
+        }
+        match editor::prepare(&id, &path, &meta, &state.cache, media::AHEAD, strip_ready(&app, &id)) {
+            Ok(_) => Ok(true),
+            Err(e) if media::is_stopped(&e) => Ok(false),
+            Err(e) => Err(err(e)),
+        }
     })
     .await
     .map_err(err)?
 }
 
 #[tauri::command]
-fn save_draft(app: AppHandle, state: State<AppState>, id: String, title: String, draft: Draft) -> Res<()> {
-    update_meta(&state, &id, |m| {
-        m.title = title;
-        m.draft = Some(draft);
-    })?;
-    let _ = app.emit("library-changed", ());
-    Ok(())
+async fn save_draft(app: AppHandle, id: String, title: String, draft: Draft) -> Res<()> {
+    in_order(move || {
+        let changed = update_meta(&app, &id, |m| {
+            m.title = title;
+            m.draft = Some(draft);
+        })?;
+        let _ = app.emit("items-meta", [changed]);
+        Ok(())
+    })
+    .await
 }
 
 #[tauri::command]
-fn rename_item(app: AppHandle, state: State<AppState>, id: String, title: String) -> Res<()> {
-    update_meta(&state, &id, |m| m.title = title)?;
-    let _ = app.emit("library-changed", ());
-    Ok(())
+async fn rename_item(app: AppHandle, id: String, title: String) -> Res<()> {
+    in_order(move || {
+        let changed = update_meta(&app, &id, |m| m.title = title)?;
+        let _ = app.emit("items-meta", [changed]);
+        Ok(())
+    })
+    .await
 }
 
+/// One call and one update for the UI for a whole selection.
 #[tauri::command]
-fn set_favorite(app: AppHandle, state: State<AppState>, id: String, favorite: bool) -> Res<()> {
-    update_meta(&state, &id, |m| m.favorite = favorite)?;
-    let _ = app.emit("library-changed", ());
-    Ok(())
+async fn set_favorite(app: AppHandle, ids: Vec<String>, favorite: bool) -> Res<()> {
+    in_order(move || {
+        let mut changed = Vec::new();
+        let result = ids.iter().try_for_each(|id| {
+            changed.push(update_meta(&app, id, |m| m.favorite = favorite)?);
+            Ok(())
+        });
+        let _ = app.emit("items-meta", &changed);
+        result
+    })
+    .await
 }
 
+/// The recycle bin goes through the Windows shell and can take a moment per file.
 #[tauri::command]
-fn delete_items(app: AppHandle, state: State<AppState>, ids: Vec<String>) -> Res<()> {
-    for id in ids {
-        let path = state.path_of(&id)?;
-        library::delete(&path).map_err(err)?;
-    }
-    let _ = app.emit("library-changed", ());
-    Ok(())
+async fn delete_items(app: AppHandle, ids: Vec<String>) -> Res<()> {
+    in_order(move || {
+        let state = app.state::<AppState>();
+        let mut removed = Vec::new();
+        let result = ids.into_iter().try_for_each(|id| {
+            let path = state.path_of(&id)?;
+            let _held = library::META_LOCK.lock();
+            library::delete(&path).map_err(err)?;
+            // A scan already under way may still list it; it checks this count.
+            state.removals.fetch_add(1, Ordering::Relaxed);
+            state.index.lock().paths.remove(&id);
+            removed.push(id);
+            Ok(())
+        });
+        let _ = app.emit("items-removed", &removed);
+        result
+    })
+    .await
 }
 
 /// Only files in the clips folder leave Replix.
@@ -307,15 +587,22 @@ fn shareable(state: &AppState, path: &str) -> Res<PathBuf> {
 }
 
 #[tauri::command]
-fn copy_items(state: State<AppState>, ids: Vec<String>) -> Res<()> {
-    let paths = ids.iter().map(|id| state.path_of(id)).collect::<Res<Vec<_>>>()?;
-    share::copy_files(&paths).map_err(err)
+async fn copy_items(app: AppHandle, ids: Vec<String>) -> Res<()> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let paths = ids.iter().map(|id| state.path_of(id)).collect::<Res<Vec<_>>>()?;
+        share::copy_files(&paths).map_err(err)
+    })
+    .await
 }
 
 #[tauri::command]
-fn copy_path(state: State<AppState>, path: String) -> Res<()> {
-    let path = shareable(&state, &path)?;
-    share::copy_files(&[path]).map_err(err)
+async fn copy_path(app: AppHandle, path: String) -> Res<()> {
+    blocking(move || {
+        let path = shareable(&app.state::<AppState>(), &path)?;
+        share::copy_files(&[path]).map_err(err)
+    })
+    .await
 }
 
 #[tauri::command]
@@ -350,32 +637,67 @@ fn open_clips_folder(state: State<AppState>) -> Res<()> {
 }
 
 #[tauri::command]
-async fn export_clip(app: AppHandle, id: String, title: String, request: editor::ExportRequest) -> Res<String> {
+async fn export_clip(app: AppHandle, id: String, title: String, request: editor::ExportRequest, ticket: u64) -> Res<String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let source = state.path_of(&id)?;
         let root = state.settings.lock().clips_dir.clone();
         let encoder = state.recorder.encoders.lock().first().copied().unwrap_or_else(encoder::software);
+        // One export at a time, from choosing its name to the software retry: a second
+        // one waits instead of doubling the load beside a game.
+        static ONE_AT_A_TIME: Mutex<()> = parking_lot::const_mutex(());
+        let cancelled = || CANCELLED_EXPORTS.lock().contains(&ticket);
+        // Forgotten on every way out, so the set stays small.
+        struct Forget(u64);
+        impl Drop for Forget {
+            fn drop(&mut self) {
+                CANCELLED_EXPORTS.lock().remove(&self.0);
+            }
+        }
+        let _forget = Forget(ticket);
+        // Cancelling one that still waits for its turn ends the wait too.
+        let _turn = loop {
+            if cancelled() {
+                return Err(editor::CANCELLED.into());
+            }
+            if let Some(turn) = ONE_AT_A_TIME.try_lock_for(std::time::Duration::from_millis(200)) {
+                break turn;
+            }
+        };
         let out = library::export_path(&root, &title, request.preset.extension());
         let emitter = app.clone();
+        // Tagged with the export it belongs to: an editor whose export still waits for its
+        // turn must not show the progress of the one running.
         let result = editor::export(&source, &request, encoder, &out, |p| {
-            let _ = emitter.emit("export-progress", p);
-        });
+            let _ = emitter.emit("export-progress", (ticket, p));
+        }, &cancelled);
         // A hardware encoder can refuse odd sizes or formats; software always works.
         let result = match result {
-            Err(e) if encoder.codec != "libx264" && request.preset != editor::Preset::Gif => {
+            Err(e) if !cancelled() && encoder.codec != "libx264" && request.preset != editor::Preset::Gif => {
                 log::warn!("export with {} failed, using software: {e}", encoder.id);
                 editor::export(&source, &request, encoder::software(), &out, |p| {
-                    let _ = emitter.emit("export-progress", p);
-                })
+                    let _ = emitter.emit("export-progress", (ticket, p));
+                }, &cancelled)
             }
             other => other,
         };
-        result.map_err(err)?;
+        if let Err(e) = result {
+            // The name was reserved with an empty file; nothing came of it.
+            let _ = std::fs::remove_file(&out);
+            return Err(err(e));
+        }
         Ok(out.to_string_lossy().into_owned())
     })
     .await
     .map_err(err)?
+}
+
+/// Exports asked to stop, running or still waiting for their turn, by ticket.
+static CANCELLED_EXPORTS: Mutex<std::collections::BTreeSet<u64>> = parking_lot::const_mutex(std::collections::BTreeSet::new());
+
+#[tauri::command]
+fn cancel_export(ticket: u64) {
+    CANCELLED_EXPORTS.lock().insert(ticket);
 }
 
 #[tauri::command]
@@ -389,7 +711,7 @@ async fn save_frame(app: AppHandle, id: String, time: f64) -> Res<String> {
         let out = library::new_path(&root, &game, "png", None);
         editor::save_frame(&source, time, &out).map_err(err)?;
         let info = ffmpeg::probe(&out).unwrap_or_default();
-        library::write_meta(
+        let _ = library::write_meta(
             &out,
             &library::Meta {
                 kind: library::Kind::Screenshot,
@@ -473,7 +795,7 @@ async fn storage_info(app: AppHandle) -> StorageInfo {
 
 #[tauri::command]
 async fn list_mics() -> Vec<audio::InputDevice> {
-    tauri::async_runtime::spawn_blocking(audio::input_devices).await.unwrap_or_default()
+    own_thread(|| Ok(audio::input_devices())).await.unwrap_or_default()
 }
 
 /// Streams the microphone's level as "mic-level" events until `stop_mic_test`.
@@ -508,8 +830,70 @@ fn on_hotkey(app: &AppHandle, shortcut: &Shortcut) {
     }
 }
 
+/// A hidden or minimised window's page keeps rendering and running its animations unless
+/// the webview itself is hidden too, which would cost the game frames while Replix sits in
+/// the tray. Hidden, WebView2 stops painting and throttles the page's timers.
+/// Whether the main window is on screen. Work done ahead of time stops when it is not:
+/// then a game is likely running.
+pub fn page_visible() -> bool {
+    PAGE_VISIBLE.load(Ordering::Relaxed)
+}
+
+/// Whether Replix's window has the keyboard focus. Visible alone is not enough to do work
+/// ahead of time: Replix may sit on a second monitor next to a running game.
+pub(crate) static FOCUSED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn app_focused() -> bool {
+    FOCUSED.load(Ordering::Relaxed)
+}
+
+/// When Replix last lost the focus.
+static FOCUS_LOST: Mutex<Option<std::time::Instant>> = parking_lot::const_mutex(None);
+const FOCUS_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// Focused, or was until a moment ago.
+pub fn focused_lately() -> bool {
+    app_focused() || FOCUS_LOST.lock().is_some_and(|at| at.elapsed() < FOCUS_GRACE)
+}
+
+static PAGE_VISIBLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+fn set_page_visible(window: &tauri::WebviewWindow, visible: bool) {
+    // Resizing reports many sizes in a row; only a change is passed on.
+    if PAGE_VISIBLE.load(Ordering::Relaxed) == visible {
+        return;
+    }
+    let webview: &tauri::Webview = window.as_ref();
+    // Kept as it was when the WebView did not follow, so the next event tries again.
+    if let Err(e) = if visible { webview.show() } else { webview.hide() } {
+        log::warn!("could not {} the page: {e}", if visible { "show" } else { "hide" });
+        return;
+    }
+    PAGE_VISIBLE.store(visible, Ordering::Relaxed);
+    media::wake();
+}
+
+/// Ends Replix once settings changed a moment ago are applied: the page has handed them
+/// over, but they may still wait for their turn.
+fn quit_after_settings(app: &AppHandle) {
+    let app = app.clone();
+    // Applying a hotkey change waits for the main thread, which asks for this.
+    std::thread::spawn(move || {
+        let newest = SETTINGS_WAITING.lock().revision;
+        if let Err(e) = apply_waiting_settings(&app, newest) {
+            log::warn!("settings not saved on quit: {e}");
+        }
+        app.exit(0);
+    });
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        set_page_visible(&window, true);
+        // Showing is only requested of the WebView, and a failure there is not reported
+        // back; asking again on every restore keeps one from leaving the page hidden.
+        let webview: &tauri::Webview = window.as_ref();
+        let _ = webview.show();
         let _ = window.show();
         let _ = window.unminimize();
         let _ = window.set_focus();
@@ -537,7 +921,7 @@ fn build_tray(app: &AppHandle) -> tauri::Result<()> {
                 "clip" => state.recorder.send(Command::SaveClip),
                 "screenshot" => state.recorder.send(Command::Screenshot),
                 "session" => state.recorder.send(Command::ToggleSession),
-                "quit" => app.exit(0),
+                "quit" => quit_after_settings(app),
                 _ => {}
             }
         })
@@ -591,6 +975,7 @@ pub fn run() {
                 thumbs_pending: Mutex::new(Default::default()),
                 hotkey_conflicts: Mutex::new(Vec::new()),
                 mic_test: Mutex::new(None),
+                removals: Default::default(),
             });
             audio::set_mic_gain(settings.mic_volume);
             audio::set_mic_denoise(settings.mic_noise_suppression);
@@ -614,19 +999,53 @@ pub fn run() {
             if std::env::args().any(|a| a == "--minimized") {
                 if let Some(main) = app.get_webview_window("main") {
                     let _ = main.hide();
+                    set_page_visible(&main, false);
                 }
             }
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == "main" {
+            if window.label() != "main" {
+                return;
+            }
+            let Some(main) = window.app_handle().get_webview_window("main") else { return };
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
                     let to_tray = window.app_handle().state::<AppState>().settings.lock().close_to_tray;
+                    api.prevent_close();
                     if to_tray {
-                        api.prevent_close();
                         let _ = window.hide();
+                        set_page_visible(&main, false);
+                    } else {
+                        quit_after_settings(window.app_handle());
                     }
                 }
+                // Minimising and restoring both report a new size. A hidden window can get one
+                // too, so its state decides, not the size.
+                WindowEvent::Resized(_) => {
+                    let shown = window.is_visible().unwrap_or(true) && !window.is_minimized().unwrap_or(false);
+                    set_page_visible(&main, shown);
+                }
+                WindowEvent::Focused(focused) => {
+                    FOCUSED.store(*focused, Ordering::Relaxed);
+                    if !*focused {
+                        // Running work notices once the grace is over, when it next checks.
+                        *FOCUS_LOST.lock() = Some(std::time::Instant::now());
+                    }
+                    // Restored by the taskbar or Alt-Tab rather than the tray: the window's own
+                    // state decides, in case a resize went unreported, and the page is asked
+                    // to show again in case an earlier request did not take.
+                    if *focused {
+                        let shown = window.is_visible().unwrap_or(true) && !window.is_minimized().unwrap_or(false);
+                        set_page_visible(&main, shown);
+                        if shown {
+                            let webview: &tauri::Webview = main.as_ref();
+                            let _ = webview.show();
+                        }
+                    }
+                    media::wake();
+                }
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -639,6 +1058,11 @@ pub fn run() {
             list_library,
             open_editor,
             warm_editor,
+            waveform,
+            end_editor_round,
+            first_editor_round,
+            cancel_export,
+            settings_revision,
             save_draft,
             rename_item,
             set_favorite,
@@ -663,4 +1087,25 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running Replix");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Changes that overtake each other on the way: the newest stands, an older one that
+    /// arrives later is dropped, and a later one after a take is kept again.
+    #[test]
+    fn the_newest_settings_stand() {
+        let mut waiting = Newest::new();
+        waiting.offer(5, "five");
+        waiting.offer(3, "three");
+        assert_eq!(waiting.take(), Some((5, "five")));
+        assert_eq!(waiting.take(), None);
+        waiting.offer(4, "four");
+        assert_eq!(waiting.take(), None, "older than what was applied");
+        waiting.offer(6, "six");
+        waiting.offer(7, "seven");
+        assert_eq!(waiting.take(), Some((7, "seven")));
+    }
 }

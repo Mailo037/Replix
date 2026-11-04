@@ -1,34 +1,51 @@
 <script lang="ts" module>
-  // Peaks per file, so reopening a clip doesn't decode its audio again.
-  const cache = new Map<string, Promise<Float32Array | null>>();
-  const BUCKETS = 1200;
+  import { api } from "../lib/api";
+  import { currentRound, editorRound } from "../lib/editorRound.svelte";
+  import { store } from "../lib/store.svelte";
 
-  async function peaks(src: string): Promise<Float32Array | null> {
-    try {
-      const buffer = await (await fetch(src)).arrayBuffer();
-      const audio = await new OfflineAudioContext(1, 1, 44100).decodeAudioData(buffer);
-      const out = new Float32Array(BUCKETS);
-      const per = Math.max(1, Math.floor(audio.length / BUCKETS));
-      for (let c = 0; c < audio.numberOfChannels; c++) {
-        const data = audio.getChannelData(c);
-        for (let b = 0; b < BUCKETS; b++) {
-          let max = 0;
-          // Every fourth sample is plenty for a picture this size.
-          for (let i = b * per, end = Math.min(data.length, i + per); i < end; i += 4) max = Math.max(max, Math.abs(data[i]));
-          out[b] = Math.max(out[b], max);
-        }
-      }
-      const loudest = out.reduce((m, v) => Math.max(m, v), 0) || 1;
-      return out.map((v) => Math.sqrt(v / loudest));
-    } catch {
-      return null;
+  // Peaks per track, so reopening a clip doesn't ask for them again; the newest few dozen
+  // are kept. Replix streams the track through FFmpeg for them, so even an hour-long
+  // session costs little memory, and keeps them on disk, so asking again later is cheap.
+  const KEEP = 48;
+  const done = new Map<string, Float32Array>();
+  /** Requests on their way, by round: one from an ended round is not joined. */
+  const asking = new Map<string, Promise<Float32Array | null>>();
+
+  function peaks(id: string, track: number, duration: number): Promise<Float32Array | null> {
+    const key = `${id}:${track}`;
+    const kept = done.get(key);
+    if (kept) {
+      // Most recently used goes last; the first one is the next to go.
+      done.delete(key);
+      done.set(key, kept);
+      return Promise.resolve(kept);
     }
+    const round = currentRound();
+    const ask = `${round}:${key}`;
+    let p = asking.get(ask);
+    if (!p) {
+      p = api
+        .waveform(id, track, duration, round)
+        .then(
+          (v) => {
+            const peaks = Float32Array.from(v);
+            done.set(key, peaks);
+            if (done.size > KEEP) done.delete(done.keys().next().value!);
+            return peaks;
+          },
+          // Stopped or failed: nothing is kept, so the next time asks again.
+          () => null,
+        )
+        .finally(() => asking.delete(ask));
+      asking.set(ask, p);
+    }
+    return p;
   }
 </script>
 
 <script lang="ts">
   // The track's loudness over time, drawn as bars across its lane.
-  let { src, muted = false, enabled = true }: { src: string; muted?: boolean; enabled?: boolean } = $props();
+  let { id, track, duration, muted = false }: { id: string; track: number; duration: number; muted?: boolean } = $props();
 
   let canvas = $state<HTMLCanvasElement>();
   let data = $state<Float32Array | null>(null);
@@ -36,10 +53,13 @@
   let height = $state(0);
 
   $effect(() => {
-    if (!enabled) return;
-    let p = cache.get(src);
-    if (!p) cache.set(src, (p = peaks(src)));
-    p.then((d) => (data = d));
+    // Hidden, the editor stops its waveforms; they are asked for again once it is back.
+    // A new round asks again for what the last one did not finish.
+    void editorRound.n;
+    if (!store.visible || data) return;
+    let current = true;
+    peaks(id, track, duration).then((d) => current && (data = d));
+    return () => (current = false);
   });
 
   $effect(() => {

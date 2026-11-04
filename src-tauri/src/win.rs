@@ -148,21 +148,29 @@ pub struct ProcessEntry {
     pub pid: u32,
     pub parent: u32,
     pub exe: String,
+    /// `exe` in lower case, made once per snapshot for comparing names.
+    pub exe_lower: String,
 }
 
-pub fn processes() -> Vec<ProcessEntry> {
-    let mut out = Vec::new();
+/// Every running process by pid.
+pub fn processes() -> HashMap<u32, ProcessEntry> {
+    let mut out = HashMap::new();
     unsafe {
         let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return out };
         let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
         if Process32FirstW(snap, &mut entry).is_ok() {
             loop {
                 let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
-                out.push(ProcessEntry {
-                    pid: entry.th32ProcessID,
-                    parent: entry.th32ParentProcessID,
-                    exe: String::from_utf16_lossy(&entry.szExeFile[..len]),
-                });
+                let exe = String::from_utf16_lossy(&entry.szExeFile[..len]);
+                out.insert(
+                    entry.th32ProcessID,
+                    ProcessEntry {
+                        pid: entry.th32ProcessID,
+                        parent: entry.th32ParentProcessID,
+                        exe_lower: exe.to_lowercase(),
+                        exe,
+                    },
+                );
                 if Process32NextW(snap, &mut entry).is_err() {
                     break;
                 }
@@ -175,18 +183,16 @@ pub fn processes() -> Vec<ProcessEntry> {
 
 /// The outermost process with the same executable, so a capture includes all of an
 /// app's helper processes (Discord and browsers play sound from child processes).
-pub fn root_of(pid: u32, all: &[ProcessEntry]) -> u32 {
+pub fn root_of(pid: u32, all: &HashMap<u32, ProcessEntry>) -> u32 {
     // Embedded browsers play sound on behalf of the app that hosts them.
-    const HELPERS: &[&str] = &["msedgewebview2.exe"];
-    let by_pid: HashMap<u32, &ProcessEntry> = all.iter().map(|p| (p.pid, p)).collect();
+    const HELPER: &str = "msedgewebview2.exe";
     let mut current = pid;
     for _ in 0..16 {
-        let Some(entry) = by_pid.get(&current) else { break };
-        let exe = entry.exe.to_lowercase();
-        match by_pid.get(&entry.parent) {
+        let Some(entry) = all.get(&current) else { break };
+        match all.get(&entry.parent) {
             Some(parent)
                 if parent.pid != current
-                    && (parent.exe.to_lowercase() == exe || HELPERS.contains(&exe.as_str())) =>
+                    && (parent.exe_lower == entry.exe_lower || entry.exe_lower == HELPER) =>
             {
                 current = parent.pid
             }
@@ -358,6 +364,14 @@ pub fn game_name(w: &WindowInfo) -> String {
     app_name(&w.exe_path)
 }
 
+/// Lets the game have the CPU first: for threads doing work nobody waits for.
+pub fn lower_thread_priority() {
+    use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
+    unsafe {
+        let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
+    }
+}
+
 /// Free bytes on the drive that holds `path`.
 pub fn disk_free(path: &std::path::Path) -> u64 {
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
@@ -406,4 +420,17 @@ pub fn foreground_work_area() -> Option<(i32, i32, i32, i32)> {
             (r.left, r.top, r.right - r.left, r.bottom - r.top)
         })
     }
+}
+
+/// CPU time a process has used so far, in user and kernel mode together.
+pub fn cpu_time(child: &std::process::Child) -> Option<std::time::Duration> {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::{FILETIME, HANDLE};
+    use windows::Win32::System::Threading::GetProcessTimes;
+    let (mut created, mut exited, mut kernel, mut user) = Default::default();
+    // SAFETY: the handle belongs to `child`, which outlives the call.
+    unsafe { GetProcessTimes(HANDLE(child.as_raw_handle()), &mut created, &mut exited, &mut kernel, &mut user) }.ok()?;
+    let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
+    // In units of 100 ns.
+    Some(std::time::Duration::from_nanos((ticks(kernel) + ticks(user)) * 100))
 }

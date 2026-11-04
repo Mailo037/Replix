@@ -53,7 +53,17 @@ pub fn run_with_timeout(args: &[String], timeout: Duration) -> Result<()> {
     run_command(command(), args, timeout)
 }
 
-fn run_command(mut cmd: Command, args: &[String], timeout: Duration) -> Result<()> {
+/// Like `run`, stopped as soon as `keep_going` says no, e.g. work done ahead of time that
+/// nobody needs once the window is hidden.
+pub fn run_while(args: &[String], keep_going: impl Fn() -> bool) -> Result<()> {
+    run_checked(command(), args, Duration::from_secs(600), keep_going)
+}
+
+fn run_command(cmd: Command, args: &[String], timeout: Duration) -> Result<()> {
+    run_checked(cmd, args, timeout, || true)
+}
+
+fn run_checked(mut cmd: Command, args: &[String], timeout: Duration, keep_going: impl Fn() -> bool) -> Result<()> {
     let mut child = cmd
         .args(args)
         .stdin(Stdio::null())
@@ -77,6 +87,11 @@ fn run_command(mut cmd: Command, args: &[String], timeout: Duration) -> Result<(
             let _ = child.wait();
             bail!("FFmpeg took too long");
         }
+        if !keep_going() {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("stopped");
+        }
         std::thread::sleep(Duration::from_millis(20));
     };
     let text = reader.join().unwrap_or_default();
@@ -98,6 +113,8 @@ pub struct MediaInfo {
     pub width: u32,
     pub height: u32,
     pub audio_titles: Vec<Option<String>>,
+    /// Channels of each audio stream, in the same order.
+    pub audio_channels: Vec<u32>,
 }
 
 #[derive(Deserialize)]
@@ -112,6 +129,7 @@ struct ProbeStream {
     codec_type: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
+    channels: Option<u32>,
     #[serde(default)]
     tags: std::collections::HashMap<String, String>,
 }
@@ -121,14 +139,58 @@ struct ProbeFormat {
     duration: Option<String>,
 }
 
+/// Reading a file's header takes well under a second; a probe still running after this is
+/// stuck, e.g. on a file that is still being written or a drive that stopped answering.
+const PROBE_LIMIT: Duration = Duration::from_secs(20);
+
 pub fn probe(path: &Path) -> Result<MediaInfo> {
-    let out = Command::new(tool("ffprobe"))
+    probe_while(path, &|| true)
+}
+
+/// Like `probe`, stopped as soon as `keep_going` says no.
+pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Result<MediaInfo> {
+    let mut child = Command::new(tool("ffprobe"))
         .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
-        .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height:stream_tags=title,name", "-of", "json"])
+        .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,channels:stream_tags=title,name", "-of", "json"])
         .arg(path)
         .stdin(Stdio::null())
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .context("ffprobe could not be started")?;
+    let (mut stdout, mut stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+    let read_out = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stdout.read_to_end(&mut bytes);
+        bytes
+    });
+    let read_err = std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let _ = stderr.read_to_end(&mut bytes);
+        bytes
+    });
+    let started = Instant::now();
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if started.elapsed() > PROBE_LIMIT {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("ffprobe took too long");
+        }
+        if !keep_going() {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("stopped");
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    };
+    let out = std::process::Output {
+        status,
+        stdout: read_out.join().unwrap_or_default(),
+        stderr: read_err.join().unwrap_or_default(),
+    };
     if !out.status.success() {
         bail!("{}", last_lines(&String::from_utf8_lossy(&out.stderr), 3));
     }
@@ -144,7 +206,10 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
                 info.height = stream.height.unwrap_or(0);
             }
             // MP4 keeps a track's title in its "name" tag.
-            Some("audio") => info.audio_titles.push(stream.tags.get("title").or(stream.tags.get("name")).cloned()),
+            Some("audio") => {
+                info.audio_titles.push(stream.tags.get("title").or(stream.tags.get("name")).cloned());
+                info.audio_channels.push(stream.channels.unwrap_or(2));
+            }
             _ => {}
         }
     }
@@ -153,4 +218,19 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
 
 pub fn path_arg(path: &Path) -> String {
     path.to_string_lossy().into_owned()
+}
+
+/// For tests that need FFmpeg on the PATH: whether it is missing, in which case they skip.
+/// Where `REPLIX_TESTS_NEED_FFMPEG` is set (CI installs it on purpose), a missing FFmpeg
+/// fails the test instead of passing it unseen.
+#[cfg(test)]
+pub fn missing_for_test() -> bool {
+    let found = std::process::Command::new("ffmpeg").arg("-version").stdout(Stdio::null()).status().is_ok_and(|s| s.success());
+    if !found && std::env::var_os("REPLIX_TESTS_NEED_FFMPEG").is_some() {
+        panic!("FFmpeg is needed on the PATH for this test");
+    }
+    if !found {
+        eprintln!("skipped: no ffmpeg on PATH");
+    }
+    !found
 }

@@ -43,6 +43,8 @@ export interface Item {
   draft: Draft | null;
   favorite: boolean;
   seen: boolean;
+  /** Replix could not read the file yet; its length and size follow on a later scan. */
+  unread: boolean;
 }
 
 export interface Hotkeys {
@@ -151,26 +153,54 @@ export interface EncoderOption {
 
 export type Preset = "original" | "discord" | "gif";
 
+let changes: Promise<unknown> = Promise.resolve();
+
+/**
+ * Library changes go to Replix one at a time, each once the one before it is done, so
+ * they land in the order they were made: two quick saves of a draft never swap.
+ */
+function inOrder<T>(change: () => Promise<T>): Promise<T> {
+  const next = changes.then(change, change);
+  changes = next.catch(() => {});
+  return next;
+}
+
 export const api = {
   getSettings: () => invoke<Settings>("get_settings"),
-  setSettings: (settings: Settings) => invoke<void>("set_settings", { settings }),
+  /** The newest settings revision Replix has seen; a page counts on from there. */
+  settingsRevision: () => invoke<number>("settings_revision"),
+  /** Answers with the revision in effect afterwards: this one or a later one. */
+  setSettings: (settings: Settings, revision: number) => invoke<number>("set_settings", { settings, revision }),
   getStatus: () => invoke<Status>("get_status"),
   getEncoders: () => invoke<EncoderOption[]>("get_encoders"),
   listApps: () => invoke<AppWindow[]>("list_apps"),
   listMonitors: () => invoke<Monitor[]>("list_monitors"),
   listLibrary: () => invoke<Item[]>("list_library"),
-  openEditor: (id: string) => invoke<EditorData>("open_editor", { id }),
+  /** Opens a clip in the editor; its media work belongs to the editor round given. */
+  // After the changes asked for before it, so a draft saved a moment ago opens as saved;
+  // it does not hold up changes asked for after it while the clip is prepared.
+  openEditor: (id: string, round: number) => changes.then(() => invoke<EditorData>("open_editor", { id, round })),
   /** Gets a clip ready for the editor in the background. */
-  warmEditor: (id: string) => invoke<void>("warm_editor", { id }),
-  saveDraft: (id: string, title: string, draft: Draft) => invoke<void>("save_draft", { id, title, draft }),
-  renameItem: (id: string, title: string) => invoke<void>("rename_item", { id, title }),
-  setFavorite: (id: string, favorite: boolean) => invoke<void>("set_favorite", { id, favorite }),
-  deleteItems: (ids: string[]) => invoke<void>("delete_items", { ids }),
+  warmEditor: (id: string) => invoke<boolean>("warm_editor", { id }),
+  /** A track's loudness over time, 0 to 1, for the editor. */
+  waveform: (id: string, track: number, duration: number, round: number) =>
+    invoke<number[]>("waveform", { id, track, duration, round }),
+  /** Stops the media work of this editor round and the ones before it, started or not. */
+  endEditorRound: (round: number) => invoke<void>("end_editor_round", { round }),
+  /** Where this page load's editor rounds start. */
+  firstEditorRound: () => invoke<number>("first_editor_round"),
+  saveDraft: (id: string, title: string, draft: Draft) => inOrder(() => invoke<void>("save_draft", { id, title, draft })),
+  renameItem: (id: string, title: string) => inOrder(() => invoke<void>("rename_item", { id, title })),
+  setFavorite: (ids: string[], favorite: boolean) => inOrder(() => invoke<void>("set_favorite", { ids, favorite })),
+  deleteItems: (ids: string[]) => inOrder(() => invoke<void>("delete_items", { ids })),
   revealItem: (id: string) => invoke<void>("reveal_item", { id }),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   openClipsFolder: () => invoke<void>("open_clips_folder"),
-  exportClip: (id: string, title: string, request: Draft & { preset: Preset }) =>
-    invoke<string>("export_clip", { id, title, request }),
+  /** `ticket` names this export in its "export-progress" events. */
+  exportClip: (id: string, title: string, request: Draft & { preset: Preset }, ticket: number) =>
+    invoke<string>("export_clip", { id, title, request, ticket }),
+  /** Stops an export, running or still waiting for its turn. */
+  cancelExport: (ticket: number) => invoke<void>("cancel_export", { ticket }),
   saveFrame: (id: string, time: number) => invoke<string>("save_frame", { id, time }),
   saveClipNow: () => invoke<void>("save_clip_now"),
   takeScreenshot: () => invoke<void>("take_screenshot"),
