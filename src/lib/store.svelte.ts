@@ -125,6 +125,7 @@ class Store {
     await listen<string[]>("items-removed", (e) => {
       this.changes++;
       const gone = new Set(e.payload);
+      for (const id of gone) this.removed.add(id);
       if (gone.size) this.items = this.items.filter((i) => !gone.has(i.id));
     });
     await listen<[string, string]>("thumb", (e) => {
@@ -155,6 +156,8 @@ class Store {
 
   private refreshing: Promise<void> | null = null;
   private refreshAgain = false;
+  /** Clips deleted since the current refresh began; its scans may still list them. */
+  private removed = new Set<string>();
   /** The library changed while the page was hidden. */
   private stale = false;
   /** Counts changes to single items, so a scan can tell it raced one. */
@@ -178,6 +181,7 @@ class Store {
     this.refreshing = (async () => {
       try {
         let passes = 0;
+        this.removed.clear();
         do {
           // The window may have been hidden, or left for a game, while the last scan ran.
           if (document.visibilityState === "hidden" || (!now && !document.hasFocus())) {
@@ -195,8 +199,9 @@ class Store {
             if (!this.refreshAgain) {
               // Clips the scan found are shown all the same; the ones it may have read
               // before a change stay as patched, and the next refresh catches up.
+              // A clip deleted meanwhile is absent too, but not new: it stays gone.
               const known = new Set(this.items.map((i) => i.id));
-              const found = items.filter((i) => !known.has(i.id));
+              const found = items.filter((i) => !known.has(i.id) && !this.removed.has(i.id));
               if (found.length) this.items = [...found, ...this.items].sort((a, b) => b.created - a.created);
               this.stale = true;
             }
