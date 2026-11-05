@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type AppWindow, type Profile, type Quality } from "../lib/api";
+  import { appIcon } from "../lib/appIcons.svelte";
   import { lengthLabel } from "../lib/format";
   import { store } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
@@ -40,7 +41,7 @@
     if (!s.profiles.some((p) => key(p.exe) === key(app.exe))) {
       save([
         ...s.profiles,
-        { exe: app.exe, name: app.name, ignore: false, bufferSeconds: null, fps: null, quality: null, recordMic: null },
+        { exe: app.exe, name: app.name, path: app.path || null, ignore: false, bufferSeconds: null, fps: null, quality: null, recordMic: null },
       ]);
     }
     open = key(app.exe);
@@ -59,15 +60,32 @@
     return parts.length ? parts.join(" · ") : "Recorded with the settings above";
   }
 
+  /** Where a program lives, for its icon: as added, else from a running window or a recorded track. */
+  function pathOf(p: Profile): string | null {
+    if (p.path) return p.path;
+    const running = apps.find((a) => key(a.exe) === key(p.exe));
+    if (running?.path) return running.path;
+    const tail = "\\" + key(p.exe);
+    for (const item of store.items) {
+      for (const t of item.tracks) if (t.exe && key(t.exe).endsWith(tail)) return t.exe;
+    }
+    return null;
+  }
+
   const free = $derived(apps.filter((a) => !s.profiles.some((p) => key(p.exe) === key(a.exe))));
 </script>
 
 <div class="panel group">
   {#each s.profiles as p (key(p.exe))}
     {@const expanded = open === key(p.exe)}
+    {@const icon = appIcon(pathOf(p))}
     <div class="profile">
       <button type="button" class="head" aria-expanded={expanded} onclick={() => (open = expanded ? null : key(p.exe))}>
-        <span class="initial" class:off={p.ignore} aria-hidden="true">{p.name.slice(0, 1).toUpperCase()}</span>
+        {#if icon}
+          <span class="initial icon" class:off={p.ignore} aria-hidden="true"><img src={icon} alt="" /></span>
+        {:else}
+          <span class="initial" class:off={p.ignore} aria-hidden="true">{p.name.slice(0, 1).toUpperCase()}</span>
+        {/if}
         <span class="text"><span>{p.name}</span><span class="meta">{summary(p)}</span></span>
         <Icon name={expanded ? "chevronUp" : "chevronDown"} size={16} />
       </button>
@@ -194,6 +212,15 @@
   }
   .initial.off {
     color: var(--ghost);
+  }
+  .icon img {
+    width: 18px;
+    height: 18px;
+  }
+  /* A program Replix leaves alone looks switched off. */
+  .icon.off img {
+    filter: grayscale(1);
+    opacity: 0.5;
   }
   .body {
     display: flex;

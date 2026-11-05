@@ -84,6 +84,8 @@ export interface Hotkeys {
 export interface Profile {
   exe: string;
   name: string;
+  /** The program's full path, for its icon; profiles from before 0.1.8 have none. */
+  path?: string | null;
   ignore: boolean;
   bufferSeconds: number | null;
   fps: number | null;
@@ -165,6 +167,8 @@ export interface EditorData {
 
 export interface AppWindow {
   exe: string;
+  /** The full path, for the program's icon. */
+  path: string;
   name: string;
   title: string;
 }

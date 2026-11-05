@@ -3,6 +3,8 @@
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import type { ToastPosition } from "../lib/api";
+  import { onColor } from "../lib/format";
+  import { applyTheme } from "../lib/themes";
   import Mark from "./Mark.svelte";
 
   // How long a note stays up; hovering it stops the clock.
@@ -25,7 +27,11 @@
   }
 
   onMount(() => {
-    const unlisten = listen<{ title: string; detail: string; position: ToastPosition; accent: string; scale: number }>("toast", (e) => {
+    const unlisten = listen<{ title: string; detail: string; position: ToastPosition; accent: string; theme: string; scale: number }>("toast", (e) => {
+      // The note wears the colours the main window has; they may have changed since the last one.
+      applyTheme(e.payload.theme);
+      document.documentElement.style.setProperty("--accent", e.payload.accent);
+      document.documentElement.style.setProperty("--on-accent", onColor(e.payload.accent));
       scale = e.payload.scale ?? 1;
       title = e.payload.title;
       detail = e.payload.detail;
@@ -85,8 +91,8 @@
     padding: 10px 14px 10px 10px;
     border: 0;
     border-radius: 24px;
-    background: #33284a;
-    color: #f3eefc;
+    background: var(--raised);
+    color: var(--ink);
     font-family: var(--sans);
     font-size: 13px;
     text-align: left;
@@ -132,7 +138,7 @@
     height: 40px;
     flex: none;
     border-radius: 16px;
-    background: #0e0a14;
+    background: var(--black);
     display: grid;
     place-items: center;
   }
@@ -153,15 +159,15 @@
     display: grid;
     place-items: center;
     border-radius: 50%;
-    color: #a397b8;
+    color: var(--ghost);
     transition: color 140ms ease;
   }
   .toast:hover .close {
-    color: #f3eefc;
+    color: var(--ink);
   }
   .detail {
     font-size: 12px;
-    color: #c4bad6;
+    color: var(--muted);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

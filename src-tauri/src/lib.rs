@@ -71,6 +71,8 @@ struct ToastShown {
     detail: String,
     position: ToastPosition,
     accent: String,
+    /// Background colours, as in the main window.
+    theme: String,
     scale: f64,
 }
 
@@ -86,15 +88,15 @@ pub fn toast(app: &AppHandle, title: &str, detail: &str) {
 
 fn corner_toast(app: &AppHandle, title: &str, detail: &str) {
     let state = app.state::<AppState>();
-    let (show, position, accent, scale) = {
+    let (show, position, accent, theme, scale) = {
         let s = state.settings.lock();
-        (s.show_toast, s.toast_position, s.accent.clone(), s.toast_size.scale())
+        (s.show_toast, s.toast_position, s.accent.clone(), s.theme.clone(), s.toast_size.scale())
     };
     if !show {
         return;
     }
     let Some(window) = app.get_webview_window("toast") else { return };
-    let _ = window.emit("toast", ToastShown { title: title.into(), detail: detail.into(), position, accent, scale });
+    let _ = window.emit("toast", ToastShown { title: title.into(), detail: detail.into(), position, accent, theme, scale });
     let _ = window.set_size(tauri::LogicalSize::new(TOAST_SIZE.0 * scale, TOAST_SIZE.1 * scale));
     if let Some((x, y, w, h)) = win::foreground_work_area() {
         let dpi = window.scale_factor().unwrap_or(1.0);
@@ -254,6 +256,8 @@ fn get_encoders(state: State<AppState>) -> Vec<EncoderOption> {
 #[serde(rename_all = "camelCase")]
 struct AppWindow {
     exe: String,
+    /// The full path, for the program's icon.
+    path: String,
     name: String,
     title: String,
 }
@@ -266,7 +270,7 @@ async fn list_apps() -> Vec<AppWindow> {
         win::list_windows()
             .into_iter()
             .filter(|w| seen.insert(w.exe.to_lowercase()))
-            .map(|w| AppWindow { name: win::app_name(&w.exe_path), exe: w.exe, title: w.title })
+            .map(|w| AppWindow { name: win::app_name(&w.exe_path), exe: w.exe, path: w.exe_path, title: w.title })
             .collect()
     })
     .await

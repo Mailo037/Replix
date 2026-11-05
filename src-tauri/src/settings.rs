@@ -125,6 +125,9 @@ pub struct Profile {
     pub exe: String,
     /// Shown in the settings.
     pub name: String,
+    /// The program's full path, for its icon; learned when it is added.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     /// Never record this program, even when it looks like a game.
     pub ignore: bool,
     pub buffer_seconds: Option<u32>,
