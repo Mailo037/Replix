@@ -360,7 +360,8 @@ h3 {
 .resting .onboarding *::before,
 .resting .onboarding *::after,
 .resting .uploading,
-.resting .pulse {
+.resting .pulse,
+.resting .pending-loop {
   animation-play-state: paused !important;
 }
 

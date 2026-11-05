@@ -60,6 +60,20 @@ export interface Item {
   unread: boolean;
 }
 
+/** A clip or session still being written; the library shows a placeholder for it. */
+export interface PendingSave {
+  id: string;
+  kind: Kind;
+  title: string;
+  game: string;
+  created: number;
+  duration: number;
+  /** A picture from the buffer, once made. */
+  preview: string | null;
+  /** The library item it became, until the library lists it. */
+  item: string | null;
+}
+
 export interface Hotkeys {
   clip: string;
   screenshot: string;

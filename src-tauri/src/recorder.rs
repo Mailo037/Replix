@@ -154,6 +154,111 @@ struct PendingClip {
     pressed: u64,
     deadline: Instant,
     pin: Arc<u64>,
+    placeholder: Placeholder,
+}
+
+/// A save on its way to the library. The library shows a tile for it at once, with a
+/// picture from the buffer, and swaps in the real clip once it is written.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveStarted {
+    id: String,
+    kind: Kind,
+    title: String,
+    game: String,
+    created: u64,
+    duration: f64,
+}
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SaveFinished {
+    id: String,
+    /// The library item it became; none when the save failed.
+    item: Option<String>,
+}
+
+struct Placeholder {
+    app: AppHandle,
+    id: String,
+    preview: PathBuf,
+    /// Set once the save is over; the preview is then moved or removed, and not made any more.
+    finished: Arc<Mutex<bool>>,
+}
+
+impl Placeholder {
+    /// Announces the save and makes its preview from `segment`, a piece of the buffer the
+    /// save holds on to. Like thumbnails, the preview waits while Replix is in the
+    /// background: then a game is likely running, and nobody is looking at the library.
+    fn announce(app: &AppHandle, kind: Kind, game: &str, duration: f64, segment: PathBuf) -> Self {
+        let id = format!("save-{}-{}", audio::now_ms(), SAVE_ID.fetch_add(1, Ordering::Relaxed));
+        let cache = app.path().app_cache_dir().unwrap_or_else(|_| std::env::temp_dir());
+        let preview = cache.join("previews").join(format!("{id}.jpg"));
+        let finished = Arc::new(Mutex::new(false));
+        let started = SaveStarted {
+            id: id.clone(),
+            kind,
+            title: library::default_title(kind, game),
+            game: game.to_string(),
+            created: audio::now_ms(),
+            duration,
+        };
+        let _ = app.emit("save-started", started);
+        let (app2, id2, out, done) = (app.clone(), id.clone(), preview.clone(), finished.clone());
+        std::thread::spawn(move || {
+            let over = || *done.lock();
+            while !over() && !(crate::page_visible() && crate::app_focused()) {
+                std::thread::sleep(Duration::from_millis(300));
+            }
+            if over() {
+                return;
+            }
+            let go = || !over() && crate::page_visible();
+            if let Err(e) = library::make_thumb(&segment, Kind::Clip, 0.0, &out, &go) {
+                log::debug!("no preview for a save in progress: {e:#}");
+                return;
+            }
+            let done = done.lock();
+            if *done {
+                let _ = std::fs::remove_file(&out);
+            } else {
+                let _ = app2.emit("save-preview", (id2, out.to_string_lossy().into_owned()));
+            }
+        });
+        Self { app: app.clone(), id, preview, finished }
+    }
+
+    /// Ends the placeholder. A saved clip takes over its preview as its thumbnail, so its
+    /// tile has a picture right away.
+    fn finish(&self, saved: Option<&Path>) {
+        let mut finished = self.finished.lock();
+        if *finished {
+            return;
+        }
+        *finished = true;
+        let item = saved.map(library::id_for);
+        let mut moved = false;
+        if let Some(id) = &item {
+            if self.preview.exists() {
+                let dir = self.preview.parent().and_then(Path::parent).map(|c| c.join("thumbs"));
+                if let Some(dir) = dir {
+                    let _ = std::fs::create_dir_all(&dir);
+                    let thumb = dir.join(format!("{id}.jpg"));
+                    moved = thumb.exists() || std::fs::rename(&self.preview, &thumb).is_ok();
+                }
+            }
+        }
+        if !moved {
+            let _ = std::fs::remove_file(&self.preview);
+        }
+        let _ = self.app.emit("save-finished", SaveFinished { id: self.id.clone(), item });
+    }
+}
+
+impl Drop for Placeholder {
+    fn drop(&mut self) {
+        self.finish(None);
+    }
 }
 
 impl Pipeline {
@@ -623,11 +728,13 @@ impl Worker {
             crate::toast(&self.app, "Nothing to save yet", "The buffer is still filling up.");
             return;
         };
+        let placeholder = Placeholder::announce(&self.app, Kind::Clip, &p.target.label(), seconds, p.dir.0.join(segment_name(first)));
         let pending = PendingClip {
             end,
             pressed: audio::now_ms(),
             deadline: Instant::now() + Duration::from_secs_f64(SEGMENT_SECONDS + 4.0),
             pin: p.pin(first),
+            placeholder,
         };
         p.pending.push(pending);
         crate::toast(&self.app, "Saving clip…", &p.target.label());
@@ -651,6 +758,7 @@ impl Worker {
                 p.segments.iter().filter(|s| s.index >= *clip.pin && s.end > start && s.start < end).collect();
             let (Some(first), Some(last)) = (picked.first(), picked.last()) else {
                 crate::toast(app, "Nothing to save yet", "The buffer is still filling up.");
+                clip.placeholder.finish(None);
                 continue;
             };
             let skip = (start - first.start).max(0.0);
@@ -669,6 +777,7 @@ impl Worker {
                 clips_dir: settings.clips_dir.clone(),
                 limit_gb: settings.storage_limit_gb,
                 _pin: clip.pin,
+                placeholder: clip.placeholder,
             };
             job.start();
         }
@@ -709,19 +818,22 @@ impl Worker {
             return;
         };
         let tracks = p.router.tracks_between(since, audio::now_ms());
+        let name = p.target.label();
+        let placeholder = Placeholder::announce(app, Kind::Session, &name, duration, p.dir.0.join(segment_name(first)));
         let job = SaveJob {
             app: app.clone(),
             dir: p.dir.clone(),
             segments: picked,
             tracks,
             kind: Kind::Session,
-            name: p.target.label(),
+            name,
             trim_to: None,
             duration,
             fps: p.settings.fps,
             clips_dir: settings.clips_dir.clone(),
             limit_gb: settings.storage_limit_gb,
             _pin: p.pin(first),
+            placeholder,
         };
         crate::toast(app, "Saving session…", &job.name);
         job.start();
@@ -790,6 +902,7 @@ struct SaveJob {
     clips_dir: PathBuf,
     limit_gb: u32,
     _pin: Arc<u64>,
+    placeholder: Placeholder,
 }
 
 impl SaveJob {
@@ -800,8 +913,9 @@ impl SaveJob {
     fn run(self) {
         let result = self.write();
         drop(self._pin);
+        self.placeholder.finish(result.as_ref().ok().map(|(_, out)| out.as_path()));
         match result {
-            Ok(meta) => {
+            Ok((meta, _)) => {
                 let what = if self.kind == Kind::Session { "Session saved" } else { "Clip saved" };
                 crate::toast(&self.app, what, &format!("{} · {}", self.name, library::format_duration(meta.duration)));
                 let _ = self.app.emit("library-changed", ());
@@ -820,7 +934,7 @@ impl SaveJob {
         }
     }
 
-    fn write(&self) -> Result<Meta> {
+    fn write(&self) -> Result<(Meta, PathBuf)> {
         let id = SAVE_ID.fetch_add(1, Ordering::Relaxed);
         let stamp = format!("{}-{}-{id}", audio::now_ms(), std::process::id());
         let list = self.dir.0.join(format!("save-{stamp}.txt"));
@@ -862,7 +976,7 @@ impl SaveJob {
                 library::remove_meta(&out);
                 return Err(e).context("Could not move the recording into the library");
             }
-            Ok(meta)
+            Ok((meta, out))
         })();
         for path in [list, joined, trimmed] {
             let _ = std::fs::remove_file(path);

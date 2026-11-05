@@ -1,10 +1,11 @@
 <script lang="ts">
-  import { api, type Item } from "../lib/api";
+  import { api, type Item, type PendingSave } from "../lib/api";
   import { day, size } from "../lib/format";
   import { store, type Filter } from "../lib/store.svelte";
   import { recycle, undo } from "../lib/undo";
   import { tip } from "../lib/tooltip";
   import ClipTile from "./ClipTile.svelte";
+  import PendingTile from "./PendingTile.svelte";
   import Icon from "./Icon.svelte";
   import ImageViewer from "./ImageViewer.svelte";
   import Mark from "./Mark.svelte";
@@ -40,13 +41,32 @@
     });
   });
 
+  /** Saves still being written that belong in this list. */
+  const waiting = $derived.by(() => {
+    const q = query.trim().toLowerCase();
+    return store.placeholders.filter((p) => {
+      if (game && p.game !== game) return false;
+      if (filter === "clips" && p.kind !== "clip") return false;
+      if (filter === "sessions" && p.kind !== "session") return false;
+      if (filter === "screenshots" || filter === "drafts" || filter === "favorites") return false;
+      return !q || p.title.toLowerCase().includes(q) || p.game.toLowerCase().includes(q);
+    });
+  });
+
   const groups = $derived.by(() => {
-    const out: { label: string; items: Item[] }[] = [];
+    const out: { label: string; pending: PendingSave[]; items: Item[] }[] = [];
+    // Saves in progress are the newest, so they lead their day.
+    for (const save of waiting) {
+      const label = day(save.created);
+      const last = out[out.length - 1];
+      if (last?.label === label) last.pending.push(save);
+      else out.push({ label, pending: [save], items: [] });
+    }
     for (const item of visible) {
       const label = day(item.created);
       const last = out[out.length - 1];
       if (last?.label === label) last.items.push(item);
-      else out.push({ label, items: [item] });
+      else out.push({ label, pending: [], items: [item] });
     }
     return out;
   });
@@ -187,7 +207,7 @@
   </header>
 
   <div class="scroll body">
-    {#if store.loaded && visible.length === 0}
+    {#if store.loaded && visible.length === 0 && waiting.length === 0}
       <div class="empty">
         <span class="empty-mark"><Mark size={64} /></span>
         {#if store.items.length === 0}
@@ -213,9 +233,12 @@
       <section class="group" aria-label={group.label}>
         <div class="group-head">
           <h2>{group.label}</h2>
-          <span class="ring mono">{group.items.length}</span>
+          <span class="ring mono">{group.items.length + group.pending.length}</span>
         </div>
         <div class="grid">
+          {#each group.pending as save (save.id)}
+            <PendingTile {save} />
+          {/each}
           {#each group.items as item (item.id)}
             <ClipTile {item} onopen={open} onselect={select} {selecting} selected={selectedIds.has(item.id)} />
           {/each}

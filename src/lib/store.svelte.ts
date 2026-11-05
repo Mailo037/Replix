@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { api, type Item, type Settings, type Status } from "./api";
+import { api, type Item, type PendingSave, type Settings, type Status } from "./api";
 import { onColor } from "./format";
 import { applyTheme } from "./themes";
 import { syncEditorRound } from "./editorRound.svelte";
@@ -36,6 +36,13 @@ class Store {
   settings = $state<Settings | null>(null);
   status = $state<Status>({ state: "starting", target: null, sessionSince: null, encoder: null, error: null, clipSeconds: null });
   items = $state<Item[]>([]);
+  /** Saves on their way to the library. */
+  pending = $state<PendingSave[]>([]);
+  /** The saves not in the library yet, newest first: shown as placeholders. */
+  placeholders = $derived.by(() => {
+    const ids = new Set(this.items.map((i) => i.id));
+    return this.pending.filter((p) => !p.item || !ids.has(p.item)).sort((a, b) => b.created - a.created);
+  });
   loaded = $state(false);
   view = $state<View>({ name: "library", filter: "all", game: null });
   notice = $state<Notice | null>(null);
@@ -134,6 +141,23 @@ class Store {
       const item = this.items.find((i) => i.id === id);
       if (item) item.thumb = path;
     });
+    await listen<Omit<PendingSave, "preview" | "item">>("save-started", (e) => {
+      this.pending = [...this.pending, { ...e.payload, preview: null, item: null }];
+    });
+    await listen<[string, string]>("save-preview", (e) => {
+      const [id, path] = e.payload;
+      const save = this.pending.find((p) => p.id === id);
+      if (save) save.preview = path;
+    });
+    await listen<{ id: string; item: string | null }>("save-finished", (e) => {
+      const { id, item } = e.payload;
+      // A saved clip keeps its placeholder until the library lists it; a failed one goes.
+      if (!item) this.pending = this.pending.filter((p) => p.id !== id);
+      else {
+        const save = this.pending.find((p) => p.id === id);
+        if (save) save.item = item;
+      }
+    });
     await listen<{ title: string; detail: string }>("notice", (e) => {
       // The corner toast covers the game; inside the app a quieter note is enough.
       if (document.hasFocus()) this.notify(e.payload.title, e.payload.detail);
@@ -208,6 +232,11 @@ class Store {
             }
           } else this.items = this.reconcile(items);
         } while (this.refreshAgain);
+        // Placeholders whose clip the library now lists are done.
+        const ids = new Set(this.items.map((i) => i.id));
+        if (this.pending.some((p) => p.item && ids.has(p.item))) {
+          this.pending = this.pending.filter((p) => !p.item || !ids.has(p.item));
+        }
       } finally {
         this.loaded = true;
         this.refreshing = null;
