@@ -4,6 +4,7 @@
   import { tip } from "../lib/tooltip";
   import Icon from "./Icon.svelte";
   import { store } from "../lib/store.svelte";
+  import { t } from "../lib/i18n.svelte";
 
   // Screenshots full size: wheel or double-click to zoom, drag to look around, arrows for the next one.
   let { items, index = $bindable(), onclose }: { items: Item[]; index: number; onclose: () => void } = $props();
@@ -122,7 +123,7 @@
 
 <svelte:window onkeydown={onKey} onresize={() => (measure(), clamp())} />
 
-<div class="viewer" role="dialog" aria-label={item?.title ?? "Screenshot"}>
+<div class="viewer" role="dialog" aria-label={item?.title ?? t("Screenshot")}>
   <!-- svelte-ignore a11y_click_events_have_key_events, a11y_no_static_element_interactions -->
   <div
     bind:this={stage}
@@ -149,12 +150,12 @@
       {/key}
     {/if}
     {#if index > 0}
-      <button type="button" class="nav prev" aria-label="Previous" use:tip={"Previous · ←"} onclick={() => go(-1)}>
+      <button type="button" class="nav prev" aria-label={t("Previous")} use:tip={t("Previous · ←")} onclick={() => go(-1)}>
         <Icon name="back" />
       </button>
     {/if}
     {#if index < items.length - 1}
-      <button type="button" class="nav next" aria-label="Next" use:tip={"Next · →"} onclick={() => go(1)}>
+      <button type="button" class="nav next" aria-label={t("Next")} use:tip={t("Next · →")} onclick={() => go(1)}>
         <Icon name="back" />
       </button>
     {/if}
@@ -164,23 +165,23 @@
     <div class="bar">
       <span class="info">
         <span class="name">{item.title}</span>
-        <span class="mono meta">{item.width}×{item.height}{items.length > 1 ? ` · ${index + 1} of ${items.length}` : ""}</span>
+        <span class="mono meta">{item.width}×{item.height}{items.length > 1 ? t(" · {n} of {total}", { n: index + 1, total: items.length }) : ""}</span>
       </span>
-      <div class="zoom" role="group" aria-label="Zoom">
-        <button type="button" aria-label="Zoom out" use:tip={"Zoom out · −"} disabled={scale <= 1} onclick={() => zoomTo(scale / 1.25)}>
+      <div class="zoom" role="group" aria-label={t("Zoom")}>
+        <button type="button" aria-label={t("Zoom out")} use:tip={t("Zoom out · −")} disabled={scale <= 1} onclick={() => zoomTo(scale / 1.25)}>
           <span class="minus"></span>
         </button>
-        <button type="button" class="pct mono" use:tip={scale > 1 ? "Fit to window · 0" : "Real size"} onclick={() => (scale > 1 ? zoomTo(1) : zoomTo(1 / fitRatio))}>
+        <button type="button" class="pct mono" use:tip={scale > 1 ? t("Fit to window · 0") : t("Real size")} onclick={() => (scale > 1 ? zoomTo(1) : zoomTo(1 / fitRatio))}>
           {percent}%
         </button>
-        <button type="button" aria-label="Zoom in" use:tip={"Zoom in · +"} disabled={scale >= MAX} onclick={() => zoomTo(scale * 1.25)}>
+        <button type="button" aria-label={t("Zoom in")} use:tip={t("Zoom in · +")} disabled={scale >= MAX} onclick={() => zoomTo(scale * 1.25)}>
           <Icon name="plus" size={16} />
         </button>
       </div>
       <div class="actions">
-        <button type="button" class="btn small" onclick={() => share.copy(item.path)}><Icon name="copy" size={16} />Copy</button>
-        <button type="button" class="btn small" onclick={() => api.revealItem(item.id)}><Icon name="folder" size={16} />Show in folder</button>
-        <button type="button" class="icon-btn" aria-label="Close" use:tip={"Close · Esc"} onclick={onclose}><Icon name="close" size={16} /></button>
+        <button type="button" class="btn small" onclick={() => share.copy(item.path)}><Icon name="copy" size={16} />{t("Copy")}</button>
+        <button type="button" class="btn small" onclick={() => api.revealItem(item.id)}><Icon name="folder" size={16} />{t("Show in folder")}</button>
+        <button type="button" class="icon-btn" aria-label={t("Close")} use:tip={t("Close · Esc")} onclick={onclose}><Icon name="close" size={16} /></button>
       </div>
     </div>
   {/if}

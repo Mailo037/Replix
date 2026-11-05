@@ -2,6 +2,7 @@
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import { api, type FfmpegSetup } from "../lib/api";
+  import { t } from "../lib/i18n.svelte";
 
   // FFmpeg is not in the installer: on first start Replix downloads it, and records once it is there.
   let setup = $state<FfmpegSetup>({ state: "ready" });
@@ -23,23 +24,23 @@
   <div class="setup" role="status" aria-live="polite">
     <span class="text">
       {#if setup.state === "failed"}
-        <strong>FFmpeg is missing</strong>
+        <strong>{t("FFmpeg is missing")}</strong>
         <span class="error" title={setup.error}>{setup.error}</span>
       {:else}
-        <strong>Getting FFmpeg ready</strong>
+        <strong>{t("Getting FFmpeg ready")}</strong>
         <span>
           {#if setup.state === "downloading"}
-            Downloading, {mb(setup.done)} of {mb(setup.total)} MB. Recording starts when it is done.
+            {t("Downloading, {done} of {total} MB. Recording starts when it is done.", { done: mb(setup.done), total: mb(setup.total) })}
           {:else if setup.state === "unpacking"}
-            Unpacking…
+            {t("Unpacking…")}
           {:else}
-            Checking…
+            {t("Checking…")}
           {/if}
         </span>
       {/if}
     </span>
     {#if setup.state === "failed"}
-      <button type="button" class="btn small primary" onclick={() => api.retryFfmpeg()}>Try again</button>
+      <button type="button" class="btn small primary" onclick={() => api.retryFfmpeg()}>{t("Try again")}</button>
     {:else}
       <span class="bar" aria-hidden="true"><span class="fill" style:width="{Math.round(share * 100)}%"></span></span>
     {/if}

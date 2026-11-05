@@ -39,6 +39,8 @@ pub struct EditorData {
     pub tracks: Vec<EditorTrack>,
     pub filmstrip: Option<String>,
     pub draft: Option<Draft>,
+    /// Moments marked while recording or here, in seconds.
+    pub markers: Vec<f64>,
 }
 
 pub const FILMSTRIP_FRAMES: u32 = 14;
@@ -198,6 +200,7 @@ pub fn prepare(
         tracks,
         filmstrip: strip.exists().then(|| strip.to_string_lossy().into_owned()),
         draft: meta.draft.clone(),
+        markers: meta.markers.clone(),
     })
 }
 
@@ -210,12 +213,16 @@ pub enum Preset {
     Discord,
     /// A silent, looping GIF.
     Gif,
+    /// Full quality as MKV with every track on its own, for video editors; the mix of
+    /// all of them comes first, for players that play only one.
+    Tracks,
 }
 
 impl Preset {
     pub fn extension(self) -> &'static str {
         match self {
             Preset::Gif => "gif",
+            Preset::Tracks => "mkv",
             _ => "mp4",
         }
     }
@@ -279,9 +286,11 @@ fn kept(request: &ExportRequest) -> Vec<(f64, f64)> {
     parts
 }
 
+/// `names` are the clip's track names, for the separate tracks of an MKV.
 pub fn export(
     source: &Path,
     request: &ExportRequest,
+    names: &[String],
     encoder: &Encoder,
     out: &Path,
     on_progress: impl Fn(f64),
@@ -291,7 +300,7 @@ pub fn export(
     let span = (request.trim_end - start).max(0.1);
     let parts = kept(request);
     if parts.is_empty() {
-        bail!("Nothing is left after the cuts.");
+        bail!(crate::i18n::tr("Nothing is left after the cuts."));
     }
     let length: f64 = parts.iter().map(|(a, b)| b - a).sum();
     // With cuts, keep only the frames and samples inside the parts and close the gaps.
@@ -338,8 +347,9 @@ pub fn export(
             .collect()
     };
 
+    let separate = request.preset == Preset::Tracks;
     let (video_kbps, audio_kbps) = match request.preset {
-        Preset::Original | Preset::Gif => (16_000, 192),
+        Preset::Original | Preset::Gif | Preset::Tracks => (16_000, 192),
         Preset::Discord => {
             let audio = if enabled.is_empty() { 0.0 } else { 96.0 };
             let total_kbps = DISCORD_BYTES * 8.0 * 0.9 / 1000.0 / length;
@@ -361,8 +371,8 @@ pub fn export(
         ));
     }
     match (request.preset, request.vertical) {
-        (Preset::Original, true) => video.push("scale=1080:1920:flags=lanczos".into()),
-        (Preset::Original, false) => {}
+        (Preset::Original | Preset::Tracks, true) => video.push("scale=1080:1920:flags=lanczos".into()),
+        (Preset::Original | Preset::Tracks, false) => {}
         (Preset::Discord, true) => video.push("scale=720:1280".into()),
         (Preset::Discord, false) => video.push("scale=-2:'min(720,ih)'".into()),
         (Preset::Gif, true) => video.push("fps=15,scale=360:640:flags=lanczos".into()),
@@ -387,13 +397,24 @@ pub fn export(
         video.push(format!("format={}", encoder.export_pix_fmt));
         filters.push(format!("[0:v]{}[v]", video.join(",")));
     }
+    // Cuts close the gaps in the sound too.
+    let close = |from: &str, to: &str| match &pick {
+        Some(p) => format!("[{from}]aselect='{p}',asetpts=N/SR/TB[{to}]"),
+        None => format!("[{from}]anull[{to}]"),
+    };
     if !enabled.is_empty() {
         let mut inputs = String::new();
         for (k, (i, volume, window)) in enabled.iter().enumerate() {
             let silence = window
                 .map(|(a, b)| format!(",volume=0:enable='not(between(t,{a:.3},{b:.3}))'"))
                 .unwrap_or_default();
-            filters.push(format!("[0:a:{i}]volume={volume:.3}{silence}[a{k}]"));
+            if separate {
+                // One copy for the mix, one for the track's own stream.
+                filters.push(format!("[0:a:{i}]volume={volume:.3}{silence},asplit[a{k}][s{k}]"));
+                filters.push(close(&format!("s{k}"), &format!("t{k}")));
+            } else {
+                filters.push(format!("[0:a:{i}]volume={volume:.3}{silence}[a{k}]"));
+            }
             inputs.push_str(&format!("[a{k}]"));
         }
         if enabled.len() == 1 {
@@ -401,16 +422,21 @@ pub fn export(
         } else {
             filters.push(format!("{inputs}amix=inputs={}:normalize=0:dropout_transition=0[mix]", enabled.len()));
         }
-        match &pick {
-            Some(p) => filters.push(format!("[mix]aselect='{p}',asetpts=N/SR/TB[aout]")),
-            None => filters.push("[mix]anull[aout]".into()),
-        }
+        filters.push(close("mix", "aout"));
     }
     args.extend(["-filter_complex".into(), filters.join(";"), "-map".into(), "[v]".into()]);
     if enabled.is_empty() {
         args.push("-an".into());
     } else {
-        args.extend(["-map".into(), "[aout]".into(), "-c:a".into(), "aac".into(), "-b:a".into(), format!("{audio_kbps}k")]);
+        args.extend(["-map".into(), "[aout]".into()]);
+        if separate {
+            args.extend(["-metadata:s:a:0".into(), format!("title={}", crate::i18n::tr("Mix"))]);
+            for (k, (i, _, _)) in enabled.iter().enumerate() {
+                let name = names.get(*i).cloned().unwrap_or_else(|| format!("Track {}", i + 1));
+                args.extend(["-map".into(), format!("[t{k}]"), format!("-metadata:s:a:{}", k + 1), format!("title={name}")]);
+            }
+        }
+        args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), format!("{audio_kbps}k")]);
     }
     if gif {
         args.extend(["-loop".into(), "0".into()]);
@@ -420,7 +446,9 @@ pub fn export(
             // The software encoder would otherwise take every core.
             args.extend(["-threads".into(), export_threads().to_string()]);
         }
-        args.extend(["-movflags".into(), "+faststart".into()]);
+        if !separate {
+            args.extend(["-movflags".into(), "+faststart".into()]);
+        }
     }
     args.extend(["-y".into(), ffmpeg::path_arg(out)]);
 
@@ -561,7 +589,7 @@ fn watch_export(
         // Checked on every pass: FFmpeg repeats its last time twice a second while stuck.
         if watch.stuck(std::time::Instant::now()) {
             drop(child);
-            bail!("FFmpeg stopped making progress");
+            bail!(crate::i18n::tr("FFmpeg stopped making progress"));
         }
     }
 }
@@ -753,6 +781,47 @@ fn split_tracks(path: &Path, audio: &[PathBuf], need: u64) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The MKV for video editors has the mix first, then every track that is heard on its
+    /// own with its name, each as long as the cut clip; a muted track is left out.
+    #[test]
+    fn separate_tracks_export_keeps_each_track() {
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("replix-tracks-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = dir.join("clip.mp4");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=f=440:r=48000"])
+            .args(["-f", "lavfi", "-i", "sine=f=880:r=48000", "-f", "lavfi", "-i", "sine=f=220:r=48000", "-t", "4"])
+            .args(["-map", "0:v", "-map", "1:a", "-map", "2:a", "-map", "3:a", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y"])
+            .arg(&clip)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let track = |enabled| TrackEdit { enabled, volume: 1.0, start: None, end: None, removed: false };
+        let request = ExportRequest {
+            trim_start: 0.5,
+            trim_end: 3.5,
+            tracks: vec![track(true), track(false), track(true)],
+            preset: Preset::Tracks,
+            cuts: vec![[1.0, 2.0]],
+            vertical: false,
+            crop_x: 0.5,
+            crop_y: 0.5,
+            crop_scale: 1.0,
+            master_volume: 1.0,
+        };
+        let out = dir.join("out.mkv");
+        let names = ["Game".to_string(), "Discord".to_string(), "Microphone".to_string()];
+        export(&clip, &request, &names, crate::encoder::software(), &out, |_| {}, &|| false).unwrap();
+        let info = ffmpeg::probe(&out).unwrap();
+        assert_eq!(info.audio_titles, vec![Some("Mix".to_string()), Some("Game".to_string()), Some("Microphone".to_string())]);
+        assert!((info.duration - 2.0).abs() < 0.2, "the cut is closed: {}", info.duration);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// An export whose time stands still is stuck, however often that time is repeated or
     /// if nothing arrives at all; finishing up is given longer.

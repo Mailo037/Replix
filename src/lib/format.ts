@@ -1,3 +1,5 @@
+import { locale, t } from "./i18n.svelte";
+
 export function duration(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   const h = Math.floor(s / 3600);
@@ -18,14 +20,27 @@ function pad(n: number): string {
   return n.toString().padStart(2, "0");
 }
 
-const timeFormat = new Intl.DateTimeFormat("en-GB", { hour: "2-digit", minute: "2-digit" });
-const recentDayFormat = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long" });
-const dayFormat = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long" });
-const oldDayFormat = new Intl.DateTimeFormat("en-GB", { day: "numeric", month: "long", year: "numeric" });
-const recentOldDayFormat = new Intl.DateTimeFormat("en-GB", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
+const formats = new Map<string, Intl.DateTimeFormat>();
+
+/** A date format in the current language, made once per language. */
+function format(name: string, options: Intl.DateTimeFormatOptions): Intl.DateTimeFormat {
+  const key = `${locale()} ${name}`;
+  let f = formats.get(key);
+  if (!f) {
+    f = new Intl.DateTimeFormat(locale(), options);
+    formats.set(key, f);
+  }
+  return f;
+}
+
+const timeFormat = () => format("time", { hour: "2-digit", minute: "2-digit" });
+const recentDayFormat = () => format("recent", { weekday: "long", day: "numeric", month: "long" });
+const dayFormat = () => format("day", { day: "numeric", month: "long" });
+const oldDayFormat = () => format("old", { day: "numeric", month: "long", year: "numeric" });
+const recentOldDayFormat = () => format("recentOld", { weekday: "long", day: "numeric", month: "long", year: "numeric" });
 
 export function time(ms: number): string {
-  return timeFormat.format(ms);
+  return timeFormat().format(ms);
 }
 
 /** "Today", "Yesterday", or a date. */
@@ -34,12 +49,12 @@ export function day(ms: number): string {
   const today = new Date();
   const start = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
   const diff = Math.round((start(today) - start(d)) / 86_400_000);
-  if (diff === 0) return "Today";
-  if (diff === 1) return "Yesterday";
+  if (diff === 0) return t("Today");
+  if (diff === 1) return t("Yesterday");
   if (d.getFullYear() === today.getFullYear()) {
-    return (diff < 7 ? recentDayFormat : dayFormat).format(d);
+    return (diff < 7 ? recentDayFormat() : dayFormat()).format(d);
   }
-  return (diff < 7 ? recentOldDayFormat : oldDayFormat).format(d);
+  return (diff < 7 ? recentOldDayFormat() : oldDayFormat()).format(d);
 }
 
 export function size(bytes: number): string {
@@ -49,7 +64,7 @@ export function size(bytes: number): string {
 }
 
 export function lengthLabel(seconds: number): string {
-  return seconds < 60 ? `${seconds} s` : `${seconds / 60} min`;
+  return seconds < 60 ? t("{n} s", { n: seconds }) : t("{n} min", { n: seconds / 60 });
 }
 
 /** Readable text colour on top of an accent colour. */

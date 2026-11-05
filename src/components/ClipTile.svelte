@@ -9,6 +9,7 @@
   import { store } from "../lib/store.svelte";
   import { fit } from "../lib/place";
   import { tip } from "../lib/tooltip";
+  import { t } from "../lib/i18n.svelte";
   import Icon from "./Icon.svelte";
 
   let {
@@ -45,6 +46,8 @@
   const link = $derived(links.of(item.path));
   const label = $derived(item.kind === "screenshot" ? "PNG" : duration(item.duration));
 
+  const gameLabel = (name: string) => (name === "Desktop" ? t("Desktop") : name);
+
   // At the cursor on right-click, under the ⋯ button otherwise; always inside the window.
   async function showMenu(at: DOMRect, align: "start" | "end") {
     if (!menuMounted) {
@@ -77,7 +80,7 @@
     if (!renaming) return;
     renaming = false;
     const to = draftTitle.trim();
-    if (keep) await rename(item.id, item.title, to).catch((e) => store.notify("Couldn't rename", String(e)));
+    if (keep) await rename(item.id, item.title, to).catch((e) => store.notify(t("Couldn't rename"), String(e)));
   }
 
   async function act(what: "favorite" | "reveal" | "delete" | "copy" | "link" | "rename") {
@@ -117,7 +120,7 @@
     type="button"
     class="open"
     onclick={(e) => (selecting || e.ctrlKey || e.shiftKey ? onselect(item, e) : onopen(item))}
-    aria-label={selecting ? `Select ${item.title}` : `Open ${item.title}`}
+    aria-label={selecting ? t("Select {title}", { title: item.title }) : t("Open {title}", { title: item.title })}
     aria-pressed={selecting ? selected : undefined}
     draggable="true"
     ondragstart={drag}
@@ -125,7 +128,7 @@
     onpointerleave={() => clearTimeout(resting)}
   >
     {#if !selecting && badge}
-      <span class="sticker {badge}">{badge}</span>
+      <span class="sticker {badge}">{badge === "new" ? t("new") : badge === "draft" ? t("draft") : t("session")}</span>
     {/if}
     <span class="thumb">
       <!-- Hidden in the tray, the pictures are let go so WebView2 can free them. -->
@@ -136,10 +139,10 @@
         <span class="check" class:on={selected} aria-hidden="true">{#if selected}<Icon name="check" size={14} />{/if}</span>
       {/if}
       {#if item.favorite}
-        <span class="fav" aria-label="Favorite"><Icon name="star" size={14} filled /></span>
+        <span class="fav" aria-label={t("Favorite")}><Icon name="star" size={14} filled /></span>
       {/if}
       {#if uploading}
-        <span class="label badge top uploading" aria-label="Uploading"><Icon name="link" size={12} />Uploading…</span>
+        <span class="label badge top uploading" aria-label={t("Uploading")}><Icon name="link" size={12} />{t("Uploading…")}</span>
       {/if}
       <span class="label badge bottom">{label}</span>
     </span>
@@ -147,7 +150,7 @@
       <span class="title" class:hidden={renaming}>{item.title}</span>
       <span class="meta">
         {#if item.game}<span class="swatch" style:background={gameColor(item.game)} aria-hidden="true"></span>{/if}
-        {item.game && !item.title.includes(item.game) ? `${item.game} · ` : ""}{time(item.created)}
+        {item.game && !item.title.includes(item.game) ? `${gameLabel(item.game)} · ` : ""}{time(item.created)}
       </span>
     </span>
   </button>
@@ -155,7 +158,7 @@
   {#if renaming}
     <input
       class="rename"
-      aria-label="Name"
+      aria-label={t("Name")}
       spellcheck="false"
       bind:value={draftTitle}
       use:focusSelect
@@ -169,8 +172,8 @@
   {/if}
   {#if !selecting}
     <button type="button" class="more" bind:this={moreBtn}
-      aria-label="More actions"
-      use:tip={"More"}
+      aria-label={t("More actions")}
+      use:tip={t("More")}
       aria-expanded={menu}
       onpointerdown={() => (wasOpen = menu)}
       onclick={() => {
@@ -184,25 +187,25 @@
   {#if !selecting && menuMounted}
     <div class="menu" role="menu" popover="auto" bind:this={menuEl}>
       <button type="button" role="menuitem" onclick={() => act("copy")}>
-        <Icon name="copy" size={16} />Copy
+        <Icon name="copy" size={16} />{t("Copy")}
       </button>
       <button type="button" role="menuitem" disabled={uploading} onclick={() => act("link")}>
         {#if uploading}
-          <Icon name="link" size={16} />Uploading… <span class="hint pulse">●</span>
+          <Icon name="link" size={16} />{t("Uploading…")} <span class="hint pulse">●</span>
         {:else if link}
-          <Icon name="link" size={16} />Copy link <span class="hint">{remaining(link)} left</span>
+          <Icon name="link" size={16} />{t("Copy link")} <span class="hint">{t("{time} left", { time: remaining(link) })}</span>
         {:else}
-          <Icon name="link" size={16} />Get a link <span class="hint">72 h</span>
+          <Icon name="link" size={16} />{t("Get a link")} <span class="hint">{t("72 h")}</span>
         {/if}
       </button>
       <span class="sep" role="separator"></span>
       <button type="button" role="menuitem" onclick={() => act("favorite")}>
-        <Icon name="star" size={16} filled={item.favorite} />{item.favorite ? "Remove favorite" : "Add to favorites"}
+        <Icon name="star" size={16} filled={item.favorite} />{item.favorite ? t("Remove favorite") : t("Add to favorites")}
       </button>
-      <button type="button" role="menuitem" onclick={() => act("rename")}><Icon name="edit" size={16} />Rename</button>
-      <button type="button" role="menuitem" onclick={() => act("reveal")}><Icon name="folder" size={16} />Show in folder</button>
+      <button type="button" role="menuitem" onclick={() => act("rename")}><Icon name="edit" size={16} />{t("Rename")}</button>
+      <button type="button" role="menuitem" onclick={() => act("reveal")}><Icon name="folder" size={16} />{t("Show in folder")}</button>
       <button type="button" role="menuitem" class="danger" onclick={() => act("delete")}>
-        <Icon name="trash" size={16} />Move to recycle bin
+        <Icon name="trash" size={16} />{t("Move to recycle bin")}
       </button>
     </div>
   {/if}

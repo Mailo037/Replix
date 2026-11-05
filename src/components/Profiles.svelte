@@ -2,6 +2,7 @@
   import { api, type AppWindow, type Profile, type Quality } from "../lib/api";
   import { appIcon } from "../lib/appIcons.svelte";
   import { lengthLabel } from "../lib/format";
+  import { t } from "../lib/i18n.svelte";
   import { store } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
   import Segmented from "./Segmented.svelte";
@@ -15,7 +16,7 @@
 
   /** In the choices, "same as the general setting". */
   const SAME = "same";
-  const same = { value: SAME, label: "Default" } as const;
+  const same = $derived({ value: SAME, label: t("Default") } as const);
 
   const key = (exe: string) => exe.toLowerCase();
 
@@ -47,17 +48,17 @@
     open = key(app.exe);
   }
 
-  const qualityLabel: Record<Quality, string> = { low: "Low", medium: "Medium", high: "High" };
+  const qualityLabel: Record<Quality, string> = $derived({ low: t("Low"), medium: t("Medium"), high: t("High") });
 
   function summary(p: Profile): string {
-    if (p.ignore) return "Never recorded";
+    if (p.ignore) return t("Never recorded");
     const parts = [
       p.bufferSeconds !== null && lengthLabel(p.bufferSeconds),
-      p.fps !== null && `${p.fps} fps`,
-      p.quality !== null && `${qualityLabel[p.quality]} quality`,
-      p.recordMic !== null && (p.recordMic ? "Mic on" : "Mic off"),
+      p.fps !== null && t("{n} fps", { n: p.fps }),
+      p.quality !== null && t("{quality} quality", { quality: qualityLabel[p.quality] }),
+      p.recordMic !== null && (p.recordMic ? t("Mic on") : t("Mic off")),
     ].filter(Boolean);
-    return parts.length ? parts.join(" · ") : "Recorded with the settings above";
+    return parts.length ? parts.join(" · ") : t("Recorded with the settings above");
   }
 
   /** Where a program lives, for its icon: as added, else from a running window or a recorded track. */
@@ -67,7 +68,7 @@
     if (running?.path) return running.path;
     const tail = "\\" + key(p.exe);
     for (const item of store.items) {
-      for (const t of item.tracks) if (t.exe && key(t.exe).endsWith(tail)) return t.exe;
+      for (const track of item.tracks) if (track.exe && key(track.exe).endsWith(tail)) return track.exe;
     }
     return null;
   }
@@ -92,14 +93,14 @@
       {#if expanded}
         <div class="body">
           <div class="line">
-            <span class="text"><span>Record {p.name}</span><span class="meta">Off: Replix leaves it alone, even when it looks like a game</span></span>
-            <Switch checked={!p.ignore} label="Record {p.name}" onchange={(v) => change(p.exe, { ignore: !v })} />
+            <span class="text"><span>{t("Record {name}", { name: p.name })}</span><span class="meta">{t("Off: Replix leaves it alone, even when it looks like a game")}</span></span>
+            <Switch checked={!p.ignore} label={t("Record {name}", { name: p.name })} onchange={(v) => change(p.exe, { ignore: !v })} />
           </div>
           {#if !p.ignore}
             <div class="field">
-              <span class="label">Clip length</span>
+              <span class="label">{t("Clip length")}</span>
               <Segmented
-                label="Clip length"
+                label={t("Clip length")}
                 value={p.bufferSeconds ?? SAME}
                 options={[same, ...[15, 30, 60, 120, 300].map((n) => ({ value: n, label: lengthLabel(n) }))]}
                 onchange={(v) => change(p.exe, { bufferSeconds: v === SAME ? null : Number(v) })}
@@ -107,18 +108,18 @@
             </div>
             <div class="two">
               <div class="field">
-                <span class="label">Frame rate</span>
+                <span class="label">{t("Frame rate")}</span>
                 <Segmented
-                  label="Frame rate"
+                  label={t("Frame rate")}
                   value={p.fps ?? SAME}
                   options={[same, ...[30, 60, 120].map((n) => ({ value: n, label: `${n}` }))]}
                   onchange={(v) => change(p.exe, { fps: v === SAME ? null : Number(v) })}
                 />
               </div>
               <div class="field">
-                <span class="label">Quality</span>
+                <span class="label">{t("Quality")}</span>
                 <Segmented
-                  label="Quality"
+                  label={t("Quality")}
                   value={p.quality ?? SAME}
                   options={[same, ...(["low", "medium", "high"] as const).map((q) => ({ value: q, label: qualityLabel[q] }))]}
                   onchange={(v) => change(p.exe, { quality: v === SAME ? null : (v as Quality) })}
@@ -126,18 +127,18 @@
               </div>
             </div>
             <div class="field">
-              <span class="label">Microphone</span>
+              <span class="label">{t("Microphone")}</span>
               <Segmented
-                label="Microphone"
+                label={t("Microphone")}
                 value={p.recordMic === null ? SAME : p.recordMic ? "on" : "off"}
-                options={[same, { value: "on", label: "On" }, { value: "off", label: "Off" }]}
+                options={[same, { value: "on", label: t("On") }, { value: "off", label: t("Off") }]}
                 onchange={(v) => change(p.exe, { recordMic: v === SAME ? null : v === "on" })}
               />
             </div>
           {/if}
           <div class="foot">
             <span class="meta mono">{p.exe}</span>
-            <button type="button" class="btn ghost small" onclick={() => remove(p.exe)}>Remove</button>
+            <button type="button" class="btn ghost small" onclick={() => remove(p.exe)}>{t("Remove")}</button>
           </div>
         </div>
       {/if}
@@ -148,12 +149,12 @@
     <span class="plus" aria-hidden="true"><Icon name="plus" size={14} /></span>
     <div class="add-select">
       <Select
-        label="Add a game or app"
-        placeholder="Add a game or app…"
+        label={t("Add a game or app")}
+        placeholder={t("Add a game or app…")}
         value={null}
         options={free.length
           ? free.map((a) => ({ value: a.exe, label: a.name, hint: a.title !== a.name ? a.title : undefined }))
-          : [{ value: "", label: "No other open windows", hint: "Start the game first" }]}
+          : [{ value: "", label: t("No other open windows"), hint: t("Start the game first") }]}
         onopen={loadApps}
         onchange={(exe) => {
           const app = free.find((a) => a.exe === exe);
@@ -161,7 +162,7 @@
         }}
       />
     </div>
-    <span class="meta">Open the game or app first.</span>
+    <span class="meta">{t("Open the game or app first.")}</span>
   </div>
 </div>
 

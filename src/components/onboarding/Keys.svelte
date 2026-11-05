@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../../lib/i18n.svelte";
   // The hotkey gets pressed, and the moment pops out as a clip.
   let { keys = ["Alt", "C"], seconds = 30 }: { keys?: string[]; seconds?: number } = $props();
   const length = $derived(seconds < 60 ? `0:${String(seconds).padStart(2, "0")}` : `${seconds / 60}:00`);
@@ -7,7 +8,7 @@
 <div class="art" aria-hidden="true">
   <div class="toast">
     <span class="dot"></span>
-    <span><b>Clip saved</b><br /><small>Last {seconds < 60 ? `${seconds} s` : `${seconds / 60} min`}</small></span>
+    <span><b>{t("Clip saved")}</b><br /><small>{seconds < 60 ? t("Last {n} s", { n: seconds }) : t("Last {n} min", { n: seconds / 60 })}</small></span>
   </div>
   <div class="clip">
     <span class="thumb"><span class="len mono">{length}</span></span>

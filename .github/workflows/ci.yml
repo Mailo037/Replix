@@ -29,6 +29,9 @@ jobs:
       - name: Check UI
         run: npx svelte-check --threshold warning
 
+      - name: Check translations
+        run: node scripts/i18n.mjs --check
+
       - name: Build UI
         run: npm run build
 

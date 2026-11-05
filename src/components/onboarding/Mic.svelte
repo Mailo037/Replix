@@ -1,6 +1,7 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
+  import { t } from "../../lib/i18n.svelte";
 
   // A microphone whose rings follow your voice. Noise flecks vanish with suppression on.
   let { denoise = true, on = true }: { denoise?: boolean; on?: boolean } = $props();
@@ -31,7 +32,7 @@
     <path d="M5 26a15 15 0 0 0 30 0M20 41v10M12 53h16" fill="none" />
     <path class="grille" d="M15 13h10M15 19h10M15 25h10" fill="none" />
   </svg>
-  <span class="state mono">{on ? (denoise ? "[ clean voice ]" : "[ raw ]") : "[ mic off ]"}</span>
+  <span class="state mono">{on ? (denoise ? t("[ clean voice ]") : t("[ raw ]")) : t("[ mic off ]")}</span>
 </div>
 
 <style>

@@ -1,6 +1,8 @@
 // Upload links per file: which are on their way and which are ready to copy again.
 // Kept across restarts until they run out.
 
+import { t } from "./i18n.svelte";
+
 const KEY = "replix.links";
 const LIFETIME = 72 * 3600_000;
 
@@ -44,5 +46,5 @@ export const links = new Links();
 /** "71 h" or "40 min" left. */
 export function remaining(link: Link): string {
   const mins = Math.max(0, Math.round((link.until - Date.now()) / 60_000));
-  return mins >= 60 ? `${Math.floor(mins / 60)} h` : `${mins} min`;
+  return mins >= 60 ? t("{n} h", { n: Math.floor(mins / 60) }) : t("{n} min", { n: mins });
 }

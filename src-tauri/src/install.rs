@@ -202,12 +202,12 @@ fn download(report: &dyn Fn(Setup), archive: &Path) -> Result<()> {
     if !status.success() {
         let _ = std::fs::remove_file(archive);
         let detail = errors.trim().trim_start_matches("curl: ").to_string();
-        bail!("FFmpeg could not be downloaded. Check the internet connection. ({detail})");
+        bail!(crate::i18n::trf("FFmpeg could not be downloaded. Check the internet connection. ({detail})", &[("detail", &detail)]));
     }
     let size = std::fs::metadata(archive)?.len();
     if size != ARCHIVE_SIZE || hash_file(archive)? != ARCHIVE_SHA256 {
         let _ = std::fs::remove_file(archive);
-        bail!("the FFmpeg download was damaged");
+        bail!(crate::i18n::tr("The FFmpeg download was damaged."));
     }
     report(Setup::Downloading { done: size, total: ARCHIVE_SIZE });
     Ok(())

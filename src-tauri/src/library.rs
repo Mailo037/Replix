@@ -99,6 +99,12 @@ pub struct Meta {
     /// The file could not be read when the sidecar was written (a busy drive, say); a
     /// later scan reads it and fills in its length and size.
     pub unread: bool,
+    /// Moments marked while recording or in the editor, in seconds of the clip.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<f64>,
+    /// Brought in from elsewhere: the space limit leaves it alone, as it may be the only copy.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub imported: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -112,8 +118,8 @@ pub struct Item {
     pub meta: Meta,
 }
 
-const VIDEO: &[&str] = &["mp4", "mkv", "mov", "webm"];
-const IMAGE: &[&str] = &["png", "jpg", "jpeg", "webp"];
+pub const VIDEO: &[&str] = &["mp4", "mkv", "mov", "webm"];
+pub const IMAGE: &[&str] = &["png", "jpg", "jpeg", "webp"];
 /// Exports go here and stay out of the library.
 pub const EXPORTS: &str = "Exports";
 
@@ -568,7 +574,8 @@ pub fn format_duration(seconds: f64) -> String {
     }
 }
 
-/// Deletes the oldest clips until the folder fits the limit. Favourites and drafts stay.
+/// Deletes the oldest clips until the folder fits the limit. Favourites, drafts and
+/// imported videos stay.
 pub fn enforce_limit(root: &Path, limit_bytes: u64) -> bool {
     let all = media_files(root);
     // Runs after every save; the sizes alone usually show there is nothing to do. Every
@@ -585,13 +592,14 @@ pub fn enforce_limit(root: &Path, limit_bytes: u64) -> bool {
         if total <= limit_bytes {
             break;
         }
-        if meta.favorite || meta.draft.is_some() {
+        let kept = |m: &Meta| m.favorite || m.draft.is_some() || m.imported;
+        if kept(&meta) {
             continue;
         }
         // Someone may have starred it or saved a draft since it was read; look again while
         // no change can come in between.
         let _held = META_LOCK.lock();
-        if read_meta(&path).is_some_and(|m| m.favorite || m.draft.is_some()) {
+        if read_meta(&path).is_none_or(|m| kept(&m)) {
             continue;
         }
         if trash::delete(&path).is_ok() {
@@ -631,10 +639,67 @@ pub fn restore(paths: &[PathBuf]) -> anyhow::Result<usize> {
     }
     let back = paths.iter().filter(|p| newest.contains_key(*p)).count();
     if back == 0 {
-        anyhow::bail!("It's no longer in the recycle bin.");
+        anyhow::bail!(crate::i18n::tr("It's no longer in the recycle bin."));
     }
     trash::os_limited::restore_all(newest.into_values())?;
     Ok(back)
+}
+
+/// Markers sorted, inside the clip and not on top of each other.
+pub fn tidy_markers(mut markers: Vec<f64>, duration: f64) -> Vec<f64> {
+    markers.retain(|m| m.is_finite() && *m >= 0.0 && (duration <= 0.0 || *m <= duration));
+    markers.sort_by(f64::total_cmp);
+    markers.dedup_by(|a, b| (*a - *b).abs() < 0.25);
+    markers
+}
+
+/// Copies a video or picture from elsewhere into `<clips>/<folder>`, under its own name,
+/// and describes it. The original stays where it was. Copied under a hidden name first,
+/// so a scan never lists half a file.
+pub fn import(root: &Path, source: &Path, folder: &str) -> anyhow::Result<PathBuf> {
+    use anyhow::Context;
+    let ext = source.extension().and_then(|e| e.to_str()).map(str::to_lowercase).unwrap_or_default();
+    let kind = kind_of(source).with_context(|| crate::i18n::tr("Replix can't show this kind of file"))?;
+    if let (Ok(from), Ok(inside)) = (std::fs::canonicalize(source), std::fs::canonicalize(root)) {
+        if from.starts_with(inside) {
+            anyhow::bail!(crate::i18n::tr("It's already in your Replix folder"));
+        }
+    }
+    let modified = std::fs::metadata(source).with_context(|| crate::i18n::tr("The file can't be read"))?.modified().ok();
+    let dir = root.join(safe_name(folder));
+    std::fs::create_dir_all(&dir)?;
+    let stem = safe_name(&source.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+    let part = dir.join(format!(".replix-import-{}-{}.part", std::process::id(), TEMP_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+    std::fs::copy(source, &part).with_context(|| crate::i18n::tr("Copying failed"))?;
+    let _publish = META_LOCK.lock();
+    let mut out = dir.join(format!("{stem}.{ext}"));
+    let mut n = 2;
+    while out.exists() {
+        out = dir.join(format!("{stem} ({n}).{ext}"));
+        n += 1;
+    }
+    let info = ffmpeg::probe(&part);
+    let created = modified.and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64).unwrap_or(0);
+    let meta = Meta {
+        kind,
+        title: stem,
+        game: folder.to_string(),
+        created,
+        duration: info.as_ref().map_or(0.0, |i| i.duration),
+        width: info.as_ref().map_or(0, |i| i.width),
+        height: info.as_ref().map_or(0, |i| i.height),
+        tracks: info.as_ref().map(tracks_of).unwrap_or_default(),
+        unread: info.is_err(),
+        imported: true,
+        ..Default::default()
+    };
+    let _ = write_meta(&out, &meta);
+    if let Err(e) = std::fs::rename(&part, &out) {
+        let _ = std::fs::remove_file(&part);
+        remove_meta(&out);
+        return Err(e).with_context(|| crate::i18n::tr("Could not move the copy into the library"));
+    }
+    Ok(out)
 }
 
 /// id → path for everything the last scan found.
@@ -723,6 +788,37 @@ mod tests {
         assert_eq!((fixed.width, fixed.height, fixed.unread, fixed.title.as_str()), (320, 180, false, "Mine"));
         assert!(fixed.duration > 0.9);
         assert!(!read_meta(&clip).unwrap().unread);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn markers_are_kept_tidy() {
+        assert_eq!(tidy_markers(vec![5.0, -1.0, 2.0, 2.1, f64::NAN, 40.0], 30.0), vec![2.0, 5.0]);
+        assert_eq!(tidy_markers(vec![3.0], 0.0), vec![3.0], "a clip of unknown length keeps its markers");
+    }
+
+    /// An imported file is copied, not moved, gets a name of its own next to one already
+    /// there, is described, and is spared by the space limit.
+    #[test]
+    fn imports_are_copied_described_and_kept() {
+        let dir = temp_dir("import");
+        let elsewhere = dir.join("elsewhere");
+        let root = dir.join("clips");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        let shot = elsewhere.join("Ace.png");
+        std::fs::write(&shot, vec![0u8; 64]).unwrap();
+        let first = import(&root, &shot, "Imported").unwrap();
+        let second = import(&root, &shot, "Imported").unwrap();
+        assert!(shot.exists(), "the original stays");
+        assert_eq!(first.file_name().unwrap(), "Ace.png");
+        assert_eq!(second.file_name().unwrap(), "Ace (2).png");
+        let meta = read_meta(&first).unwrap();
+        assert_eq!((meta.kind, meta.title.as_str(), meta.game.as_str(), meta.imported), (Kind::Screenshot, "Ace", "Imported", true));
+        assert!(meta.created > 0);
+        assert!(import(&root, &first, "Imported").is_err(), "nothing from the library itself");
+        assert!(import(&root, &elsewhere.join("notes.txt"), "Imported").is_err());
+        assert!(!enforce_limit(&root, 1), "imported files are not removed for space");
+        assert!(first.exists() && second.exists());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

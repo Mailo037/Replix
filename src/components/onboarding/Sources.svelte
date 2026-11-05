@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Source } from "../../lib/api";
+  import { t } from "../../lib/i18n.svelte";
 
   // A monitor showing what gets recorded for each choice.
   let { source }: { source: Source } = $props();
@@ -28,7 +29,7 @@
     <span class="stand"></span>
   </div>
   <span class="tag mono">
-    {source === "game" ? "[ only the game ]" : source === "screen" ? "[ everything ]" : "[ just this app ]"}
+    {source === "game" ? t("[ only the game ]") : source === "screen" ? t("[ everything ]") : t("[ just this app ]")}
   </span>
 </div>
 

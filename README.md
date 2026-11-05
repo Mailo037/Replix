@@ -10,7 +10,7 @@
 
 Replix starts on its own when a game is in front and keeps a rolling buffer, from 15 seconds up to 10 minutes. Nothing to start, nothing to stop. When something great happens, press the key; the game keeps running and a small note in the corner tells you it's saved.
 
-Instead of games, Replix can also watch the whole screen or a single app. For longer stretches, start a session and it records until you press the key again.
+Instead of games, Replix can also watch the whole screen or a single app. For longer stretches, start a session and it records until you press the key again. Press <kbd>Alt</kbd> + <kbd>M</kbd> while recording to mark a moment; the editor shows every marker on the timeline and jumps from one to the next.
 
 ![Recording menu in the title bar](docs/images/status.png)
 
@@ -28,11 +28,17 @@ Trim the start and end, split the clip and take out the parts you don't need. Tu
 
 Switch to 9:16 for TikTok, Shorts and Reels, and drag the frame to where the action is. Pull a corner to zoom in.
 
+For a video editor, export **Separate tracks**: an MKV with the mix first and then every track on its own, with its name.
+
 ![Editor in 9:16 with the frame over the car](docs/images/vertical.png)
 
 ## Share it
 
 Copy a clip and paste it straight into Discord or a chat, drag it out of the library, or get a link that works for 72 hours. Screenshots open in a viewer you can zoom into.
+
+## Bring in what you already have
+
+Import videos and pictures with the button in the library, or drop files and folders onto the window. Replix copies them into an *Imported* folder and leaves the originals where they were.
 
 ## Set it up once
 
@@ -40,7 +46,11 @@ A short setup walks you through the clip length, what to record, the tracks and 
 
 ![Setup step explaining audio tracks](docs/images/setup-tracks.png)
 
-Every game can have its own clip length, frame rate, quality and microphone setting, or be left out entirely. A space limit moves the oldest clips to the recycle bin; favorites and drafts stay.
+Every game can have its own clip length, frame rate, quality and microphone setting, or be left out entirely. A space limit moves the oldest clips to the recycle bin; favorites, drafts and imported videos stay.
+
+Under **Privacy**, keep programs like a password manager or a private chat out of every recording: they never count as a game, their sound gets no track, and on the whole screen the picture turns black while one of their windows is open.
+
+Replix speaks English, Deutsch, Español, Français, Italiano, Português, Polski, Русский, Türkçe, 日本語, 한국어 and 简体中文, and follows the Windows language unless you pick one.
 
 ![Settings](docs/images/settings.png)
 
@@ -51,8 +61,9 @@ Every game can have its own clip length, frame rate, quality and microphone sett
 | <kbd>Alt</kbd> + <kbd>C</kbd> | Save the last moments as a clip |
 | <kbd>Alt</kbd> + <kbd>S</kbd> | Screenshot |
 | <kbd>Alt</kbd> + <kbd>X</kbd> | Start or stop a session |
+| <kbd>Alt</kbd> + <kbd>M</kbd> | Mark a moment |
 
-All three can be changed in Settings, which tells you right away if another program already uses a key. In the editor: <kbd>Space</kbd> plays, <kbd>S</kbd> splits, <kbd>Del</kbd> removes a part, <kbd>I</kbd> and <kbd>O</kbd> set the start and end.
+All four can be changed in Settings, which tells you right away if another program already uses a key. In the editor: <kbd>Space</kbd> plays, <kbd>S</kbd> splits, <kbd>Del</kbd> removes a part, <kbd>I</kbd> and <kbd>O</kbd> set the start and end, <kbd>M</kbd> sets a marker, <kbd>,</kbd> and <kbd>.</kbd> jump between markers.
 
 ## Your clips stay yours
 

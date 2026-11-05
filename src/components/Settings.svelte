@@ -16,6 +16,8 @@
   import Icon from "./Icon.svelte";
   import MicMeter from "./MicMeter.svelte";
   import Profiles from "./Profiles.svelte";
+  import Privacy from "./Privacy.svelte";
+  import { languages, t } from "../lib/i18n.svelte";
   import { tip } from "../lib/tooltip";
   import Segmented from "./Segmented.svelte";
   import Select from "./Select.svelte";
@@ -37,9 +39,9 @@
   const micDevice = $derived(store.settings?.micDevice ?? null);
   const defaultMic = $derived(mics.find((m) => m.default));
   const micOptions = $derived([
-    { value: null, label: "Windows default", hint: defaultMic?.name },
+    { value: null, label: t("Windows default"), hint: defaultMic?.name },
     ...mics.map((m) => ({ value: m.id as string | null, label: m.name })),
-    ...(s.micDevice && !mics.some((m) => m.id === s.micDevice) ? [{ value: s.micDevice, label: "Not connected" }] : []),
+    ...(s.micDevice && !mics.some((m) => m.id === s.micDevice) ? [{ value: s.micDevice, label: t("Not connected") }] : []),
   ]);
   const accents = ["#C5F26B", "#FF9EC0", "#FFC56B", "#7EF0C0", "#9FD8FF", "#C9B6FF", "#FF8A7A"];
 
@@ -61,18 +63,20 @@
   });
 
   const updateText = $derived.by(() => {
-    const v = updates.version ? `Version ${updates.version}` : "This version";
+    const v = updates.version ? t("Version {version}", { version: updates.version }) : t("This version");
     switch (updates.phase) {
       case "checking":
-        return "Looking for a new version…";
+        return t("Looking for a new version…");
       case "current":
-        return `${v} · up to date`;
+        return t("{v} · up to date", { v });
       case "available":
-        return `Version ${updates.next?.version} is ready to install`;
+        return t("Version {version} is ready to install", { version: updates.next?.version ?? "" });
       case "downloading":
-        return updates.progress === null ? "Downloading…" : `Downloading ${Math.round(updates.progress * 100)}%`;
+        return updates.progress === null
+          ? t("Downloading…")
+          : t("Downloading {percent}%", { percent: Math.round(updates.progress * 100) });
       case "failed":
-        return `${v} · couldn't reach the update server`;
+        return t("{v} · couldn't reach the update server", { v });
       default:
         return v;
     }
@@ -87,7 +91,7 @@
   }
 
   async function chooseFolder() {
-    const dir = await openDialog({ directory: true, defaultPath: s.clipsDir, title: "Folder for clips" });
+    const dir = await openDialog({ directory: true, defaultPath: s.clipsDir, title: t("Folder for clips") });
     if (typeof dir === "string") update({ clipsDir: dir });
   }
 
@@ -96,11 +100,12 @@
     choosingApp = true;
   }
 
-  const hotkeyRows: { key: keyof Settings["hotkeys"]; label: string; hint: string }[] = [
-    { key: "clip", label: "Save clip", hint: "Keeps the last moments" },
-    { key: "screenshot", label: "Screenshot", hint: "Saves what's on screen now" },
-    { key: "session", label: "Start or stop session", hint: "Records until you press it again" },
-  ];
+  const hotkeyRows: { key: keyof Settings["hotkeys"]; label: string; hint: string }[] = $derived([
+    { key: "clip", label: t("Save clip"), hint: t("Keeps the last moments") },
+    { key: "screenshot", label: t("Screenshot"), hint: t("Saves what's on screen now") },
+    { key: "session", label: t("Start or stop session"), hint: t("Records until you press it again") },
+    { key: "marker", label: t("Add marker"), hint: t("Marks a moment to find it again in the editor") },
+  ]);
 </script>
 
 
@@ -108,34 +113,37 @@
   {#if s}
     <div class="scroll body">
       <div class="column">
-      <h1>Settings</h1>
-      <h2>Recording</h2>
+      <h1>{t("Settings")}</h1>
+      <h2>{t("Recording")}</h2>
       <div class="panel group">
         <div class="row stack">
-          <div class="text"><span>Record</span><span class="meta">What Replix keeps in the buffer</span></div>
+          <div class="text"><span>{t("Record")}</span><span class="meta">{t("What Replix keeps in the buffer")}</span></div>
           <Segmented
-            label="Record"
+            label={t("Record")}
             value={s.source}
             options={[
-              { value: "game", label: "Games" },
-              { value: "screen", label: "Whole screen" },
-              { value: "app", label: "One app" },
+              { value: "game", label: t("Games") },
+              { value: "screen", label: t("Whole screen") },
+              { value: "app", label: t("One app") },
             ]}
             onchange={(v) => (v === "app" && !s.appExe ? showApps() : update({ source: v }))}
           />
           {#if s.source === "game"}
-            <p class="meta note">Replix starts when a game is in front and stops when it closes. Nothing else is recorded.</p>
+            <p class="meta note">{t("Replix starts when a game is in front and stops when it closes. Nothing else is recorded.")}</p>
           {:else if s.source === "screen" && monitors.length > 1}
             <Segmented
-              label="Display"
+              label={t("Display")}
               value={s.monitor}
-              options={monitors.map((m) => ({ value: m.index, label: `Display ${m.index + 1}${m.primary ? " (main)" : ""}` }))}
+              options={monitors.map((m) => ({
+                value: m.index,
+                label: m.primary ? t("Display {n} (main)", { n: m.index + 1 }) : t("Display {n}", { n: m.index + 1 }),
+              }))}
               onchange={(v) => update({ monitor: v })}
             />
           {:else if s.source === "app"}
             <div class="inline">
-              <span class="mono">{s.appExe ?? "No app chosen"}</span>
-              <button type="button" class="btn small" onclick={showApps}>Choose app</button>
+              <span class="mono">{s.appExe ?? t("No app chosen")}</span>
+              <button type="button" class="btn small" onclick={showApps}>{t("Choose app")}</button>
             </div>
           {/if}
           {#if choosingApp}
@@ -157,30 +165,30 @@
           {/if}
         </div>
         <div class="row stack">
-          <div class="text"><span>Clip length</span><span class="meta">How far back a clip reaches</span></div>
+          <div class="text"><span>{t("Clip length")}</span><span class="meta">{t("How far back a clip reaches")}</span></div>
           <Segmented
-            label="Clip length"
+            label={t("Clip length")}
             value={s.bufferSeconds}
             options={[15, 30, 60, 120, 300, 600].map((n) => ({ value: n, label: lengthLabel(n) }))}
             onchange={(v) => update({ bufferSeconds: v })}
           />
         </div>
         <div class="row stack">
-          <div class="text"><span>Quality</span><span class="meta">Higher looks better and takes more space</span></div>
+          <div class="text"><span>{t("Quality")}</span><span class="meta">{t("Higher looks better and takes more space")}</span></div>
           <div class="two">
             <Segmented
-              label="Frame rate"
+              label={t("Frame rate")}
               value={s.fps}
-              options={[30, 60, 120].map((n) => ({ value: n, label: `${n} fps` }))}
+              options={[30, 60, 120].map((n) => ({ value: n, label: t("{n} fps", { n }) }))}
               onchange={(v) => update({ fps: v })}
             />
             <Segmented
-              label="Quality"
+              label={t("Quality")}
               value={s.quality}
               options={[
-                { value: "low", label: "Low" },
-                { value: "medium", label: "Medium" },
-                { value: "high", label: "High" },
+                { value: "low", label: t("Low") },
+                { value: "medium", label: t("Medium") },
+                { value: "high", label: t("High") },
               ]}
               onchange={(v) => update({ quality: v })}
             />
@@ -188,39 +196,39 @@
         </div>
         <div class="row">
           <div class="text">
-            <span>Encoder</span>
-            <span class="meta">{store.status.encoder ? `Using ${store.status.encoder}` : "Picked automatically"}</span>
+            <span>{t("Encoder")}</span>
+            <span class="meta">{store.status.encoder ? t("Using {encoder}", { encoder: store.status.encoder }) : t("Picked automatically")}</span>
           </div>
           <div class="pick">
             <Select
-              label="Encoder"
+              label={t("Encoder")}
               value={s.encoder}
-              options={[{ value: "auto", label: "Automatic" }, ...encoders.map((enc) => ({ value: enc.id, label: enc.label }))]}
+              options={[{ value: "auto", label: t("Automatic") }, ...encoders.map((enc) => ({ value: enc.id, label: enc.label }))]}
               onchange={(v) => update({ encoder: v })}
             />
           </div>
         </div>
         <div class="row">
-          <div class="text"><span>Mouse cursor</span><span class="meta">Show the pointer in clips</span></div>
-          <Switch checked={s.captureCursor} label="Show mouse cursor" onchange={(v) => update({ captureCursor: v })} />
+          <div class="text"><span>{t("Mouse cursor")}</span><span class="meta">{t("Show the pointer in clips")}</span></div>
+          <Switch checked={s.captureCursor} label={t("Show mouse cursor")} onchange={(v) => update({ captureCursor: v })} />
         </div>
       </div>
 
-      <h2>Microphone</h2>
+      <h2>{t("Microphone")}</h2>
       <div class="panel group">
         <div class="row">
-          <div class="text"><span>Record microphone</span><span class="meta">Your voice on its own track</span></div>
-          <Switch checked={s.recordMic} label="Record microphone" onchange={(v) => update({ recordMic: v })} />
+          <div class="text"><span>{t("Record microphone")}</span><span class="meta">{t("Your voice on its own track")}</span></div>
+          <Switch checked={s.recordMic} label={t("Record microphone")} onchange={(v) => update({ recordMic: v })} />
         </div>
         {#if s.recordMic}
           <div class="row">
             <div class="text">
-              <span>Device</span>
-              <span class="meta">{s.micDevice ? "Stays on this mic" : `Follows Windows${defaultMic ? ` · ${defaultMic.name}` : ""}`}</span>
+              <span>{t("Device")}</span>
+              <span class="meta">{s.micDevice ? t("Stays on this mic") : defaultMic ? t("Follows Windows · {device}", { device: defaultMic.name }) : t("Follows Windows")}</span>
             </div>
             <div class="pick wide">
               <Select
-                label="Microphone"
+                label={t("Microphone")}
                 value={s.micDevice}
                 options={micOptions}
                 onopen={refreshMics}
@@ -229,10 +237,10 @@
             </div>
           </div>
           <div class="row">
-            <div class="text"><span>Volume</span><span class="meta">How loud your voice is in clips</span></div>
+            <div class="text"><span>{t("Volume")}</span><span class="meta">{t("How loud your voice is in clips")}</span></div>
             <div class="volume">
               <Slider
-                label="Microphone volume"
+                label={t("Microphone volume")}
                 min={0}
                 max={200}
                 step={5}
@@ -244,32 +252,38 @@
             </div>
           </div>
           <div class="row">
-            <div class="text"><span>Noise suppression</span><span class="meta">Filters out fans, hum and keyboard clatter</span></div>
+            <div class="text"><span>{t("Noise suppression")}</span><span class="meta">{t("Filters out fans, hum and keyboard clatter")}</span></div>
             <Switch
               checked={s.micNoiseSuppression}
-              label="Noise suppression"
+              label={t("Noise suppression")}
               onchange={(v) => update({ micNoiseSuppression: v })}
             />
           </div>
           <div class="row stack">
-            <div class="text"><span>Test</span></div>
+            <div class="text"><span>{t("Test")}</span></div>
             <MicMeter device={micDevice} />
           </div>
         {/if}
       </div>
 
-      <h2>Games & apps</h2>
-      <p class="meta intro">Give a game or app its own settings. Anything you add here also counts as a game.</p>
+      <h2>{t("Games & apps")}</h2>
+      <p class="meta intro">{t("Give a game or app its own settings. Anything you add here also counts as a game.")}</p>
       <Profiles />
 
-      <h2>Hotkeys</h2>
+      <h2>{t("Privacy")}</h2>
+      <p class="meta intro">
+        {t("These programs never end up in a recording. Replix doesn't record them as a game or app, gives their sound no track, and on the whole screen it turns the picture black while one of their windows is open.")}
+      </p>
+      <Privacy />
+
+      <h2>{t("Hotkeys")}</h2>
       <div class="panel group">
         {#each hotkeyRows as h (h.key)}
           <div class="row">
             <div class="text">
               <span>{h.label}</span>
               {#if store.conflicts.includes(s.hotkeys[h.key])}
-                <span class="meta taken">Used by another program. Pick a different key.</span>
+                <span class="meta taken">{t("Used by another program. Pick a different key.")}</span>
               {:else}
                 <span class="meta">{h.hint}</span>
               {/if}
@@ -279,10 +293,10 @@
               class="key"
               class:listening={recording === h.key}
               class:taken={store.conflicts.includes(s.hotkeys[h.key])}
-              aria-label="Change the hotkey for {h.label}"
+              aria-label={t("Change the hotkey for {name}", { name: h.label })}
               onclick={() => (recording = h.key)}
             >
-              {s.hotkeys[h.key] || "Not set"}
+              {s.hotkeys[h.key] || t("Not set")}
             </button>
           </div>
         {/each}
@@ -302,50 +316,56 @@
         />
       {/if}
 
-      <h2>Storage</h2>
+      <h2>{t("Storage")}</h2>
       <div class="panel group">
         {#if storage}
           <div class="row stack">
             <div class="text">
-              <span>Space used</span>
+              <span>{t("Space used")}</span>
               <span class="meta">
-                {size(storage.clips)} in clips · {size(storage.exports)} in exports · {size(storage.free)} free on this drive
+                {t("{clips} in clips · {exports} in exports · {free} free on this drive", { clips: size(storage.clips), exports: size(storage.exports), free: size(storage.free) })}
               </span>
             </div>
-            <div class="usage" role="img" aria-label="{Math.round(usedShare * 100)}% of {s.storageLimitGb ? 'the limit' : 'the drive'} used">
+            <div
+              class="usage"
+              role="img"
+              aria-label={s.storageLimitGb
+                ? t("{percent}% of the limit used", { percent: Math.round(usedShare * 100) })
+                : t("{percent}% of the drive used", { percent: Math.round(usedShare * 100) })}
+            >
               <span style:width="{Math.max(usedShare * 100, 0.8)}%"></span>
             </div>
             {#if s.storageLimitGb}
-              <span class="meta">{Math.round(usedShare * 100)}% of the {s.storageLimitGb} GB limit</span>
+              <span class="meta">{t("{percent}% of the {limit} GB limit", { percent: Math.round(usedShare * 100), limit: s.storageLimitGb })}</span>
             {/if}
           </div>
         {/if}
         <div class="row">
-          <div class="text"><span>Clips folder</span><span class="meta path mono">{s.clipsDir}</span></div>
+          <div class="text"><span>{t("Clips folder")}</span><span class="meta path mono">{s.clipsDir}</span></div>
           <div class="inline">
-            <button type="button" class="icon-btn" aria-label="Open folder" use:tip={"Open folder"} onclick={() => api.openClipsFolder()}><Icon name="folder" /></button>
-            <button type="button" class="btn small" onclick={chooseFolder}>Change</button>
+            <button type="button" class="icon-btn" aria-label={t("Open folder")} use:tip={t("Open folder")} onclick={() => api.openClipsFolder()}><Icon name="folder" /></button>
+            <button type="button" class="btn small" onclick={chooseFolder}>{t("Change")}</button>
           </div>
         </div>
         <div class="row stack">
           <div class="text">
-            <span>Space limit</span>
-            <span class="meta">When full, the oldest clips go to the recycle bin. Favorites and drafts stay.</span>
+            <span>{t("Space limit")}</span>
+            <span class="meta">{t("When full, the oldest clips go to the recycle bin. Favorites, drafts and imported videos stay.")}</span>
           </div>
           <Segmented
-            label="Space limit"
+            label={t("Space limit")}
             value={s.storageLimitGb}
-            options={[0, 25, 50, 100, 250].map((n) => ({ value: n, label: n ? `${n} GB` : "No limit" }))}
+            options={[0, 25, 50, 100, 250].map((n) => ({ value: n, label: n ? t("{n} GB", { n }) : t("No limit") }))}
             onchange={(v) => update({ storageLimitGb: v })}
           />
         </div>
       </div>
 
-      <h2>Appearance</h2>
+      <h2>{t("Appearance")}</h2>
       <div class="panel group">
         <div class="row">
-          <div class="text"><span>Accent colour</span></div>
-          <div class="swatches" role="group" aria-label="Accent colour">
+          <div class="text"><span>{t("Accent colour")}</span></div>
+          <div class="swatches" role="group" aria-label={t("Accent colour")}>
             {#each accents as c (c)}
               <button
                 type="button"
@@ -360,78 +380,89 @@
           </div>
         </div>
         <div class="row">
-          <div class="text"><span>Background</span></div>
-          <div class="swatches" role="group" aria-label="Background">
-            {#each themes as t (t.id)}
+          <div class="text"><span>{t("Background")}</span></div>
+          <div class="swatches" role="group" aria-label={t("Background")}>
+            {#each themes as theme (theme.id)}
               <button
                 type="button"
                 class="swatch theme"
-                class:on={(s.theme || "plum") === t.id}
-                style:background="linear-gradient(135deg, {t.colors.canvas} 50%, {t.colors.raised} 50%)"
-                aria-label={t.name}
-                aria-pressed={(s.theme || "plum") === t.id}
-                use:tip={t.name}
-                onclick={() => update({ theme: t.id })}
+                class:on={(s.theme || "plum") === theme.id}
+                style:background="linear-gradient(135deg, {theme.colors.canvas} 50%, {theme.colors.raised} 50%)"
+                aria-label={theme.name}
+                aria-pressed={(s.theme || "plum") === theme.id}
+                use:tip={theme.name}
+                onclick={() => update({ theme: theme.id })}
               ></button>
             {/each}
           </div>
         </div>
       </div>
 
-      <h2>General</h2>
+      <h2>{t("General")}</h2>
       <div class="panel group">
         <div class="row">
-          <div class="text">
-            <span>Notifications</span>
-            <span class="meta">Messages like “Clip saved” in a corner of your screen. Off shows none at all.</span>
+          <div class="text"><span>{t("Language")}</span></div>
+          <div class="pick">
+            <Select
+              label={t("Language")}
+              value={s.language ?? "auto"}
+              options={[{ value: "auto", label: t("Same as Windows") }, ...languages.map((l) => ({ value: l.code as string, label: l.name }))]}
+              onchange={(v) => update({ language: v })}
+            />
           </div>
-          <Switch checked={s.showToast} label="Notifications" onchange={(v) => update({ showToast: v })} />
+        </div>
+        <div class="row">
+          <div class="text">
+            <span>{t("Notifications")}</span>
+            <span class="meta">{t("Messages like “Clip saved” in a corner of your screen. Off shows none at all.")}</span>
+          </div>
+          <Switch checked={s.showToast} label={t("Notifications")} onchange={(v) => update({ showToast: v })} />
         </div>
         {#if s.showToast}
           <div class="row stack">
-            <div class="text"><span>Notification corner</span><span class="meta">Where on the screen they show up</span></div>
+            <div class="text"><span>{t("Notification corner")}</span><span class="meta">{t("Where on the screen they show up")}</span></div>
             <Segmented
-              label="Notification corner"
+              label={t("Notification corner")}
               value={s.toastPosition}
               options={[
-                { value: "topLeft", label: "Top left" },
-                { value: "topRight", label: "Top right" },
-                { value: "bottomLeft", label: "Bottom left" },
-                { value: "bottomRight", label: "Bottom right" },
+                { value: "topLeft", label: t("Top left") },
+                { value: "topRight", label: t("Top right") },
+                { value: "bottomLeft", label: t("Bottom left") },
+                { value: "bottomRight", label: t("Bottom right") },
               ]}
               onchange={(v) => store.save({ ...s, toastPosition: v }).then((saved) => void (saved && api.previewToast()))}
             />
           </div>
           <div class="row">
-            <div class="text"><span>Notification size</span></div>
+            <div class="text"><span>{t("Notification size")}</span></div>
             <Segmented
-              label="Notification size"
+              label={t("Notification size")}
               value={s.toastSize ?? "medium"}
               options={[
-                { value: "small", label: "Small" },
-                { value: "medium", label: "Medium" },
-                { value: "large", label: "Large" },
+                { value: "small", label: t("Small") },
+                { value: "medium", label: t("Medium") },
+                { value: "large", label: t("Large") },
               ]}
               onchange={(v) => store.save({ ...s, toastSize: v }).then((saved) => void (saved && api.previewToast()))}
             />
           </div>
         {/if}
         <div class="row">
-          <div class="text"><span>Start with Windows</span><span class="meta">Opens quietly in the tray</span></div>
-          <Switch checked={s.launchAtStartup} label="Start with Windows" onchange={(v) => update({ launchAtStartup: v })} />
+          <div class="text"><span>{t("Start with Windows")}</span><span class="meta">{t("Opens quietly in the tray")}</span></div>
+          <Switch checked={s.launchAtStartup} label={t("Start with Windows")} onchange={(v) => update({ launchAtStartup: v })} />
         </div>
         <div class="row">
-          <div class="text"><span>Keep running when closed</span><span class="meta">Closing the window leaves Replix recording in the tray</span></div>
-          <Switch checked={s.closeToTray} label="Keep running when closed" onchange={(v) => update({ closeToTray: v })} />
+          <div class="text"><span>{t("Keep running when closed")}</span><span class="meta">{t("Closing the window leaves Replix recording in the tray")}</span></div>
+          <Switch checked={s.closeToTray} label={t("Keep running when closed")} onchange={(v) => update({ closeToTray: v })} />
         </div>
         <div class="row">
-          <div class="text"><span>Updates</span><span class="meta" role="status">{updateText}</span></div>
+          <div class="text"><span>{t("Updates")}</span><span class="meta" role="status">{updateText}</span></div>
           {#if updates.phase === "available" || updates.phase === "downloading"}
             <button type="button" class="btn small primary" disabled={updates.phase === "downloading"} onclick={() => updates.install()}>
-              {updates.phase === "downloading" ? "Updating…" : "Update"}
+              {updates.phase === "downloading" ? t("Updating…") : t("Update")}
             </button>
           {:else}
-            <button type="button" class="btn small" disabled={updates.phase === "checking"} onclick={() => updates.check()}>Check now</button>
+            <button type="button" class="btn small" disabled={updates.phase === "checking"} onclick={() => updates.check()}>{t("Check now")}</button>
           {/if}
         </div>
       </div>

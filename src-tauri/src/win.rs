@@ -52,6 +52,50 @@ pub fn is_window(raw: u64) -> bool {
     unsafe { IsWindow(Some(hwnd(raw))).as_bool() }
 }
 
+/// Minimised windows send Graphics Capture no pictures.
+pub fn is_minimized(raw: u64) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::IsIconic;
+    unsafe { IsIconic(hwnd(raw)).as_bool() }
+}
+
+/// Whether the outlines of a window and a monitor overlap.
+fn on_monitor(h: HWND, monitor: &RECT) -> bool {
+    let mut rect = RECT::default();
+    if unsafe { GetWindowRect(h, &mut rect) }.is_err() {
+        return false;
+    }
+    rect.left < monitor.right && rect.right > monitor.left && rect.top < monitor.bottom && rect.bottom > monitor.top
+}
+
+/// The name of a program from `exes` (lower-case executable names) that has a window
+/// open on the monitor with this index, minimised windows aside.
+pub fn excluded_on_monitor(index: u32, exes: &[String]) -> Option<String> {
+    if exes.is_empty() {
+        return None;
+    }
+    let handles = monitor_handles();
+    let monitor = *handles.get(index as usize).or(handles.first())?;
+    let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
+        return None;
+    }
+    list_windows()
+        .into_iter()
+        .find(|w| exes.contains(&w.exe.to_lowercase()) && !is_minimized(w.hwnd) && on_monitor(hwnd(w.hwnd), &info.rcMonitor))
+        .map(|w| app_name(&w.exe_path))
+}
+
+/// The Windows display language as a locale name, e.g. "de-DE".
+pub fn ui_language() -> String {
+    use windows::Win32::Globalization::{GetUserDefaultUILanguage, LCIDToLocaleName};
+    let mut buf = [0u16; 85];
+    let n = unsafe { LCIDToLocaleName(GetUserDefaultUILanguage() as u32, Some(&mut buf), 0) };
+    if n <= 1 {
+        return "en-US".into();
+    }
+    String::from_utf16_lossy(&buf[..n as usize - 1])
+}
+
 pub fn foreground() -> Option<WindowInfo> {
     let h = unsafe { GetForegroundWindow() };
     if h.0.is_null() {

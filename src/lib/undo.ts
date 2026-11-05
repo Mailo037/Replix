@@ -1,5 +1,6 @@
 import { api } from "./api";
 import { store } from "./store.svelte";
+import { t } from "./i18n.svelte";
 
 // Ctrl+Z in the library: the last few things done to clips, newest last.
 
@@ -23,7 +24,7 @@ export const undo = {
     try {
       await step.run();
     } catch (e) {
-      store.notify("Couldn't undo", String(e));
+      store.notify(t("Couldn't undo"), String(e));
     }
   },
 };
@@ -33,16 +34,16 @@ export async function recycle(ids: string[], what: string) {
   const paths = await api.deleteItems(ids);
   const restore = async () => {
     await api.restoreItems(paths);
-    store.notify("Restored", what);
+    store.notify(t("Restored"), what);
   };
   undo.push(what, restore);
-  store.notify("Moved to the recycle bin", `${what} · Ctrl+Z to undo`, {
-    label: "Undo",
+  store.notify(t("Moved to the recycle bin"), t("{what} · Ctrl+Z to undo", { what }), {
+    label: t("Undo"),
     run: () => {
       // The button and Ctrl+Z undo the same step; whichever comes first takes it.
       const i = steps.findIndex((s) => s.run === restore);
       if (i >= 0) steps.splice(i, 1);
-      return restore().catch((e) => store.notify("Couldn't undo", String(e)));
+      return restore().catch((e) => store.notify(t("Couldn't undo"), String(e)));
     },
   });
 }
@@ -53,6 +54,6 @@ export async function rename(id: string, from: string, to: string) {
   await api.renameItem(id, to);
   undo.push(to, async () => {
     await api.renameItem(id, from);
-    store.notify("Name restored", from);
+    store.notify(t("Name restored"), from);
   });
 }

@@ -4,6 +4,7 @@ import { onColor } from "./format";
 import { applyTheme } from "./themes";
 import { syncEditorRound } from "./editorRound.svelte";
 import { updates } from "./updates.svelte";
+import { i18n, t } from "./i18n.svelte";
 
 export type Filter = "all" | "clips" | "screenshots" | "sessions" | "drafts" | "favorites";
 
@@ -75,7 +76,7 @@ class Store {
   });
 
   async init() {
-    const [[settings, revision], status] = await Promise.all([api.getSettings(), api.getStatus(), syncEditorRound()]);
+    const [[settings, revision], status] = await Promise.all([api.getSettings(), api.getStatus(), syncEditorRound(), i18n.init()]);
     this.lastRevision = Math.max(this.lastRevision, revision);
     this.appliedRevision = revision;
     this.settings = settings;
@@ -164,15 +165,15 @@ class Store {
     });
     await this.refresh(true);
     updates.init((version) =>
-      this.notify(`Replix ${version} is ready`, "Takes a few seconds, then Replix opens again.", {
-        label: "Update",
+      this.notify(t("Replix {version} is ready", { version }), t("Takes a few seconds, then Replix opens again."), {
+        label: t("Update"),
         run: () => updates.install(),
       }),
     );
     this.conflicts = await conflicts;
     if (this.conflicts.length) {
-      this.notify("Hotkey unavailable", `${this.conflicts.join(", ")} is used by another program.`, {
-        label: "Change",
+      this.notify(t("Hotkey unavailable"), t("{keys} is used by another program.", { keys: this.conflicts.join(", ") }), {
+        label: t("Change"),
         run: () => this.go({ name: "settings" }),
       });
     }
@@ -313,7 +314,7 @@ class Store {
         // The newest settings could not be applied; say so, and show the ones in effect
         // instead of passing these off as saved. Those come from Replix itself: an earlier
         // change may have gone through while its answer is still on the way.
-        this.notify("Settings not saved", String(e));
+        this.notify(t("Settings not saved"), String(e));
         try {
           const [current, revision] = await api.getSettings();
           // A newer change made meanwhile shows what was asked for; its own answer decides.

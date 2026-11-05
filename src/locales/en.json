@@ -1,0 +1,18 @@
+{
+  "{n} files": {
+    "one": "{n} file",
+    "other": "{n} files"
+  },
+  "{n} removed tracks · Bring back": {
+    "one": "{n} removed track · Bring back",
+    "other": "{n} removed tracks · Bring back"
+  },
+  "{n} items": {
+    "one": "{n} item",
+    "other": "{n} items"
+  },
+  "{n} clips": {
+    "one": "{n} clip",
+    "other": "{n} clips"
+  }
+}

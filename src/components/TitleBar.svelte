@@ -6,6 +6,7 @@
   import Icon from "./Icon.svelte";
   import Mark from "./Mark.svelte";
   import StatusMenu from "./StatusMenu.svelte";
+  import { t } from "../lib/i18n.svelte";
 
   const win = getCurrentWindow();
   const inSettings = $derived(store.view.name === "settings");
@@ -20,8 +21,8 @@
         type="button"
         class="gear"
         class:current={inSettings}
-        aria-label={updates.phase === "available" ? "Settings, update ready" : "Settings"}
-        use:tip={updates.phase === "available" ? "Settings · update ready" : "Settings"}
+        aria-label={updates.phase === "available" ? t("Settings, update ready") : t("Settings")}
+        use:tip={updates.phase === "available" ? t("Settings · update ready") : t("Settings")}
         aria-pressed={inSettings}
         onclick={() => store.go(inSettings ? { name: "library", filter: "all", game: null } : { name: "settings" })}
       >
@@ -31,13 +32,13 @@
     </div>
   {/if}
   <div class="controls">
-    <button type="button" aria-label="Minimize" use:tip={"Minimize"} onclick={() => win.minimize()}>
+    <button type="button" aria-label={t("Minimize")} use:tip={t("Minimize")} onclick={() => win.minimize()}>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5h10" stroke="currentColor" /></svg>
     </button>
-    <button type="button" aria-label="Maximize" use:tip={"Maximize"} onclick={() => win.toggleMaximize()}>
+    <button type="button" aria-label={t("Maximize")} use:tip={t("Maximize")} onclick={() => win.toggleMaximize()}>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" /></svg>
     </button>
-    <button type="button" class="close" aria-label="Close" use:tip={store.settings?.closeToTray ? "Close · keeps recording in the tray" : "Close"} onclick={() => win.close()}>
+    <button type="button" class="close" aria-label={t("Close")} use:tip={store.settings?.closeToTray ? t("Close · keeps recording in the tray") : t("Close")} onclick={() => win.close()}>
       <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" /></svg>
     </button>
   </div>

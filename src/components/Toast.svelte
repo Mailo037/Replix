@@ -6,6 +6,7 @@
   import { onColor } from "../lib/format";
   import { applyTheme } from "../lib/themes";
   import Mark from "./Mark.svelte";
+  import { i18n, t } from "../lib/i18n.svelte";
 
   // How long a note stays up; hovering it stops the clock.
   const LIFETIME = 4000;
@@ -27,6 +28,7 @@
   }
 
   onMount(() => {
+    i18n.init();
     const unlisten = listen<{ title: string; detail: string; position: ToastPosition; accent: string; theme: string; scale: number }>("toast", (e) => {
       // The note wears the colours the main window has; they may have changed since the last one.
       applyTheme(e.payload.theme);
@@ -51,7 +53,7 @@
       <button
         type="button"
         class="toast"
-        aria-label="{title}. Click to close"
+        aria-label={t("{title}. Click to close", { title })}
         style:--life="{LIFETIME}ms"
         style:--ring={accent}
         onclick={dismiss}

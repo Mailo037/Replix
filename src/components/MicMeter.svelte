@@ -3,6 +3,7 @@
   import { onMount } from "svelte";
   import { api } from "../lib/api";
   import { store } from "../lib/store.svelte";
+  import { t } from "../lib/i18n.svelte";
 
   // Live microphone level while it is on screen, drawn as a row of characters.
   let { device }: { device: string | null } = $props();
@@ -37,16 +38,16 @@
 
   onMount(() => {
     const unlisten = listen<number>("mic-level", (e) => {
-      const t = performance.now();
+      const at = performance.now();
       const db = 20 * Math.log10(Math.max(e.payload, 1e-5));
       // -60 dB to 0 dB across the bar.
       const v = Math.min(1, Math.max(0, (db + 60) / 60));
       level = Math.max(v, level - 0.07);
       peak = Math.max(v, peak - 0.015);
-      signalAt = t;
-      if (db > -50) soundAt = t;
-      if (e.payload >= 0.98) clippedAt = t;
-      now = t;
+      signalAt = at;
+      if (db > -50) soundAt = at;
+      if (e.payload >= 0.98) clippedAt = at;
+      now = at;
     });
     return () => {
       unlisten.then((f) => f());
@@ -60,13 +61,13 @@
     // The stream itself stopped or never started: unplugged, in use, or blocked by Windows.
     if (now - Math.max(signalAt, startedAt) > 2500)
       return {
-        text: "No signal from this mic. Check it's plugged in and allowed in the Windows privacy settings.",
+        text: t("No signal from this mic. Check it's plugged in and allowed in the Windows privacy settings."),
         warn: true,
       };
-    if (now - clippedAt < 1200) return { text: "Too loud. Turn the volume down a little.", warn: true };
-    if (soundAt && now - soundAt < 2500) return { text: "Hearing you.", warn: false };
-    if (now - startedAt > 8000) return { text: "Nothing heard yet. If you're talking, check the mic isn't muted.", warn: false };
-    return { text: "Say something and watch the bar.", warn: false };
+    if (now - clippedAt < 1200) return { text: t("Too loud. Turn the volume down a little."), warn: true };
+    if (soundAt && now - soundAt < 2500) return { text: t("Hearing you."), warn: false };
+    if (now - startedAt > 8000) return { text: t("Nothing heard yet. If you're talking, check the mic isn't muted."), warn: false };
+    return { text: t("Say something and watch the bar."), warn: false };
   });
 </script>
 
@@ -74,7 +75,7 @@
   <div
     class="cells mono"
     role="meter"
-    aria-label="Microphone level"
+    aria-label={t("Microphone level")}
     aria-valuemin={0}
     aria-valuemax={100}
     aria-valuenow={Math.round(level * 100)}

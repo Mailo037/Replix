@@ -428,7 +428,9 @@ impl Router {
     }
 
     /// Looks for apps that started playing sound and frees slots of apps that are gone.
-    pub fn poll(&mut self) {
+    /// Programs in `excluded` (lower-case executable names) never get a track, and lose
+    /// the one they have.
+    pub fn poll(&mut self, excluded: &[String]) {
         // In screen mode slot 0 already holds every sound, so separate app tracks would
         // only duplicate it. They still help there: muting Discord needs its own track.
         let processes = win::processes();
@@ -445,7 +447,7 @@ impl Router {
             }
             let Some(entry) = processes.get(&root) else { continue };
             let key = entry.exe_lower.clone();
-            if Some(&key) == self.game_key.as_ref() || key == "audiodg.exe" {
+            if Some(&key) == self.game_key.as_ref() || key == "audiodg.exe" || excluded.contains(&key) {
                 continue;
             }
             seen.insert(key.clone());
@@ -468,6 +470,10 @@ impl Router {
             let hold = self.hold;
             let slot = &mut self.slots[i];
             let Some(a) = slot.current.as_mut() else { continue };
+            if excluded.contains(&a.key) {
+                slot.release();
+                continue;
+            }
             if seen.contains(&a.key) {
                 a.gone_since = None;
                 continue;

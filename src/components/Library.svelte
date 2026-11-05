@@ -9,6 +9,8 @@
   import Icon from "./Icon.svelte";
   import ImageViewer from "./ImageViewer.svelte";
   import Mark from "./Mark.svelte";
+  import { chooseAndImport } from "../lib/importing";
+  import { t, tParts } from "../lib/i18n.svelte";
 
   let { filter, game }: { filter: Filter; game: string | null } = $props();
   let query = $state("");
@@ -19,14 +21,16 @@
   /** Where a Shift-click range starts. */
   let anchor: string | null = null;
 
-  const titles: Record<Filter, string> = {
-    all: "All clips",
-    clips: "Clips",
-    screenshots: "Screenshots",
-    sessions: "Sessions",
-    drafts: "Drafts",
-    favorites: "Favorites",
-  };
+  const titles = $derived<Record<Filter, string>>({
+    all: t("All clips"),
+    clips: t("Clips"),
+    screenshots: t("Screenshots"),
+    sessions: t("Sessions"),
+    drafts: t("Drafts"),
+    favorites: t("Favorites"),
+  });
+
+  const gameLabel = (name: string) => (name === "Desktop" ? t("Desktop") : name);
 
   const visible = $derived.by(() => {
     const q = query.trim().toLowerCase();
@@ -117,19 +121,19 @@
     // Counted first: in Favorites, unstarred items leave the selection once the change lands.
     const count = picked.length;
     await api.setFavorite(picked.map((i) => i.id), on);
-    store.notify(on ? "Added to favorites" : "Removed from favorites", `${count} ${count === 1 ? "item" : "items"}`);
+    store.notify(on ? t("Added to favorites") : t("Removed from favorites"), t("{n} items", { n: count }));
   }
 
   async function copyPicked() {
     await api.copyItems(picked.map((i) => i.id));
-    store.notify("Copied", "Paste into Discord, a chat or a folder.");
+    store.notify(t("Copied"), t("Paste into Discord, a chat or a folder."));
   }
 
   async function deletePicked() {
     const count = picked.length;
     const ids = picked.map((i) => i.id);
     stopSelecting();
-    await recycle(ids, count === 1 ? (picked[0]?.title ?? "1 item") : `${count} items`);
+    await recycle(ids, count === 1 ? (picked[0]?.title ?? t("{n} items", { n: count })) : t("{n} items", { n: count }));
   }
 
   let search = $state<HTMLInputElement>();
@@ -169,35 +173,44 @@
 <section class="library">
   <header>
     {#if selecting}
-      <h1>{selected.length ? `${selected.length} selected` : "Select clips"}</h1>
-      <span class="meta">{selected.length ? size(pickedSize) : "Click to pick, Shift for a range"}</span>
+      <h1>{selected.length ? t("{n} selected", { n: selected.length }) : t("Select clips")}</h1>
+      <span class="meta">{selected.length ? size(pickedSize) : t("Click to pick, Shift for a range")}</span>
       <div class="tools">
         {#if picked.length}
-          <div class="actions" role="toolbar" aria-label="Selected clips">
-            <button type="button" onclick={copyPicked}><Icon name="copy" size={16} />Copy</button>
-            <button type="button" onclick={favoritePicked}><Icon name="star" size={16} />Favorite</button>
-            <button type="button" class="danger" onclick={deletePicked}><Icon name="trash" size={16} />Recycle bin</button>
+          <div class="actions" role="toolbar" aria-label={t("Selected clips")}>
+            <button type="button" onclick={copyPicked}><Icon name="copy" size={16} />{t("Copy")}</button>
+            <button type="button" onclick={favoritePicked}><Icon name="star" size={16} />{t("Favorite")}</button>
+            <button type="button" class="danger" onclick={deletePicked}><Icon name="trash" size={16} />{t("Recycle bin")}</button>
           </div>
         {/if}
-        <button type="button" class="btn ghost small" onclick={() => (selected = visible.map((i) => i.id))}>Select all</button>
-        <button type="button" class="btn small" onclick={stopSelecting}>Done</button>
+        <button type="button" class="btn ghost small" onclick={() => (selected = visible.map((i) => i.id))}>{t("Select all")}</button>
+        <button type="button" class="btn small" onclick={stopSelecting}>{t("Done")}</button>
       </div>
     {:else}
-      <h1>{game ?? titles[filter]}</h1>
+      <h1>{game === null ? titles[filter] : gameLabel(game)}</h1>
       {#if visible.length}
-        <span class="chip mono">{visible.length} {visible.length === 1 ? "clip" : "clips"}</span>
+        <span class="chip mono">{t("{n} clips", { n: visible.length })}</span>
         <span class="chip mono">{size(totalSize)}</span>
       {/if}
       <div class="tools">
+        <button
+          type="button"
+          class="icon-btn"
+          aria-label={t("Import videos and pictures")}
+          use:tip={t("Import videos and pictures · or drop them here")}
+          onclick={chooseAndImport}
+        >
+          <Icon name="import" />
+        </button>
         {#if visible.length}
-          <button type="button" class="btn" use:tip={"Select · Ctrl+E"} onclick={() => (selecting = true)}>Select</button>
+          <button type="button" class="btn" use:tip={t("Select · Ctrl+E")} onclick={() => (selecting = true)}>{t("Select")}</button>
         {/if}
         <label class="search">
           <Icon name="search" size={16} />
-          <input type="search" placeholder="Search clips" aria-label="Search clips" spellcheck="false" bind:value={query} bind:this={search} />
+          <input type="search" placeholder={t("Search clips")} aria-label={t("Search clips")} spellcheck="false" bind:value={query} bind:this={search} />
           {#if !query}<kbd class="search-key mono" aria-hidden="true">Ctrl+F</kbd>{/if}
           {#if query}
-            <button type="button" class="clear" aria-label="Clear search" onclick={() => (query = "")}>
+            <button type="button" class="clear" aria-label={t("Clear search")} onclick={() => (query = "")}>
               <Icon name="close" size={14} />
             </button>
           {/if}
@@ -211,19 +224,20 @@
       <div class="empty">
         <span class="empty-mark"><Mark size={64} /></span>
         {#if store.items.length === 0}
-          <h2>No clips yet</h2>
-          <p>Play something and press <kbd>{clipKey}</kbd> to keep the last {store.settings?.bufferSeconds ?? 30} seconds.</p>
+          <h2>{t("No clips yet")}</h2>
+          <p>{#each tParts("Play something and press {key} to keep the last {n} seconds.", { n: store.settings?.bufferSeconds ?? 30 }) as part}{#if part === "{key}"}<kbd>{clipKey}</kbd>{:else}{part}{/if}{/each}</p>
+          <button type="button" class="btn small" onclick={chooseAndImport}><Icon name="import" size={16} />{t("Import videos")}</button>
         {:else if query}
-          <h2>Nothing matches “{query}”</h2>
-          <p>Try a game name or part of a title.</p>
+          <h2>{t("Nothing matches “{query}”", { query })}</h2>
+          <p>{t("Try a game name or part of a title.")}</p>
         {:else}
-          <h2>Nothing here yet</h2>
+          <h2>{t("Nothing here yet")}</h2>
           <p>
             {filter === "favorites"
-              ? "Star a clip to find it here."
+              ? t("Star a clip to find it here.")
               : filter === "drafts"
-                ? "Clips you save as a draft in the editor show up here."
-                : "Your clips will show up here."}
+                ? t("Clips you save as a draft in the editor show up here.")
+                : t("Your clips will show up here.")}
           </p>
         {/if}
       </div>

@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { api, type AppWindow, type InputDevice, type Settings, type Source } from "../lib/api";
   import { lengthLabel } from "../lib/format";
+  import { t, tParts } from "../lib/i18n.svelte";
   import { store } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
   import MicMeter from "./MicMeter.svelte";
@@ -24,10 +25,10 @@
 
   const s = $derived(store.settings!);
   const current = $derived(steps[step]);
-  const keys = (combo: string) => (combo ? combo.split("+") : ["Not set"]);
+  const keys = (combo: string) => (combo ? combo.split("+") : [t("Not set")]);
   const micDevice = $derived(store.settings?.micDevice ?? null);
   const micOptions = $derived([
-    { value: null, label: "Windows default", hint: mics.find((m) => m.default)?.name },
+    { value: null, label: t("Windows default"), hint: mics.find((m) => m.default)?.name },
     ...mics.map((m) => ({ value: m.id as string | null, label: m.name })),
   ]);
   const appOptions = $derived([
@@ -74,16 +75,16 @@
     }
   }
 
-  const sources: { value: Source; title: string; text: string; icon: string }[] = [
-    { value: "game", title: "Games", text: "Starts by itself when a game is in front. Nothing else is recorded.", icon: "game" },
-    { value: "screen", title: "Whole screen", text: "Everything on your main display.", icon: "desktop" },
-    { value: "app", title: "One app", text: "Pick a program and Replix records only that.", icon: "app" },
-  ];
+  const sources: { value: Source; title: string; text: string; icon: string }[] = $derived([
+    { value: "game", title: t("Games"), text: t("Starts by itself when a game is in front. Nothing else is recorded."), icon: "game" },
+    { value: "screen", title: t("Whole screen"), text: t("Everything on your main display."), icon: "desktop" },
+    { value: "app", title: t("One app"), text: t("Pick a program and Replix records only that."), icon: "app" },
+  ]);
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-<section class="onboarding" aria-label="Set up Replix">
+<section class="onboarding" aria-label={t("Set up Replix")}>
   <div class="frame">
     <div class="stage">
       {#key current}
@@ -115,43 +116,39 @@
 
     <div class="content">
       <div class="top">
-        <div class="progress" role="progressbar" aria-label="Setup" aria-valuemin={1} aria-valuemax={steps.length} aria-valuenow={step + 1}>
+        <div class="progress" role="progressbar" aria-label={t("Setup")} aria-valuemin={1} aria-valuemax={steps.length} aria-valuenow={step + 1}>
           {#each steps as name, i (name)}
             <span class:done={i <= step}></span>
           {/each}
         </div>
         {#if step < steps.length - 1}
-          <button type="button" class="skip" onclick={finish}>Skip setup</button>
+          <button type="button" class="skip" onclick={finish}>{t("Skip setup")}</button>
         {/if}
       </div>
 
       {#key current}
         <div class="copy scroll">
           {#if current === "welcome"}
-            <h1>Never miss the moment</h1>
-            <p>
-              Replix quietly keeps the last few seconds of what you play. When something great happens, you keep it. Nothing
-              to start, nothing to stop.
-            </p>
+            <h1>{t("Never miss the moment")}</h1>
+            <p>{t("Replix quietly keeps the last few seconds of what you play. When something great happens, you keep it. Nothing to start, nothing to stop.")}</p>
           {:else if current === "clip"}
-            <h1>One key, and it's saved</h1>
+            <h1>{t("One key, and it's saved")}</h1>
             <p>
-              Press <kbd>{keys(s.hotkeys.clip).join(" + ")}</kbd> in any game. Replix saves what just happened, and the game keeps
-              running.
+              {#each tParts("Press {combo} in any game. Replix saves what just happened, and the game keeps running.") as part}{#if part === "{combo}"}<kbd>{keys(s.hotkeys.clip).join(" + ")}</kbd>{:else}{part}{/if}{/each}
             </p>
             <div class="field">
-              <span class="label">How far back?</span>
+              <span class="label">{t("How far back?")}</span>
               <Segmented
-                label="Clip length"
+                label={t("Clip length")}
                 value={s.bufferSeconds}
                 options={[15, 30, 60, 120].map((n) => ({ value: n, label: lengthLabel(n) }))}
                 onchange={(v) => update({ bufferSeconds: v })}
               />
             </div>
           {:else if current === "source"}
-            <h1>What should Replix watch?</h1>
-            <p>Most people leave this on games. You can change it any time.</p>
-            <div class="choices" role="radiogroup" aria-label="What to record">
+            <h1>{t("What should Replix watch?")}</h1>
+            <p>{t("Most people leave this on games. You can change it any time.")}</p>
+            <div class="choices" role="radiogroup" aria-label={t("What to record")}>
               {#each sources as option (option.value)}
                 <button
                   type="button"
@@ -168,8 +165,8 @@
             </div>
             {#if s.source === "app"}
               <Select
-                label="App to record"
-                placeholder="Choose an open app…"
+                label={t("App to record")}
+                placeholder={t("Choose an open app…")}
                 value={s.appExe}
                 options={appOptions}
                 onopen={async () => (apps = await api.listApps())}
@@ -177,31 +174,28 @@
               />
             {/if}
           {:else if current === "tracks"}
-            <h1>Every sound gets its own track</h1>
-            <p>
-              The game, Discord, Spotify and your mic are kept apart. Later you can mute your friends or the music and keep the
-              rest. Any app that plays sound gets a track by itself.
-            </p>
+            <h1>{t("Every sound gets its own track")}</h1>
+            <p>{t("The game, Discord, Spotify and your mic are kept apart. Later you can mute your friends or the music and keep the rest. Any app that plays sound gets a track by itself.")}</p>
           {:else if current === "mic"}
-            <h1>Is your mic on?</h1>
-            <p>Say something. If the bar moves, you're good.</p>
+            <h1>{t("Is your mic on?")}</h1>
+            <p>{t("Say something. If the bar moves, you're good.")}</p>
             <div class="rows">
               <div class="line">
-                <span>Record my voice</span>
-                <Switch checked={s.recordMic} label="Record my voice" onchange={(v) => update({ recordMic: v })} />
+                <span>{t("Record my voice")}</span>
+                <Switch checked={s.recordMic} label={t("Record my voice")} onchange={(v) => update({ recordMic: v })} />
               </div>
               {#if s.recordMic}
                 <div class="line">
-                  <span>Microphone</span>
+                  <span>{t("Microphone")}</span>
                   <div class="pick">
-                    <Select label="Microphone" value={s.micDevice} options={micOptions} onchange={(v) => update({ micDevice: v })} />
+                    <Select label={t("Microphone")} value={s.micDevice} options={micOptions} onchange={(v) => update({ micDevice: v })} />
                   </div>
                 </div>
                 <div class="line">
-                  <span>Noise suppression</span>
+                  <span>{t("Noise suppression")}</span>
                   <Switch
                     checked={s.micNoiseSuppression}
-                    label="Noise suppression"
+                    label={t("Noise suppression")}
                     onchange={(v) => update({ micNoiseSuppression: v })}
                   />
                 </div>
@@ -209,28 +203,28 @@
               {/if}
             </div>
           {:else if current === "keys"}
-            <h1>Three keys to remember</h1>
+            <h1>{t("Three keys to remember")}</h1>
             <ul class="keylist">
-              <li><span>Save a clip</span><kbd>{keys(s.hotkeys.clip).join(" + ")}</kbd></li>
-              <li><span>Screenshot</span><kbd>{keys(s.hotkeys.screenshot).join(" + ")}</kbd></li>
-              <li><span>Start or stop a session</span><kbd>{keys(s.hotkeys.session).join(" + ")}</kbd></li>
+              <li><span>{t("Save a clip")}</span><kbd>{keys(s.hotkeys.clip).join(" + ")}</kbd></li>
+              <li><span>{t("Screenshot")}</span><kbd>{keys(s.hotkeys.screenshot).join(" + ")}</kbd></li>
+              <li><span>{t("Start or stop a session")}</span><kbd>{keys(s.hotkeys.session).join(" + ")}</kbd></li>
             </ul>
             {#if store.conflicts.length}
-              <p class="warn">{store.conflicts.join(", ")} is taken by another program. Pick a different key in Settings.</p>
+              <p class="warn">{t("{names} is taken by another program. Pick a different key in Settings.", { names: store.conflicts.join(", ") })}</p>
             {:else}
-              <p>Change them any time in Settings.</p>
+              <p>{t("Change them any time in Settings.")}</p>
             {/if}
           {:else}
-            <h1>You're all set</h1>
-            <p>Start a game whenever you like. Replix waits in the tray and stays out of your way.</p>
+            <h1>{t("You're all set")}</h1>
+            <p>{t("Start a game whenever you like. Replix waits in the tray and stays out of your way.")}</p>
             <div class="rows">
               <div class="line">
-                <span>Start with Windows</span>
-                <Switch checked={s.launchAtStartup} label="Start with Windows" onchange={(v) => update({ launchAtStartup: v })} />
+                <span>{t("Start with Windows")}</span>
+                <Switch checked={s.launchAtStartup} label={t("Start with Windows")} onchange={(v) => update({ launchAtStartup: v })} />
               </div>
               <div class="line">
-                <span>Notifications in the corner</span>
-                <Switch checked={s.showToast} label="Notifications in the corner" onchange={(v) => update({ showToast: v })} />
+                <span>{t("Notifications in the corner")}</span>
+                <Switch checked={s.showToast} label={t("Notifications in the corner")} onchange={(v) => update({ showToast: v })} />
               </div>
             </div>
           {/if}
@@ -239,10 +233,10 @@
 
       <div class="nav">
         {#if step > 0}
-          <button type="button" class="btn ghost" onclick={back}>Back</button>
+          <button type="button" class="btn ghost" onclick={back}>{t("Back")}</button>
         {/if}
         <button type="button" class="btn primary" onclick={next}>
-          {current === "welcome" ? "Let's set it up" : current === "ready" ? "Open my library" : "Next"}
+          {current === "welcome" ? t("Let's set it up") : current === "ready" ? t("Open my library") : t("Next")}
         </button>
       </div>
     </div>

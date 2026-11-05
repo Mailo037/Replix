@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../../lib/i18n.svelte";
   // The Replix mark assembles itself cell by cell, then glows.
   const cells = [
     [0, 0], [0, 4], [0, 8], [0, 12], [0, 16],
@@ -14,7 +15,7 @@
       <rect {x} {y} width="3" height="3" rx="0.4" style:animation-delay="{i * 90}ms" />
     {/each}
   </svg>
-  <span class="caption mono">ready<span class="cursor">_</span></span>
+  <span class="caption mono">{t("ready")}<span class="cursor">_</span></span>
 </div>
 
 <style>

@@ -1,6 +1,7 @@
 <script lang="ts" generics="T extends string | number | null">
   import { fit } from "../lib/place";
   import Icon from "./Icon.svelte";
+  import { t } from "../lib/i18n.svelte";
 
   // A dropdown drawn by the app. The list sits in the top layer, so scrolling panels don't clip it.
   let {
@@ -9,7 +10,7 @@
     label,
     onchange,
     onopen,
-    placeholder = "Choose…",
+    placeholder,
   }: {
     options: { value: T; label: string; hint?: string }[];
     value: T;
@@ -29,6 +30,7 @@
   let typedAt = 0;
 
   const chosen = $derived(options.find((o) => o.value === value));
+  const placeholderText = $derived(placeholder ?? t("Choose…"));
 
   // Sized before it shows; placed once it can be measured, so it never runs out of the window.
   function onBeforeToggle(e: ToggleEvent) {
@@ -126,10 +128,10 @@
   popovertarget="{id}-list"
   aria-haspopup="listbox"
   aria-expanded={open}
-  aria-label="{label}: {chosen?.label ?? placeholder}"
+  aria-label={t("{label}: {choice}", { label, choice: chosen?.label ?? placeholderText })}
   onkeydown={onTriggerKey}
 >
-  <span class="current" class:placeholder={!chosen}>{chosen?.label ?? placeholder}</span>
+  <span class="current" class:placeholder={!chosen}>{chosen?.label ?? placeholderText}</span>
   <span class="chevron"><Icon name="chevronDown" size={16} /></span>
 </button>
 

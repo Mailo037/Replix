@@ -2,28 +2,31 @@
   import { fileUrl, type PendingSave } from "../lib/api";
   import { duration, gameColor, time } from "../lib/format";
   import { store } from "../lib/store.svelte";
+  import { t } from "../lib/i18n.svelte";
 
   let { save }: { save: PendingSave } = $props();
 
   let loaded = $state(false);
   const previewUrl = $derived(save.preview ? fileUrl(save.preview) : null);
+
+  const gameLabel = (name: string) => (name === "Desktop" ? t("Desktop") : name);
 </script>
 
-<div class="tile" role="group" aria-label={`${save.title}, saving`} aria-busy="true">
+<div class="tile" role="group" aria-label={t("{title}, saving", { title: save.title })} aria-busy="true">
   <span class="thumb">
     <!-- Hidden in the tray, the pictures are let go so WebView2 can free them. -->
     {#if previewUrl && store.visible}
       <img src={previewUrl} alt="" class="real" class:loaded decoding="async" onload={() => (loaded = true)} />
     {/if}
     <span class="shade pending-loop" aria-hidden="true"></span>
-    <span class="label top saving"><span class="dot pending-loop" aria-hidden="true"></span>Saving…</span>
+    <span class="label top saving"><span class="dot pending-loop" aria-hidden="true"></span>{t("Saving…")}</span>
     <span class="label bottom">{duration(save.duration)}</span>
   </span>
   <span class="text">
     <span class="title">{save.title}</span>
     <span class="meta">
       {#if save.game}<span class="swatch" style:background={gameColor(save.game)} aria-hidden="true"></span>{/if}
-      {save.game && !save.title.includes(save.game) ? `${save.game} · ` : ""}{time(save.created)}
+      {save.game && !save.title.includes(save.game) ? `${gameLabel(save.game)} · ` : ""}{time(save.created)}
     </span>
   </span>
 </div>

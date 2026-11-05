@@ -1,21 +1,24 @@
 <script lang="ts">
   import { store, type Filter } from "../lib/store.svelte";
   import { gameColor } from "../lib/format";
+  import { t } from "../lib/i18n.svelte";
   import Icon from "./Icon.svelte";
 
-  const sections: { filter: Filter; label: string; icon: string; count: () => number }[] = [
-    { filter: "all", label: "All clips", icon: "clips", count: () => store.items.length },
-    { filter: "screenshots", label: "Screenshots", icon: "screenshots", count: () => store.counts.screenshots },
-    { filter: "sessions", label: "Sessions", icon: "sessions", count: () => store.counts.sessions },
-    { filter: "drafts", label: "Drafts", icon: "drafts", count: () => store.counts.drafts },
-    { filter: "favorites", label: "Favorites", icon: "star", count: () => store.counts.favorites },
-  ];
+  const sections = $derived<{ filter: Filter; label: string; icon: string; count: () => number }[]>([
+    { filter: "all", label: t("All clips"), icon: "clips", count: () => store.items.length },
+    { filter: "screenshots", label: t("Screenshots"), icon: "screenshots", count: () => store.counts.screenshots },
+    { filter: "sessions", label: t("Sessions"), icon: "sessions", count: () => store.counts.sessions },
+    { filter: "drafts", label: t("Drafts"), icon: "drafts", count: () => store.counts.drafts },
+    { filter: "favorites", label: t("Favorites"), icon: "star", count: () => store.counts.favorites },
+  ]);
+
+  const gameLabel = (name: string) => (name === "Desktop" ? t("Desktop") : name);
 
   const isActive = (filter: Filter, game: string | null = null) =>
     store.view.name === "library" && store.view.filter === filter && store.view.game === game;
 </script>
 
-<nav class="sidebar" aria-label="Library">
+<nav class="sidebar" aria-label={t("Library")}>
   <ul class="panel group">
     {#each sections as s (s.filter)}
       <li>
@@ -36,7 +39,7 @@
 
   {#if store.games.length}
     <div class="panel group games-panel">
-      <div class="heading">Games</div>
+      <div class="heading">{t("Games")}</div>
       <ul class="scroll games">
         {#each store.games as g (g.name)}
           <li>
@@ -46,8 +49,8 @@
               class:current={isActive("all", g.name)}
               onclick={() => store.go({ name: "library", filter: "all", game: g.name })}
             >
-              <span class="initial" aria-hidden="true" style:background={gameColor(g.name)}>{g.name.slice(0, 1).toUpperCase()}</span>
-              <span class="label">{g.name}</span>
+              <span class="initial" aria-hidden="true" style:background={gameColor(g.name)}>{gameLabel(g.name).slice(0, 1).toUpperCase()}</span>
+              <span class="label">{gameLabel(g.name)}</span>
               <span class="count mono">{g.count}</span>
             </button>
           </li>

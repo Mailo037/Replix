@@ -16,6 +16,7 @@
   import Slider from "./Slider.svelte";
   import Waveform from "./Waveform.svelte";
   import { currentRound, endEditorRound } from "../lib/editorRound.svelte";
+  import { t, tParts } from "../lib/i18n.svelte";
 
   let { id }: { id: string } = $props();
 
@@ -42,6 +43,11 @@
   let cropScale = $state(1);
   /** All sound together, 0 to 2. */
   let masterVolume = $state(1);
+  /** Moments marked while recording or here, in seconds. Saved with the clip as they change. */
+  let markers = $state<number[]>([]);
+  /** The markers as last saved, so only a change is sent. */
+  let savedMarkers = "";
+  let markerTimer = 0;
   let fullscreen = $state(false);
   let viewer = $state<HTMLDivElement>();
 
@@ -84,6 +90,10 @@
 
   const icons: Record<string, string> = { game: "game", mic: "mic", app: "app", desktop: "desktop" };
 
+  /** A track's name as shown: the mic and desktop tracks are named in the language in use. */
+  const trackName = (track: { kind: string; name: string }) =>
+    track.kind === "mic" ? t("Microphone") : track.kind === "desktop" ? t("Desktop") : track.name;
+
   /** Opening was stopped by hiding the window; it is tried again once the window is back. */
   let interrupted = $state(false);
   /** Counts loads, so an answer to an earlier one cannot overwrite a newer one. */
@@ -109,6 +119,8 @@
       cropY = d.draft?.cropY ?? 0.5;
       cropScale = d.draft?.cropScale ?? 1;
       masterVolume = d.draft?.masterVolume ?? 1;
+      markers = d.markers ?? [];
+      savedMarkers = JSON.stringify(markers);
     } catch (e) {
       if (mine !== loads) return;
       // Stopped, not failed: the window was hidden while the tracks were being prepared.
@@ -322,22 +334,22 @@
     // The part of the track that is heard in the clip.
     const start = Math.max(trimStart, edit.start ?? 0);
     const end = Math.min(trimEnd, edit.end ?? data.duration);
-    store.notify("Saving audio…", track.name);
+    store.notify(t("Saving audio…"), trackName(track));
     try {
-      const out = await api.extractTrack(id, i, `${title.trim() || "Clip"} - ${track.name}`, start, end);
-      store.notify("Audio saved", `${track.name} as M4A`, [
-        { label: "Copy", run: () => share.copy(out) },
-        { label: "Show", run: () => api.revealPath(out) },
+      const out = await api.extractTrack(id, i, `${title.trim() || t("Clip")} - ${trackName(track)}`, start, end);
+      store.notify(t("Audio saved"), t("{name} as M4A", { name: trackName(track) }), [
+        { label: t("Copy"), run: () => share.copy(out) },
+        { label: t("Show"), run: () => api.revealPath(out) },
       ]);
     } catch (e) {
-      store.notify("Couldn't save the audio", String(e));
+      store.notify(t("Couldn't save the audio"), String(e));
     }
   }
 
   function removeTrack(i: number) {
     trackMenu = null;
     edits[i].removed = true;
-    store.notify("Track removed", `${data?.tracks[i].name ?? "Track"} is left out of the export. Ctrl+Z brings it back.`);
+    store.notify(t("Track removed"), t("{name} is left out of the export. Ctrl+Z brings it back.", { name: data?.tracks[i] ? trackName(data.tracks[i]) : t("Track") }));
   }
 
   function restoreTracks() {
@@ -372,6 +384,43 @@
     target.addEventListener("pointerup", up);
   }
 
+  // Markers are part of the clip, not of a draft: a change is saved at once.
+  $effect(() => {
+    const now = JSON.stringify(markers);
+    if (!data || now === savedMarkers) return;
+    savedMarkers = now;
+    const list = $state.snapshot(markers);
+    clearTimeout(markerTimer);
+    markerTimer = window.setTimeout(() => {
+      api.setMarkers(id, list).catch((e) => store.notify(t("Markers not saved"), String(e)));
+    }, 300);
+  });
+
+  /** A marker this close to the playhead counts as on it. */
+  const NEAR = 0.25;
+
+  /** Sets a marker at the playhead, or takes away the one there. */
+  function toggleMarker() {
+    const at = markers.findIndex((m) => Math.abs(m - current) < NEAR);
+    if (at >= 0) markers = markers.filter((_, i) => i !== at);
+    else markers = [...markers, current].sort((a, b) => a - b);
+  }
+
+  function removeMarker(m: number) {
+    markers = markers.filter((x) => x !== m);
+  }
+
+  /** Jumps to the next marker after the playhead, or the one before it. */
+  function jumpMarker(direction: 1 | -1) {
+    const target =
+      direction > 0 ? markers.find((m) => m > current + 0.05) : [...markers].reverse().find((m) => m < current - 0.05);
+    if (target !== undefined) seek(target);
+  }
+
+  const onMarker = $derived(markers.some((m) => Math.abs(m - current) < NEAR));
+  const hasNext = $derived(markers.some((m) => m > current + 0.05));
+  const hasPrev = $derived(markers.some((m) => m < current - 0.05));
+
   function splitHere() {
     if (current <= trimStart + 0.2 || current >= trimEnd - 0.2) return;
     if (splits.some((s) => Math.abs(s - current) < 0.2)) return;
@@ -390,7 +439,7 @@
     } else if (kept.length > 1) {
       cuts = [...cuts, [part.start, part.end]];
     } else {
-      store.notify("That's the last part", "A clip needs something left in it.");
+      store.notify(t("That's the last part"), t("A clip needs something left in it."));
     }
   }
 
@@ -492,7 +541,8 @@
   let redoStack = $state<string[]>([]);
   let committed = $state("");
   let settle = 0;
-  const snapshot = $derived(data ? JSON.stringify(draft()) : "");
+  // Markers are in the history too, so Ctrl+Z brings back one taken away by mistake.
+  const snapshot = $derived(data ? JSON.stringify({ ...draft(), markers: $state.snapshot(markers) }) : "");
 
   $effect(() => {
     const now = snapshot;
@@ -514,7 +564,8 @@
   }
 
   function restore(json: string) {
-    const d = JSON.parse(json) as Draft;
+    const d = JSON.parse(json) as Draft & { markers?: number[] };
+    markers = d.markers ?? markers;
     trimStart = d.trimStart;
     trimEnd = d.trimEnd;
     edits = d.tracks;
@@ -596,6 +647,9 @@
     } else if (e.key === "i") trimStart = Math.min(current, trimEnd - 0.5);
     else if (e.key === "o") trimEnd = Math.max(current, trimStart + 0.5);
     else if (e.key === "s") splitHere();
+    else if (e.key === "m") toggleMarker();
+    else if (e.key === ",") jumpMarker(-1);
+    else if (e.key === ".") jumpMarker(1);
     else if (e.key === "Delete" || e.key === "Backspace") togglePart();
     else if (e.key === "ArrowLeft") seek(current - step);
     else if (e.key === "ArrowRight") seek(current + step);
@@ -623,8 +677,8 @@
   }
 
   async function saveDraft() {
-    await api.saveDraft(id, title.trim() || "Untitled clip", draft());
-    store.notify("Saved as draft", "Find it under Drafts.");
+    await api.saveDraft(id, title.trim() || t("Untitled clip"), draft());
+    store.notify(t("Saved as draft"), t("Find it under Drafts."));
   }
 
   async function exportAs(preset: Preset) {
@@ -633,14 +687,19 @@
     progress = 0;
     try {
       ticket = Date.now() * 1000 + Math.floor(Math.random() * 1000);
-      const out = await api.exportClip(id, title.trim() || "Clip", { ...draft(), preset }, ticket);
-      const done = { original: "Saved as MP4.", discord: "Small enough for Discord.", gif: "Saved as GIF." }[preset];
-      store.notify("Export finished", vertical ? `${done} Vertical 9:16.` : done, [
-        { label: "Copy", run: () => share.copy(out) },
-        { label: "Show in folder", run: () => api.revealPath(out) },
+      const out = await api.exportClip(id, title.trim() || t("Clip"), { ...draft(), preset }, ticket);
+      const done = {
+        original: t("Saved as MP4."),
+        discord: t("Small enough for Discord."),
+        gif: t("Saved as GIF."),
+        tracks: t("Saved as MKV with every track on its own."),
+      }[preset];
+      store.notify(t("Export finished"), vertical ? t("{done} Vertical 9:16.", { done }) : done, [
+        { label: t("Copy"), run: () => share.copy(out) },
+        { label: t("Show in folder"), run: () => api.revealPath(out) },
       ]);
     } catch (e) {
-      if (String(e) !== "Export cancelled") store.notify("Export failed", String(e));
+      if (String(e) !== "Export cancelled") store.notify(t("Export failed"), String(e));
     } finally {
       progress = null;
     }
@@ -648,7 +707,7 @@
 
   async function saveFrame() {
     await api.saveFrame(id, current);
-    store.notify("Screenshot saved", "It's in your library.");
+    store.notify(t("Screenshot saved"), t("It's in your library."));
   }
 </script>
 
@@ -659,31 +718,31 @@
 
 <section class="editor">
   <header class="top">
-    <button type="button" class="icon-btn back" aria-label="Back to clips" use:tip={"Back to clips · Esc"} onclick={back}>
+    <button type="button" class="icon-btn back" aria-label={t("Back to clips")} use:tip={t("Back to clips · Esc")} onclick={back}>
       <Icon name="back" size={16} />
     </button>
     {#if data}
       <div class="heading">
-        <label class="visually-hidden" for="clip-title">Title</label>
+        <label class="visually-hidden" for="clip-title">{t("Title")}</label>
         <input id="clip-title" class="title" bind:value={title} spellcheck="false" />
         <span class="meta">
-          {data.game ? `${data.game} · ` : ""}{time(data.created)} · {data.width}×{data.height}{data.draft ? " · Draft" : ""}
+          {data.game ? `${data.game} · ` : ""}{time(data.created)} · {data.width}×{data.height}{data.draft ? ` · ${t("Draft")}` : ""}
         </span>
       </div>
       <div class="actions">
         {#if progress !== null}
-          <button type="button" class="btn small ghost" onclick={() => api.cancelExport(ticket)}>Cancel export</button>
+          <button type="button" class="btn small ghost" onclick={() => api.cancelExport(ticket)}>{t("Cancel export")}</button>
         {/if}
-        <button type="button" class="btn small ghost" onclick={saveDraft} use:tip={"Ctrl + S"}>Save draft</button>
+        <button type="button" class="btn small ghost" onclick={saveDraft} use:tip={"Ctrl + S"}>{t("Save draft")}</button>
         <div class="split">
           <button type="button" class="btn small primary" disabled={progress !== null} onclick={() => exportAs("original")}>
-            {progress !== null ? `Exporting ${Math.round(progress * 100)}%` : "Export"}
+            {progress !== null ? t("Exporting {n}%", { n: Math.round(progress * 100) }) : t("Export")}
           </button>
           <button
             type="button"
             class="btn small primary caret"
-            aria-label="More export options"
-            use:tip={"More formats"}
+            aria-label={t("More export options")}
+            use:tip={t("More formats")}
             aria-expanded={exportMenu}
             disabled={progress !== null}
             onclick={() => (exportMenu = !exportMenu)}
@@ -693,14 +752,17 @@
           {#if exportMenu}
             <div class="menu" role="menu" transition:pop>
               <button type="button" role="menuitem" onclick={() => exportAs("original")}>
-                <span>Full quality</span><span class="meta">MP4, as recorded</span>
+                <span>{t("Full quality")}</span><span class="meta">{t("MP4, as recorded")}</span>
               </button>
               <button type="button" role="menuitem" onclick={() => exportAs("discord")}>
-                <span>For Discord</span><span class="meta">Under 10 MB</span>
+                <span>{t("For Discord")}</span><span class="meta">{t("Under 10 MB")}</span>
+              </button>
+              <button type="button" role="menuitem" onclick={() => exportAs("tracks")}>
+                <span>{t("Separate tracks")}</span><span class="meta">{t("MKV for video editors, every track on its own")}</span>
               </button>
               <button type="button" role="menuitem" onclick={() => exportAs("gif")}>
-                <span>GIF</span>
-                <span class="meta">{length > 20 ? "Long GIFs get big. Under 15 s works best." : "Silent, loops, 15 fps"}</span>
+                <span>{t("GIF")}</span>
+                <span class="meta">{length > 20 ? t("Long GIFs get big. Under 15 s works best.") : t("Silent, loops, 15 fps")}</span>
               </button>
             </div>
           {/if}
@@ -711,7 +773,7 @@
 
   {#if failure}
     <div class="failure">
-      <h2>This clip can't be opened</h2>
+      <h2>{t("This clip can't be opened")}</h2>
       <p class="meta">{failure}</p>
     </div>
   {:else if data}
@@ -719,8 +781,8 @@
       <button
         type="button"
         class="fs-toggle"
-        aria-label={fullscreen ? "Leave full screen" : "Full screen"}
-        use:tip={fullscreen ? "Leave full screen · Esc" : "Full screen · F"}
+        aria-label={fullscreen ? t("Leave full screen") : t("Full screen")}
+        use:tip={fullscreen ? t("Leave full screen · Esc") : t("Full screen · F")}
         onclick={toggleFullscreen}
       >
         <Icon name={fullscreen ? "shrink" : "expand"} size={16} />
@@ -747,7 +809,7 @@
             style:top="{frameTop * 100}%"
             style:width="{frameW * 100}%"
             style:height="{cropScale * 100}%"
-            aria-label="9:16 frame. Drag or use the arrow keys to move it; drag a corner, scroll or press + and - to resize it"
+            aria-label={t("9:16 frame. Drag or use the arrow keys to move it; drag a corner, scroll or press + and - to resize it")}
             use:wheelCrop
             onpointerdown={dragCrop}
             onkeydown={(e) => {
@@ -767,7 +829,7 @@
           </button>
         {/if}
         {#if !playing}
-          <button type="button" class="play" aria-label="Play" use:tip={"Play · Space"} onclick={play}><Icon name="play" size={20} /></button>
+          <button type="button" class="play" aria-label={t("Play")} use:tip={t("Play · Space")} onclick={play}><Icon name="play" size={20} /></button>
         {/if}
       </div>
     </div>
@@ -777,44 +839,74 @@
         <button
           type="button"
           class="tool icon"
-          aria-label={playing ? "Pause" : "Play"}
-          use:tip={playing ? "Pause · Space" : "Play · Space"}
+          aria-label={playing ? t("Pause") : t("Play")}
+          use:tip={playing ? t("Pause · Space") : t("Play · Space")}
           onclick={() => (playing ? pause() : play())}
         >
           <Icon name={playing ? "pause" : "play"} size={16} />
         </button>
         <span class="clock mono"><span class="ink">{position(current)}</span> / {position(data.duration)}</span>
         <span class="sep"></span>
-        <button type="button" class="tool" use:tip={"Split at the playhead · S"} onclick={splitHere}>
-          <Icon name="scissors" size={16} />Split
+        <button type="button" class="tool" use:tip={t("Split at the playhead · S")} onclick={splitHere}>
+          <Icon name="scissors" size={16} />{t("Split")}
         </button>
         <button
           type="button"
           class="tool"
           disabled={!here || parts.length < 2}
-          use:tip={here?.removed ? "Put this part back · Del" : "Remove the part under the playhead · Del"}
+          use:tip={here?.removed ? t("Put this part back · Del") : t("Remove the part under the playhead · Del")}
           onclick={togglePart}
         >
           {#if here?.removed}
-            <Icon name="restore" size={16} />Put back
+            <Icon name="restore" size={16} />{t("Put back")}
           {:else}
-            <Icon name="trash" size={16} />Remove
+            <Icon name="trash" size={16} />{t("Remove")}
           {/if}
         </button>
         <span class="sep"></span>
-        <button type="button" class="tool icon" aria-label="Undo" use:tip={"Undo · Ctrl + Z"} disabled={!undoStack.length && snapshot === committed} onclick={undo}>
+        <button
+          type="button"
+          class="tool icon"
+          aria-label={t("Previous marker")}
+          use:tip={t("Previous marker · ,")}
+          disabled={!hasPrev}
+          onclick={() => jumpMarker(-1)}
+        >
+          <Icon name="prevMarker" size={16} />
+        </button>
+        <button
+          type="button"
+          class="tool"
+          aria-pressed={onMarker}
+          use:tip={onMarker ? t("Remove the marker here · M") : t("Mark this moment · M")}
+          onclick={toggleMarker}
+        >
+          <Icon name="flag" size={16} />{onMarker ? t("Unmark") : t("Mark")}
+        </button>
+        <button
+          type="button"
+          class="tool icon"
+          aria-label={t("Next marker")}
+          use:tip={t("Next marker · .")}
+          disabled={!hasNext}
+          onclick={() => jumpMarker(1)}
+        >
+          <Icon name="nextMarker" size={16} />
+        </button>
+        <span class="sep"></span>
+        <button type="button" class="tool icon" aria-label={t("Undo")} use:tip={t("Undo · Ctrl + Z")} disabled={!undoStack.length && snapshot === committed} onclick={undo}>
           <Icon name="undo" size={16} />
         </button>
-        <button type="button" class="tool icon" aria-label="Redo" use:tip={"Redo · Ctrl + Y"} disabled={!redoStack.length} onclick={redo}>
+        <button type="button" class="tool icon" aria-label={t("Redo")} use:tip={t("Redo · Ctrl + Y")} disabled={!redoStack.length} onclick={redo}>
           <Icon name="redo" size={16} />
         </button>
         <span class="spacer"></span>
         <span class="length mono">
-          {parts.length > 1 ? `${kept.length} of ${parts.length} parts · ` : ""}<span class="ink">{position(length)}</span> long
+          {parts.length > 1 ? `${t("{kept} of {parts} parts", { kept: kept.length, parts: parts.length })} · ` : ""}{#each tParts("{time} long") as part}{#if part === "{time}"}<span class="ink">{position(length)}</span>{:else}{part}{/if}{/each}
         </span>
         <div class="format">
           <Segmented
-            label="Format"
+            label={t("Format")}
             track="var(--black)"
             value={vertical ? "tall" : "wide"}
             options={[
@@ -824,18 +916,18 @@
             onchange={(v) => (vertical = v === "tall")}
           />
         </div>
-        <div class="master" use:tip={"Volume of all tracks together"}>
+        <div class="master" use:tip={t("Volume of all tracks together")}>
           <button
             type="button"
             class="tool icon"
-            aria-label={masterVolume ? "Mute all" : "Unmute all"}
+            aria-label={masterVolume ? t("Mute all") : t("Unmute all")}
             onclick={() => (masterVolume = masterVolume ? 0 : 1)}
           >
             <Icon name={masterVolume ? "speaker" : "mute"} size={16} />
           </button>
           <span class="master-slider">
             <Slider
-              label="Volume of all tracks"
+              label={t("Volume of all tracks")}
               value={Math.round(masterVolume * 100)}
               max={200}
               step={5}
@@ -845,7 +937,7 @@
           </span>
           <span class="mono meta master-value">{Math.round(masterVolume * 100)}%</span>
         </div>
-        <button type="button" class="tool icon" aria-label="Save this frame as a screenshot" use:tip={"Save this frame as a screenshot"} onclick={saveFrame}>
+        <button type="button" class="tool icon" aria-label={t("Save this frame as a screenshot")} use:tip={t("Save this frame as a screenshot")} onclick={saveFrame}>
           <Icon name="camera" size={16} />
         </button>
       </div>
@@ -854,8 +946,25 @@
         <div class="row ruler-row">
           <span class="head"></span>
           <div class="lane ruler" role="presentation" onpointerdown={(e) => drag("head", e)}>
-            {#each ticks as t (t)}
-              <span class="tick" style:left="{pct(t)}%"><span class="mono">{mark(t)}</span></span>
+            {#each ticks as tick (tick)}
+              <span class="tick" style:left="{pct(tick)}%"><span class="mono">{mark(tick)}</span></span>
+            {/each}
+            {#each markers as m (m)}
+              <button
+                type="button"
+                class="marker"
+                style:left="{pct(m)}%"
+                aria-label={t("Marker at {time}", { time: position(m) })}
+                use:tip={t("Jump here · right-click to remove")}
+                onpointerdown={(e) => e.stopPropagation()}
+                onclick={() => seek(m)}
+                oncontextmenu={(e) => {
+                  e.preventDefault();
+                  removeMarker(m);
+                }}
+              >
+                <Icon name="flag" size={12} />
+              </button>
             {/each}
           </div>
         </div>
@@ -863,14 +972,14 @@
         <div class="row">
           <div class="head">
             <span class="kind"><Icon name="clips" size={16} /></span>
-            <span class="name">Video</span>
+            <span class="name">{t("Video")}</span>
           </div>
           <div
             class="lane strip"
             bind:this={strip}
             role="slider"
             tabindex="0"
-            aria-label="Position"
+            aria-label={t("Position")}
             aria-valuemin={0}
             aria-valuemax={data.duration}
             aria-valuenow={current}
@@ -884,8 +993,8 @@
                 type="button"
                 class="join"
                 style:left="{pct(s)}%"
-                aria-label="Join the parts at {position(s)}"
-                use:tip={"Join the parts"}
+                aria-label={t("Join the parts at {time}", { time: position(s) })}
+                use:tip={t("Join the parts")}
                 onpointerdown={(e) => e.stopPropagation()}
                 onclick={() => join(s)}
               >
@@ -896,16 +1005,16 @@
               type="button"
               class="handle"
               style:left="{pct(trimStart)}%"
-              aria-label="Start of the clip"
-              use:tip={"Drag to set the start · I"}
+              aria-label={t("Start of the clip")}
+              use:tip={t("Drag to set the start · I")}
               onpointerdown={(e) => drag("start", e)}
             ></button>
             <button
               type="button"
               class="handle end"
               style:left="{pct(trimEnd)}%"
-              aria-label="End of the clip"
-              use:tip={"Drag to set the end · O"}
+              aria-label={t("End of the clip")}
+              use:tip={t("Drag to set the end · O")}
               onpointerdown={(e) => drag("end", e)}
             ></button>
           </div>
@@ -917,14 +1026,14 @@
             {@const icon = appIcon(track.exe)}
             {@const ts = edits[i].start ?? 0}
             {@const te = edits[i].end ?? data.duration}
-            <div class="row" class:off={!edits[i].enabled} role="group" aria-label={track.name} oncontextmenu={(e) => openTrackMenu(i, e)}>
+            <div class="row" class:off={!edits[i].enabled} role="group" aria-label={trackName(track)} oncontextmenu={(e) => openTrackMenu(i, e)}>
               <div class="head">
                 <button
                   type="button"
                   class="kind mute"
                   aria-pressed={!edits[i].enabled}
-                  aria-label={edits[i].enabled ? `Mute ${track.name}` : `Unmute ${track.name}`}
-                  use:tip={edits[i].enabled ? "Mute" : "Unmute"}
+                  aria-label={edits[i].enabled ? t("Mute {name}", { name: trackName(track) }) : t("Unmute {name}", { name: trackName(track) })}
+                  use:tip={edits[i].enabled ? t("Mute") : t("Unmute")}
                   onclick={() => (edits[i].enabled = !edits[i].enabled)}
                 >
                   {#if !edits[i].enabled}
@@ -936,9 +1045,9 @@
                   {/if}
                 </button>
                 <div class="head-body">
-                  <span class="name">{track.name}</span>
+                  <span class="name">{trackName(track)}</span>
                   <Slider
-                    label="{track.name} volume"
+                    label={t("{name} volume", { name: trackName(track) })}
                     value={Math.round(edits[i].volume * 100)}
                     valuetext="{Math.round(edits[i].volume * 100)}%"
                     disabled={!edits[i].enabled}
@@ -955,8 +1064,8 @@
                   class="track-handle"
                   class:set={ts > 0}
                   style:left="{pct(ts)}%"
-                  aria-label="Where {track.name} starts"
-                  use:tip={"Drag to set where this track starts · double-click to reset"}
+                  aria-label={t("Where {name} starts", { name: trackName(track) })}
+                  use:tip={t("Drag to set where this track starts · double-click to reset")}
                   onpointerdown={(e) => dragTrack(i, "start", e)}
                   ondblclick={() => (edits[i].start = undefined)}
                 ></button>
@@ -965,8 +1074,8 @@
                   class="track-handle end"
                   class:set={te < data.duration}
                   style:left="{pct(te)}%"
-                  aria-label="Where {track.name} ends"
-                  use:tip={"Drag to set where this track ends · double-click to reset"}
+                  aria-label={t("Where {name} ends", { name: trackName(track) })}
+                  use:tip={t("Drag to set where this track ends · double-click to reset")}
                   onpointerdown={(e) => dragTrack(i, "end", e)}
                   ondblclick={() => (edits[i].end = undefined)}
                 ></button>
@@ -979,7 +1088,7 @@
           <div class="row removed-row">
             <span class="head"></span>
             <button type="button" class="btn ghost small" onclick={restoreTracks}>
-              {removedTracks} removed {removedTracks === 1 ? "track" : "tracks"} · Bring back
+              {t("{n} removed tracks · Bring back", { n: removedTracks })}
             </button>
           </div>
         {/if}
@@ -995,10 +1104,10 @@
             use:outside={() => (trackMenu = null)}
           >
             <button type="button" role="menuitem" onclick={() => extractTrack(m.i)}>
-              <Icon name="export" size={16} />Save as audio file
+              <Icon name="export" size={16} />{t("Save as audio file")}
             </button>
             <button type="button" role="menuitem" class="danger" onclick={() => removeTrack(m.i)}>
-              <Icon name="trash" size={16} />Remove track
+              <Icon name="trash" size={16} />{t("Remove track")}
             </button>
           </div>
         {/if}
@@ -1008,15 +1117,18 @@
           {#each parts.filter((p) => p.removed) as p (p.start)}
             <span class="cut" style:left="{pct(p.start)}%" style:width="{pct(p.end) - pct(p.start)}%"></span>
           {/each}
+          {#each markers as m (m)}
+            <span class="marker-line" style:left="{pct(m)}%"></span>
+          {/each}
           <span class="playhead" style:left="{pct(current)}%"></span>
         </div>
       </div>
       {#if !data.tracks.length}
-        <p class="meta none">This clip has no sound.</p>
+        <p class="meta none">{t("This clip has no sound.")}</p>
       {/if}
     </div>
   {:else}
-    <div class="loading"><span class="mono meta">Preparing tracks…</span></div>
+    <div class="loading"><span class="mono meta">{t("Preparing tracks…")}</span></div>
   {/if}
 </section>
 
@@ -1596,6 +1708,34 @@
     top: 20px;
     bottom: 0;
     background: repeating-linear-gradient(-45deg, rgb(10 10 9 / 0.8) 0 5px, rgb(10 10 9 / 0.55) 5px 10px);
+  }
+  .marker {
+    position: absolute;
+    top: 0;
+    z-index: 3;
+    width: 20px;
+    height: 20px;
+    margin-left: -6px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--lavender);
+  }
+  .marker:hover,
+  .marker:focus-visible {
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .marker-line {
+    position: absolute;
+    top: 20px;
+    bottom: 0;
+    width: 0;
+    border-left: 1px dashed var(--lavender);
+    opacity: 0.7;
   }
   .playhead {
     position: absolute;

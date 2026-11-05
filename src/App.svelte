@@ -10,14 +10,33 @@
   import Settings from "./components/Settings.svelte";
   import Sidebar from "./components/Sidebar.svelte";
   import TitleBar from "./components/TitleBar.svelte";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
+  import { importPaths } from "./lib/importing";
+  import { t } from "./lib/i18n.svelte";
 
   const field = raster();
   // The field drifts up one pixel every second and a half.
   const drift = ticker(1500);
   let error = $state<string | null>(null);
 
+  /** Files from Explorer are being dragged over the window. */
+  let dropping = $state(false);
+
   onMount(() => {
     store.init().catch((e) => (error = String(e)));
+    // Videos and pictures dropped on the window go into the library.
+    const unlisten = getCurrentWebview().onDragDropEvent((e) => {
+      if (e.payload.type === "enter" || e.payload.type === "over") dropping = store.view.name !== "editor" && !!store.settings?.onboarded;
+      else if (e.payload.type === "leave") dropping = false;
+      else if (e.payload.type === "drop") {
+        const wanted = dropping;
+        dropping = false;
+        if (wanted) importPaths(e.payload.paths);
+      }
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
   });
 
   /** Each page (and each library filter) fades in when you switch to it. */
@@ -31,7 +50,7 @@
 
   <div class="body">
     {#if error}
-      <p class="meta">Replix could not start: {error}</p>
+      <p class="meta">{t("Replix could not start: {error}", { error })}</p>
     {:else if store.settings && !store.settings.onboarded}
       <Onboarding />
     {:else}
@@ -56,6 +75,10 @@
 
   <FfmpegSetup />
 
+  {#if dropping}
+    <div class="drop" aria-hidden="true"><span>{t("Drop to add to your library")}</span></div>
+  {/if}
+
   {#if store.notice}
     <div class="notice" role="status">
       <span class="notice-text"><strong>{store.notice.title}</strong><span>{store.notice.detail}</span></span>
@@ -74,6 +97,19 @@
 </div>
 
 <style>
+  .drop {
+    position: absolute;
+    inset: 12px;
+    z-index: 60;
+    display: grid;
+    place-items: center;
+    border: 2px dashed var(--accent);
+    border-radius: 28px;
+    background: rgb(10 10 9 / 0.6);
+    pointer-events: none;
+    font-size: 18px;
+    font-weight: 800;
+  }
   .shell {
     position: relative;
     height: 100%;

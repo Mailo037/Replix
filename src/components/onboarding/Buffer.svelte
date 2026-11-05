@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from "../../lib/i18n.svelte";
   // Frames slide past. The newest stay inside the bracket; older ones crumble into characters.
   let { seconds = 30 }: { seconds?: number } = $props();
 
@@ -23,9 +24,9 @@
   </div>
   <pre class="dust mono">{dust}</pre>
   <div class="keep">
-    <span class="label mono">[ last {seconds < 60 ? `${seconds} s` : `${seconds / 60} min`} ]</span>
+    <span class="label mono">{seconds < 60 ? t("[ last {n} s ]", { n: seconds }) : t("[ last {n} min ]", { n: seconds / 60 })}</span>
   </div>
-  <div class="now mono">now</div>
+  <div class="now mono">{t("now")}</div>
 </div>
 
 <style>

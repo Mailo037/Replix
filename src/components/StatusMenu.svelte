@@ -7,6 +7,7 @@
   import Icon from "./Icon.svelte";
   import Segmented from "./Segmented.svelte";
   import Switch from "./Switch.svelte";
+  import { t } from "../lib/i18n.svelte";
 
   // Recording state as a small pill in the title bar; the menu holds the quick controls.
   let open = $state(false);
@@ -31,47 +32,56 @@
   });
 
   // The level bars and the session dot move a few times a second, like a real meter.
+  /** Screens are recorded under the English name "Desktop" or "Desktop 2"; shown in the page's language. */
+  const shown = (target: string) => target.replace(/^Desktop(?= |$)/, t("Desktop"));
+
   const LEVELS = [40, 55, 70, 85, 100, 85, 70, 55];
   const OFFSETS = [2, 6, 3, 1];
   const beat = ticker(200, () => store.status.state === "recording" || !!store.status.sessionSince);
 
   const settings = $derived(store.settings);
-  const appLabel = $derived(settings?.appExe?.replace(/\.exe$/i, "") ?? "the app");
+  const appLabel = $derived(settings?.appExe?.replace(/\.exe$/i, "") ?? t("the app"));
 
   const headline = $derived.by(() => {
     const s = store.status;
     if (s.sessionSince) {
       const secs = Math.max(0, Math.floor((now - s.sessionSince) / 1000));
-      return `Session ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}`;
+      return t("Session {time}", { time: `${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, "0")}` });
     }
     switch (s.state) {
       case "starting":
-        return "Getting ready";
+        return t("Getting ready");
       case "off":
-        return "Paused";
+        return t("Paused");
       case "waiting":
-        return settings?.source === "app" ? "Waiting for the app" : "Waiting for a game";
+        return settings?.source === "app" ? t("Waiting for the app") : t("Waiting for a game");
       case "recording":
-        return s.target ? `Recording ${s.target}` : "Recording";
+        return s.target ? t("Recording {target}", { target: shown(s.target) }) : t("Recording");
       case "error":
-        return "Can't record";
+        return t("Can't record");
     }
   });
 
   const detail = $derived.by(() => {
     const s = store.status;
-    if (s.sessionSince) return `Recording ${s.target ?? ""}. Press the session key to stop.`;
+    if (s.sessionSince) {
+      return s.target
+        ? t("Recording {target}. Press the session key to stop.", { target: shown(s.target) })
+        : t("Recording. Press the session key to stop.");
+    }
     switch (s.state) {
       case "starting":
-        return "Testing your graphics card";
+        return t("Testing your graphics card");
       case "off":
-        return "Turn recording on to keep clips";
+        return t("Turn recording on to keep clips");
       case "waiting":
-        return settings?.source === "app" ? `Open ${appLabel} to start` : "Start a game to begin";
+        return settings?.source === "app" ? t("Open {app} to start", { app: appLabel }) : t("Start a game to begin");
       case "recording":
-        return `Keeping the last ${lengthLabel(s.clipSeconds ?? settings?.bufferSeconds ?? 30)} of ${s.target ?? "the screen"}`;
+        return s.target
+          ? t("Keeping the last {length} of {target}", { length: lengthLabel(s.clipSeconds ?? settings?.bufferSeconds ?? 30), target: shown(s.target) })
+          : t("Keeping the last {length} of the screen", { length: lengthLabel(s.clipSeconds ?? settings?.bufferSeconds ?? 30) });
       case "error":
-        return s.error ?? "Something went wrong";
+        return s.error ?? t("Something went wrong");
     }
   });
 
@@ -107,7 +117,7 @@
     class="pill"
     class:open
     aria-expanded={open}
-    aria-label="Recording: {headline}"
+    aria-label={t("Recording: {headline}", { headline })}
     onclick={() => (open ? close() : (open = true))}
   >
     {#if store.status.state === "recording" && !store.status.sessionSince}
@@ -127,18 +137,18 @@
   </button>
 
   {#if open && settings}
-    <div class="popover" role="dialog" aria-label="Recording" transition:pop>
+    <div class="popover" role="dialog" aria-label={t("Recording")} transition:pop>
       <div class="pop-row">
         <span class="pop-title">
-          <span>Recording</span>
+          <span>{t("Recording")}</span>
           <span class="meta">{detail}</span>
         </span>
-        <Switch checked={settings.enabled} label="Recording" onchange={(v) => update({ enabled: v })} />
+        <Switch checked={settings.enabled} label={t("Recording")} onchange={(v) => update({ enabled: v })} />
       </div>
       <div>
-        <div class="pop-label">Clip length</div>
+        <div class="pop-label">{t("Clip length")}</div>
         <Segmented
-          label="Clip length"
+          label={t("Clip length")}
           track="var(--overlay)"
           value={settings.bufferSeconds}
           options={[15, 30, 60, 120].map((n) => ({ value: n, label: lengthLabel(n) }))}
@@ -146,7 +156,7 @@
         />
       </div>
       <div>
-        <div class="pop-label">Record</div>
+        <div class="pop-label">{t("Record")}</div>
         {#if picking}
           <ul class="scroll app-list">
             {#each apps as a (a.exe)}
@@ -163,12 +173,12 @@
                 </button>
               </li>
             {:else}
-              <li class="meta empty">No open windows found.</li>
+              <li class="meta empty">{t("No open windows found.")}</li>
             {/each}
           </ul>
-          <button type="button" class="btn ghost small" onclick={() => (picking = false)}>Back</button>
+          <button type="button" class="btn ghost small" onclick={() => (picking = false)}>{t("Back")}</button>
         {:else}
-          {#each [{ v: "game", l: "Games (automatic)" }, { v: "screen", l: "Whole screen" }, { v: "app", l: settings.source === "app" ? `One app · ${appLabel}` : "One app…" }] as o (o.v)}
+          {#each [{ v: "game", l: t("Games (automatic)") }, { v: "screen", l: t("Whole screen") }, { v: "app", l: settings.source === "app" ? t("One app · {app}", { app: appLabel }) : t("One app…") }] as o (o.v)}
             <button type="button" class="choice" aria-pressed={settings.source === o.v} onclick={() => pickSource(o.v as Source)}>
               <span>{o.l}</span>
               <span class="mono mark" class:on={settings.source === o.v}>{settings.source === o.v ? "[×]" : "[ ]"}</span>
@@ -183,7 +193,7 @@
                     onclick={() => update({ monitor: m.index })}
                   >
                     <span class="choice-text">
-                      <span>Display {m.index + 1}{m.primary ? " (main)" : ""}</span>
+                      <span>{m.primary ? t("Display {n} (main)", { n: m.index + 1 }) : t("Display {n}", { n: m.index + 1 })}</span>
                       <span class="meta">{m.width} × {m.height}</span>
                     </span>
                     <span class="mono mark" class:on={settings.monitor === m.index}>{settings.monitor === m.index ? "(•)" : "( )"}</span>

@@ -1,13 +1,14 @@
 <script lang="ts">
   import Icon from "../Icon.svelte";
+  import { t } from "../../lib/i18n.svelte";
 
   // Four sources, four tracks. One of them gets muted and goes quiet while the rest play on.
-  const rows = [
-    { name: "Game", icon: "game", muted: false },
-    { name: "Discord", icon: "speaker", muted: true },
-    { name: "Spotify", icon: "app", muted: false },
-    { name: "Your mic", icon: "mic", muted: false },
-  ];
+  const rows = $derived([
+    { name: t("Game"), icon: "game", muted: false },
+    { name: t("Discord"), icon: "speaker", muted: true },
+    { name: t("Spotify"), icon: "app", muted: false },
+    { name: t("Your mic"), icon: "mic", muted: false },
+  ]);
   const BARS = 22;
 </script>
 

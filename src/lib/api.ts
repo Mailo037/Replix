@@ -58,6 +58,10 @@ export interface Item {
   seen: boolean;
   /** Replix could not read the file yet; its length and size follow on a later scan. */
   unread: boolean;
+  /** Moments marked while recording or in the editor, in seconds. */
+  markers?: number[];
+  /** Brought in from elsewhere; the space limit leaves it alone. */
+  imported?: boolean;
 }
 
 /** A clip or session still being written; the library shows a placeholder for it. */
@@ -78,6 +82,21 @@ export interface Hotkeys {
   clip: string;
   screenshot: string;
   session: string;
+  /** Marks a moment while recording. */
+  marker: string;
+}
+
+/** A program that never ends up in a recording. */
+export interface Excluded {
+  exe: string;
+  name: string;
+  path?: string | null;
+}
+
+export interface Imported {
+  count: number;
+  /** Files left out: name and reason. */
+  skipped: [string, string][];
 }
 
 /** One game or app's own settings; null keeps the general one. */
@@ -132,6 +151,10 @@ export interface Settings {
   toastPosition: ToastPosition;
   toastSize: "small" | "medium" | "large";
   profiles: Profile[];
+  /** Kept out of every recording: not in the picture, not in the sound. */
+  excluded: Excluded[];
+  /** "auto" follows Windows. */
+  language: string;
   onboarded: boolean;
 }
 
@@ -163,6 +186,7 @@ export interface EditorData {
   tracks: EditorTrack[];
   filmstrip: string | null;
   draft: Draft | null;
+  markers: number[];
 }
 
 export interface AppWindow {
@@ -185,7 +209,8 @@ export interface EncoderOption {
   label: string;
 }
 
-export type Preset = "original" | "discord" | "gif";
+/** "tracks" is an MKV with every audio track on its own, for video editors. */
+export type Preset = "original" | "discord" | "gif" | "tracks";
 
 let changes: Promise<unknown> = Promise.resolve();
 
@@ -235,6 +260,9 @@ export const api = {
   saveDraft: (id: string, title: string, draft: Draft) => inOrder(() => invoke<void>("save_draft", { id, title, draft })),
   renameItem: (id: string, title: string) => inOrder(() => invoke<void>("rename_item", { id, title })),
   setFavorite: (ids: string[], favorite: boolean) => inOrder(() => invoke<void>("set_favorite", { ids, favorite })),
+  setMarkers: (id: string, markers: number[]) => inOrder(() => invoke<void>("set_markers", { id, markers })),
+  /** Copies videos and pictures (or the ones in a folder) into the library. */
+  importFiles: (paths: string[]) => invoke<Imported>("import_files", { paths }),
   /** Says where the files were, for `restoreItems`. */
   deleteItems: (ids: string[]) => inOrder(() => invoke<string[]>("delete_items", { ids })),
   restoreItems: (paths: string[]) => inOrder(() => invoke<number>("restore_items", { paths })),
@@ -252,6 +280,7 @@ export const api = {
   saveClipNow: () => invoke<void>("save_clip_now"),
   takeScreenshot: () => invoke<void>("take_screenshot"),
   toggleSession: () => invoke<void>("toggle_session"),
+  addMarker: () => invoke<void>("add_marker"),
   previewToast: () => invoke<void>("preview_toast"),
   hotkeyConflicts: () => invoke<string[]>("hotkey_conflicts"),
   pauseHotkeys: (paused: boolean) => invoke<void>("pause_hotkeys", { paused }),
