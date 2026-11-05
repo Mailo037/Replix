@@ -1,6 +1,6 @@
 [package]
 name = "replix"
-version = "0.1.6"
+version = "0.1.7"
 description = "Clip the last moments of any game"
 edition = "2021"
 
