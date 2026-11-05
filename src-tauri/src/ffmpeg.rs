@@ -27,6 +27,19 @@ fn tool(name: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
+/// `spawn` for FFmpeg and ffprobe: the process is tied to Replix and ends with it.
+pub trait SpawnTied {
+    fn spawn_tied(&mut self) -> std::io::Result<std::process::Child>;
+}
+
+impl SpawnTied for Command {
+    fn spawn_tied(&mut self) -> std::io::Result<std::process::Child> {
+        let child = self.spawn()?;
+        crate::win::tie_to_app(&child);
+        Ok(child)
+    }
+}
+
 pub fn exe() -> PathBuf {
     tool("ffmpeg")
 }
@@ -69,7 +82,7 @@ fn run_checked(mut cmd: Command, args: &[String], timeout: Duration, keep_going:
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_tied()
         .context("FFmpeg could not be started")?;
     let mut stderr = child.stderr.take().unwrap();
     let reader = std::thread::spawn(move || {
@@ -156,7 +169,7 @@ pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Resul
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_tied()
         .context("ffprobe could not be started")?;
     let (mut stdout, mut stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
     let read_out = std::thread::spawn(move || {

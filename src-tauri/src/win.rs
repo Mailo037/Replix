@@ -435,6 +435,54 @@ pub fn cpu_time(child: &std::process::Child) -> Option<std::time::Duration> {
     Some(std::time::Duration::from_nanos((ticks(kernel) + ticks(user)) * 100))
 }
 
+/// Ties a helper process to Replix's lifetime: once Replix ends, however it ends (closed,
+/// crashed, killed by an installer), Windows ends the helper too. Without this an FFmpeg
+/// left running keeps its exe locked and an update cannot replace it.
+pub fn tie_to_app(child: &std::process::Child) {
+    use std::os::windows::io::AsRawHandle;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+    let Some(job) = app_job() else { return };
+    // SAFETY: the job handle lives for the whole process; the child's handle outlives the call.
+    if let Err(e) = unsafe { AssignProcessToJobObject(job, HANDLE(child.as_raw_handle())) } {
+        log::warn!("a helper process is not tied to Replix: {e}");
+    }
+}
+
+/// The job that ends every tied helper when Replix ends. Its handle is never closed:
+/// Windows closes it when Replix exits, and that is what ends the helpers.
+fn app_job() -> Option<windows::Win32::Foundation::HANDLE> {
+    use std::sync::OnceLock;
+    use windows::Win32::Foundation::HANDLE;
+    use windows::Win32::System::JobObjects::{
+        CreateJobObjectW, JobObjectExtendedLimitInformation, SetInformationJobObject,
+        JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
+    };
+    // Kept as an address because a raw handle cannot be shared across threads.
+    static JOB: OnceLock<Option<usize>> = OnceLock::new();
+    let job = JOB.get_or_init(|| {
+        // SAFETY: plain Win32 calls on a job object created and owned here.
+        unsafe {
+            let job = CreateJobObjectW(None, PCWSTR::null()).ok()?;
+            let mut info = JOBOBJECT_EXTENDED_LIMIT_INFORMATION::default();
+            info.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
+            let set = SetInformationJobObject(
+                job,
+                JobObjectExtendedLimitInformation,
+                &info as *const _ as *const c_void,
+                std::mem::size_of::<JOBOBJECT_EXTENDED_LIMIT_INFORMATION>() as u32,
+            );
+            if let Err(e) = set {
+                log::warn!("helper processes are not tied to Replix: {e}");
+                let _ = CloseHandle(job);
+                return None;
+            }
+            Some(job.0 as usize)
+        }
+    });
+    job.map(|job| HANDLE(job as *mut c_void))
+}
+
 /// A program's icon as RGBA pixels (width, height, pixels), at about `size` pixels.
 pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
     use windows::Win32::Graphics::Gdi::{
@@ -497,5 +545,30 @@ pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
         }
         let _ = DestroyIcon(icon);
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A tied helper sits in the job whose closing ends it along with Replix.
+    #[test]
+    fn a_tied_helper_is_in_the_app_job() {
+        use std::os::windows::io::AsRawHandle;
+        use windows::Win32::Foundation::HANDLE;
+        use windows::Win32::System::JobObjects::IsProcessInJob;
+        let mut child = std::process::Command::new("cmd")
+            .args(["/C", "ping -n 30 127.0.0.1 >NUL"])
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        tie_to_app(&child);
+        let mut inside = BOOL(0);
+        // SAFETY: both handles are alive for the call.
+        unsafe { IsProcessInJob(HANDLE(child.as_raw_handle()), app_job(), &mut inside) }.unwrap();
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(inside.as_bool());
     }
 }

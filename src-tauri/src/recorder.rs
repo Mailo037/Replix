@@ -20,6 +20,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio::{self, Router, Track};
+use crate::ffmpeg::SpawnTied;
 use crate::encoder::{self, Encoder};
 use crate::ffmpeg;
 use crate::library::{self, Kind, Meta, TrackMeta};
@@ -219,7 +220,7 @@ impl Pipeline {
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::piped())
-            .spawn()
+            .spawn_tied()
             .context("FFmpeg could not be started")?;
         let stdin = child.stdin.take();
         let log_lines = Arc::new(Mutex::new(VecDeque::new()));

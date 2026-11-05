@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 use crate::encoder::Encoder;
+use crate::ffmpeg::SpawnTied;
 use crate::{ffmpeg, media};
 use crate::library::{Draft, Meta, TrackEdit, TrackMeta};
 
@@ -430,7 +431,7 @@ pub fn export(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .spawn()
+        .spawn_tied()
         .context("FFmpeg could not be started")?);
     let stderr = child.0.stderr.take().unwrap();
     let errors = std::thread::spawn(move || {
@@ -649,7 +650,7 @@ fn decode_peaks(
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
-            .spawn()
+            .spawn_tied()
             .context("FFmpeg could not be started")?,
     );
     let stdout = child.0.stdout.take().context("no output")?;
