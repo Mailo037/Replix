@@ -1448,7 +1448,8 @@
     gap: 4px;
   }
   .audio-rows.many {
-    max-height: calc(var(--rows) * 42px - 4px);
+    /* A row is 41px tall, with 4px between rows. */
+    max-height: calc(var(--rows) * 45px - 4px);
     overflow-y: auto;
     overscroll-behavior: contain;
   }

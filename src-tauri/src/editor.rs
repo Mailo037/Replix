@@ -318,7 +318,8 @@ pub fn export(
 
     let gif = request.preset == Preset::Gif;
     // Each track with where it is heard, in seconds of the input (which begins at `start`).
-    let enabled: Vec<(usize, f32, Option<(f64, f64)>)> = if gif {
+    type Heard = (usize, f32, Option<(f64, f64)>);
+    let enabled: Vec<Heard> = if gif {
         Vec::new()
     } else {
         request

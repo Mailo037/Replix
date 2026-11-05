@@ -51,7 +51,7 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           tagName: ${{ github.ref_name }}
-          releaseName: Replix ${{ github.ref_name }}
+          releaseName: ${{ github.ref_name }}
           releaseBody: Download the installer below. Replix keeps itself up to date from here on.
           releaseDraft: false
           prerelease: false

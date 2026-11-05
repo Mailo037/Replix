@@ -22,11 +22,11 @@ Pick your microphone, check that it's picking you up, and let noise suppression 
 
 ## Edit in seconds
 
-Trim the start and end, split the clip and take out the parts you don't need. Turn tracks off or down, then export in full quality, small enough for Discord, or as a GIF. <kbd>Ctrl</kbd> + <kbd>Z</kbd> takes any step back.
+Trim the start and end, split the clip and take out the parts you don't need. Turn tracks off or down, let a track play for only part of the clip, or save one on its own as audio. Then export in full quality, small enough for Discord, or as a GIF. <kbd>Ctrl</kbd> + <kbd>Z</kbd> takes any step back.
 
-![Editor with a part cut out and four audio tracks](docs/images/editor.png)
+![Editor with a part cut out and its audio tracks](docs/images/editor.png)
 
-Switch to 9:16 for TikTok, Shorts and Reels, and drag the frame to where the action is.
+Switch to 9:16 for TikTok, Shorts and Reels, and drag the frame to where the action is. Pull a corner to zoom in.
 
 ![Editor in 9:16 with the frame over the car](docs/images/vertical.png)
 
@@ -52,7 +52,7 @@ Every game can have its own clip length, frame rate, quality and microphone sett
 | <kbd>Alt</kbd> + <kbd>S</kbd> | Screenshot |
 | <kbd>Alt</kbd> + <kbd>X</kbd> | Start or stop a session |
 
-All three can be changed in Settings. In the editor: <kbd>Space</kbd> plays, <kbd>S</kbd> splits, <kbd>Del</kbd> removes a part, <kbd>I</kbd> and <kbd>O</kbd> set the start and end.
+All three can be changed in Settings, which tells you right away if another program already uses a key. In the editor: <kbd>Space</kbd> plays, <kbd>S</kbd> splits, <kbd>Del</kbd> removes a part, <kbd>I</kbd> and <kbd>O</kbd> set the start and end.
 
 ## Your clips stay yours
 
