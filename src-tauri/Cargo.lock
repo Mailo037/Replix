@@ -3232,6 +3232,7 @@ dependencies = [
  "tauri-plugin-updater",
  "trash",
  "wasapi",
+ "webview2-com",
  "windows 0.62.2",
 ]
 

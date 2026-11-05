@@ -353,11 +353,14 @@ h3 {
   }
 }
 
-/* Replix without the focus, perhaps beside a game: looping animations stand still. Only
-   the setup scenes loop; a page or toast that was fading in finishes as usual. */
+/* Replix without the focus, perhaps beside a game: looping animations stand still, so the
+   page has nothing to draw. The loops are the setup scenes and the upload pulse; a page or
+   toast that was fading in finishes as usual. */
 .resting .onboarding *,
 .resting .onboarding *::before,
-.resting .onboarding *::after {
+.resting .onboarding *::after,
+.resting .uploading,
+.resting .pulse {
   animation-play-state: paused !important;
 }
 

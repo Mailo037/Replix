@@ -49,6 +49,8 @@ tauri-plugin-updater = "2"
 tauri-plugin-process = "2"
 nnnoiseless = { version = "0.5.2", default-features = false }
 tauri-plugin-drag = "2"
+# The same version Tauri uses, to ask WebView2 to give back memory while hidden.
+webview2-com = "0.39"
 
 # Debug info would need several GB of disk for this dependency tree.
 [profile.dev]

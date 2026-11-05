@@ -128,7 +128,8 @@
       <span class="sticker {badge}">{badge}</span>
     {/if}
     <span class="thumb">
-      {#if thumbUrl}
+      <!-- Hidden in the tray, the pictures are let go so WebView2 can free them. -->
+      {#if thumbUrl && store.visible}
         <img src={thumbUrl} alt="" class="real" class:loaded loading="lazy" decoding="async" onload={() => (loaded = true)} />
       {/if}
       {#if selecting}
@@ -304,6 +305,7 @@
   }
   .uploading {
     display: flex;
+    /* Looping: stands still while Replix is in the background (see app.css). */
     align-items: center;
     gap: 6px;
     animation: pulse 1.2s ease-in-out infinite;

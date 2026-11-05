@@ -4,7 +4,7 @@
   /** Audio tracks shown at once; more scroll. */
   const MAX_ROWS = 3;
   import { listen } from "@tauri-apps/api/event";
-  import { onDestroy, onMount } from "svelte";
+  import { onDestroy, onMount, untrack } from "svelte";
   import { api, fileUrl, type Draft, type EditorData, type Preset, type TrackEdit } from "../lib/api";
   import { position, time } from "../lib/format";
   import { share } from "../lib/share";
@@ -162,10 +162,19 @@
   /** This hide already ended the editor's round. */
   let endedForHide = false;
 
+  /**
+   * Where the preview was when the window hid: hidden, the video and audio are let go so
+   * WebView2 can free their buffers, and coming back they load again from here.
+   */
+  let resumeAt: number | null = null;
+
   $effect(() => {
     if (!store.visible) {
       // Once per hide: pausing changes `playing`, which runs this again.
-      if (!endedForHide) endEditorRound();
+      if (!endedForHide) {
+        endEditorRound();
+        resumeAt = untrack(() => current);
+      }
       endedForHide = true;
       hiddenSince = true;
       if (playing) pause();
@@ -181,6 +190,12 @@
       hiddenSince = false;
       api.openEditor(id, currentRound()).then((d) => data && !data.filmstrip && (data.filmstrip = d.filmstrip)).catch(() => {});
     }
+  });
+
+  // Another program in front, perhaps a game: the preview stops, so the page draws nothing
+  // until Replix is back.
+  $effect(() => {
+    if (!store.focused && untrack(() => playing)) pause();
   });
 
   $effect(() => {
@@ -714,15 +729,15 @@
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
           bind:this={video}
-          src={fileUrl(data.path)}
+          src={store.visible ? fileUrl(data.path) : undefined}
           muted
           preload="auto"
-          onloadedmetadata={() => seek(trimStart)}
+          onloadedmetadata={() => { seek(resumeAt ?? trimStart); resumeAt = null; }}
           onseeked={(e) => { if (!playing) current = e.currentTarget.currentTime; }}
           onclick={() => (playing ? pause() : play())}
         ></video>
         {#each data.tracks as track, i (i)}
-          <audio bind:this={audios[i]} src={fileUrl(track.audio)} preload="auto"></audio>
+          <audio bind:this={audios[i]} src={store.visible ? fileUrl(track.audio) : undefined} preload="auto"></audio>
         {/each}
         {#if vertical}
           <button
@@ -860,7 +875,7 @@
             aria-valuemax={data.duration}
             aria-valuenow={current}
             onpointerdown={(e) => drag("head", e)}
-            style:background-image={data.filmstrip ? `url("${fileUrl(data.filmstrip)}")` : undefined}
+            style:background-image={data.filmstrip && store.visible ? `url("${fileUrl(data.filmstrip)}")` : undefined}
           >
             <span class="range" style:left="{pct(trimStart)}%" style:width="{pct(trimEnd) - pct(trimStart)}%"></span>
             {#each splits.filter((s) => s > trimStart && s < trimEnd) as s (s)}

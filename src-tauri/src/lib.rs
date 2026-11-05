@@ -1007,7 +1007,32 @@ fn set_page_visible(window: &tauri::WebviewWindow, visible: bool) {
         return;
     }
     PAGE_VISIBLE.store(visible, Ordering::Relaxed);
+    set_page_memory(webview, visible);
     media::wake();
+}
+
+/// Hidden, WebView2 is asked to keep as little memory as it can: it drops caches and the
+/// pictures and video the page let go of, which leaves more for the game. On screen again,
+/// it goes back to normal. Older WebView2 runtimes without this simply keep their memory.
+fn set_page_memory(webview: &tauri::Webview, visible: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows::core::Interface;
+    let level = if visible { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW };
+    let _ = webview.with_webview(move |platform| {
+        // SAFETY: called on the main thread with the controller Tauri keeps alive.
+        let result = unsafe {
+            platform
+                .controller()
+                .CoreWebView2()
+                .and_then(|core| core.cast::<ICoreWebView2_19>())
+                .and_then(|core| core.SetMemoryUsageTargetLevel(level))
+        };
+        if let Err(e) = result {
+            log::debug!("page memory level not set: {e}");
+        }
+    });
 }
 
 /// Ends Replix once settings changed a moment ago are applied: the page has handed them

@@ -3,6 +3,7 @@
   import { share } from "../lib/share";
   import { tip } from "../lib/tooltip";
   import Icon from "./Icon.svelte";
+  import { store } from "../lib/store.svelte";
 
   // Screenshots full size: wheel or double-click to zoom, drag to look around, arrows for the next one.
   let { items, index = $bindable(), onclose }: { items: Item[]; index: number; onclose: () => void } = $props();
@@ -135,9 +136,11 @@
   >
     {#if item}
       {#key item.id}
+        <!-- Hidden in the tray, the picture is let go; it loads again on return. -->
         <img
+          hidden={!store.visible}
           bind:this={img}
-          src={fileUrl(item.path)}
+          src={store.visible ? fileUrl(item.path) : undefined}
           alt={item.title}
           draggable="false"
           onload={measure}
