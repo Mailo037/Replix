@@ -1,12 +1,13 @@
 # Developing Replix
 
-Needs Node 22 and Rust. FFmpeg goes next to the app as a sidecar:
+Needs Node 22 and Rust.
 
 ```powershell
-./scripts/fetch-ffmpeg.ps1
 npm install
 npm run tauri dev
 ```
+
+The installer does not carry FFmpeg. On first start Replix downloads the build pinned in `src-tauri/src/install.rs` (version, size and SHA-256), into `%LOCALAPPDATA%\app.replix\ffmpeg\<version>`. To move to a new FFmpeg, change those constants and `-Version` in `scripts/fetch-ffmpeg.ps1`; installed copies fetch it after their next update and remove the old one. The media tests use whatever `ffmpeg` is on the PATH.
 
 `rust-toolchain.toml` uses the GNU toolchain so it builds without Visual Studio. CI and releases build with MSVC.
 

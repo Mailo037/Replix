@@ -1,5 +1,6 @@
-# Puts ffmpeg.exe and ffprobe.exe where Tauri expects its sidecars:
-# src-tauri/binaries/<name>-<target triple>.exe
+# Puts ffmpeg.exe and ffprobe.exe in src-tauri/binaries/<name>-<target triple>.exe, for
+# CI's media tests. The app itself downloads FFmpeg on first start (src-tauri/src/install.rs);
+# keep -Version here the same as VERSION there.
 #
 #   ./scripts/fetch-ffmpeg.ps1                # triple of the active Rust toolchain
 #   ./scripts/fetch-ffmpeg.ps1 -Triple x86_64-pc-windows-msvc

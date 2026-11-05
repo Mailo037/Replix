@@ -41,7 +41,7 @@ jobs:
         with:
           workspaces: src-tauri
 
-      # The same FFmpeg the release ships: the media tests run against it.
+      # The same FFmpeg Replix downloads (src-tauri/src/install.rs): the media tests run against it.
       - name: Fetch FFmpeg
         shell: pwsh
         run: |

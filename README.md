@@ -63,4 +63,4 @@ Everything is recorded and kept on your PC, in `Videos\Replix` unless you choose
 - Recording uses your graphics card's video encoder (NVIDIA, AMD or Intel) and falls back to the processor when there is none.
 - Replix waits in the tray and can start with Windows.
 
-Replix uses [FFmpeg](https://ffmpeg.org), licensed under the GPL v3. Its source is available at [ffmpeg.org](https://ffmpeg.org/download.html).
+Replix uses [FFmpeg](https://ffmpeg.org), licensed under the GPL v3, and downloads it on first start. Its source is available at [ffmpeg.org](https://ffmpeg.org/download.html).

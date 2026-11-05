@@ -2,6 +2,7 @@ mod audio;
 mod editor;
 mod encoder;
 mod ffmpeg;
+mod install;
 mod library;
 mod media;
 mod pipe;
@@ -220,6 +221,16 @@ fn apply_settings(app: &AppHandle, settings: Settings) -> Res<()> {
     }
     state.recorder.send(Command::Apply(Box::new(settings)));
     Ok(())
+}
+
+#[tauri::command]
+fn ffmpeg_setup() -> install::Setup {
+    install::state()
+}
+
+#[tauri::command]
+fn retry_ffmpeg(app: AppHandle) {
+    install::start(&app);
 }
 
 #[tauri::command]
@@ -1127,6 +1138,7 @@ pub fn run() {
             let _ = scope.allow_directory(&settings.clips_dir, true);
             let _ = scope.allow_directory(&cache, true);
 
+            install::start(&handle);
             let recorder = Recorder::start(handle.clone(), settings.clone());
             app.manage(AppState {
                 settings: Mutex::new(settings.clone()),
@@ -1214,6 +1226,8 @@ pub fn run() {
             get_settings,
             set_settings,
             get_status,
+            ffmpeg_setup,
+            retry_ffmpeg,
             get_encoders,
             list_apps,
             list_monitors,

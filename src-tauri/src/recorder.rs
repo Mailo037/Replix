@@ -405,6 +405,8 @@ struct Worker {
 impl Worker {
     fn run(mut self, rx: Receiver<Command>) {
         let _ = wasapi::initialize_mta();
+        // Nothing records before FFmpeg is on the PC; on first start it is still downloading.
+        crate::install::wait_ready();
         let (found, cached) = encoder::detect_cached(&self.encoder_cache());
         *self.encoders.lock() = found;
         self.encoders_cached = cached;

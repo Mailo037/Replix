@@ -4,6 +4,7 @@
   import { store } from "./lib/store.svelte";
   import { ticker } from "./lib/ticker.svelte";
   import Editor from "./components/Editor.svelte";
+  import FfmpegSetup from "./components/FfmpegSetup.svelte";
   import Library from "./components/Library.svelte";
   import Onboarding from "./components/Onboarding.svelte";
   import Settings from "./components/Settings.svelte";
@@ -52,6 +53,8 @@
       </main>
     {/if}
   </div>
+
+  <FfmpegSetup />
 
   {#if store.notice}
     <div class="notice" role="status">

@@ -181,7 +181,17 @@ function inOrder<T>(change: () => Promise<T>): Promise<T> {
   return next;
 }
 
+/** Getting FFmpeg onto the PC on first start (and after an update that pins a new one). */
+export type FfmpegSetup =
+  | { state: "checking" }
+  | { state: "downloading"; done: number; total: number }
+  | { state: "unpacking" }
+  | { state: "ready" }
+  | { state: "failed"; error: string };
+
 export const api = {
+  ffmpegSetup: () => invoke<FfmpegSetup>("ffmpeg_setup"),
+  retryFfmpeg: () => invoke<void>("retry_ffmpeg"),
   /** The settings in effect, with their revision: a page counts on from there. */
   getSettings: () => invoke<[Settings, number]>("get_settings"),
   /** Answers with the revision in effect afterwards: this one or a later one. */

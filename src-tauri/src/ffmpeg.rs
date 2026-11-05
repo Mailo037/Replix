@@ -1,4 +1,4 @@
-//! Finding and running the bundled FFmpeg.
+//! Finding and running FFmpeg.
 
 use std::io::Read;
 use std::os::windows::process::CommandExt;
@@ -14,17 +14,12 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 /// itself is started elsewhere and keeps normal priority so it never drops frames.
 const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 
-/// The sidecar sits next to the app executable; during development fall back to PATH.
+/// FFmpeg as Replix downloaded it; until then (and in tests) whatever is on the PATH.
 fn tool(name: &str) -> PathBuf {
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            let candidate = dir.join(format!("{name}.exe"));
-            if candidate.exists() {
-                return candidate;
-            }
-        }
+    match crate::install::ready_dir() {
+        Some(dir) => dir.join(format!("{name}.exe")),
+        None => PathBuf::from(name),
     }
-    PathBuf::from(name)
 }
 
 /// `spawn` for FFmpeg and ffprobe: the process is tied to Replix and ends with it.

@@ -40,10 +40,6 @@ jobs:
 
       - run: npm ci
 
-      - name: Fetch FFmpeg
-        shell: pwsh
-        run: ./scripts/fetch-ffmpeg.ps1 -Triple x86_64-pc-windows-msvc
-
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
