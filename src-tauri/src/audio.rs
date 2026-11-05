@@ -319,6 +319,8 @@ fn spawn_writer(pipe: PipeServer, ring: Arc<Ring>, stop: Arc<AtomicBool>) -> Joi
 #[serde(rename_all = "camelCase")]
 pub struct Span {
     pub name: String,
+    /// The program's full path, for its icon.
+    pub exe: Option<String>,
     pub kind: TrackKind,
     pub start: u64,
     pub end: Option<u64>,
@@ -357,6 +359,7 @@ pub struct Track {
     /// Index among the recording's audio streams.
     pub slot: usize,
     pub name: String,
+    pub exe: Option<String>,
     pub kind: TrackKind,
 }
 
@@ -397,12 +400,12 @@ impl Router {
         Ok((Self { slots, mic, mic_device, writers, writer_stop, game_key: None, keep_for, hold: false }, paths))
     }
 
-    fn assign(&mut self, slot: usize, key: String, name: String, kind: TrackKind, source: Source) {
+    fn assign(&mut self, slot: usize, key: String, name: String, exe: Option<String>, kind: TrackKind, source: Source) {
         self.slots[slot].release();
         let stop = Arc::new(AtomicBool::new(false));
         let handle = spawn_capture(source, self.slots[slot].ring.clone(), stop.clone());
         self.slots[slot].current = Some(Assignment { key, stop, handle: Some(handle), gone_since: None });
-        self.slots[slot].history.push(Span { name, kind, start: now_ms(), end: None });
+        self.slots[slot].history.push(Span { name, exe, kind, start: now_ms(), end: None });
     }
 
     /// Slot 0: the game's process tree, or the whole desktop when recording a screen.
@@ -411,16 +414,16 @@ impl Router {
             Some((pid, exe, name)) => {
                 let key = exe.to_lowercase();
                 self.game_key = Some(key.clone());
-                self.assign(0, key, name, TrackKind::Game, Source::Process(pid));
+                self.assign(0, key, name, win::process_path(pid), TrackKind::Game, Source::Process(pid));
             }
             None => {
                 self.game_key = None;
-                self.assign(0, "desktop".into(), "Desktop".into(), TrackKind::Desktop, Source::Desktop);
+                self.assign(0, "desktop".into(), "Desktop".into(), None, TrackKind::Desktop, Source::Desktop);
             }
         }
         if let Some(mic) = self.mic {
             let source = Source::Mic(self.mic_device.clone());
-            self.assign(mic, "mic".into(), "Microphone".into(), TrackKind::Mic, source);
+            self.assign(mic, "mic".into(), "Microphone".into(), None, TrackKind::Mic, source);
         }
     }
 
@@ -455,9 +458,10 @@ impl Router {
                 log::info!("no free audio slot for {key}");
                 continue;
             };
-            let name = win::process_path(root).map(|p| win::app_name(&p)).unwrap_or_else(|| entry.exe.clone());
+            let path = win::process_path(root);
+            let name = path.as_deref().map(win::app_name).unwrap_or_else(|| entry.exe.clone());
             log::info!("audio track {slot}: {name} ({key}, pid {root})");
-            self.assign(slot, key, name, TrackKind::App, Source::Process(root));
+            self.assign(slot, key, name, path, TrackKind::App, Source::Process(root));
         }
         for i in 1..=APP_SLOTS {
             let keep_for = self.keep_for;
@@ -481,7 +485,7 @@ impl Router {
         for (i, slot) in self.slots.iter().enumerate() {
             let overlapping = slot.history.iter().rev().find(|s| s.start <= to && s.end.is_none_or(|e| e >= from));
             if let Some(span) = overlapping {
-                out.push(Track { slot: i, name: span.name.clone(), kind: span.kind });
+                out.push(Track { slot: i, name: span.name.clone(), exe: span.exe.clone(), kind: span.kind });
             }
         }
         out

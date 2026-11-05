@@ -70,7 +70,11 @@ struct ToastShown {
     detail: String,
     position: ToastPosition,
     accent: String,
+    scale: f64,
 }
+
+/// The toast window at medium size, in logical pixels.
+const TOAST_SIZE: (f64, f64) = (340.0, 76.0);
 
 /// A small note in the corner of the screen that does not take focus from the game.
 /// The toast window hides itself once its timer runs out.
@@ -81,17 +85,19 @@ pub fn toast(app: &AppHandle, title: &str, detail: &str) {
 
 fn corner_toast(app: &AppHandle, title: &str, detail: &str) {
     let state = app.state::<AppState>();
-    let (show, position, accent) = {
+    let (show, position, accent, scale) = {
         let s = state.settings.lock();
-        (s.show_toast, s.toast_position, s.accent.clone())
+        (s.show_toast, s.toast_position, s.accent.clone(), s.toast_size.scale())
     };
     if !show {
         return;
     }
     let Some(window) = app.get_webview_window("toast") else { return };
-    let _ = window.emit("toast", ToastShown { title: title.into(), detail: detail.into(), position, accent });
+    let _ = window.emit("toast", ToastShown { title: title.into(), detail: detail.into(), position, accent, scale });
+    let _ = window.set_size(tauri::LogicalSize::new(TOAST_SIZE.0 * scale, TOAST_SIZE.1 * scale));
     if let Some((x, y, w, h)) = win::foreground_work_area() {
-        let size = window.outer_size().map(|s| (s.width as i32, s.height as i32)).unwrap_or((340, 76));
+        let dpi = window.scale_factor().unwrap_or(1.0);
+        let size = ((TOAST_SIZE.0 * scale * dpi) as i32, (TOAST_SIZE.1 * scale * dpi) as i32);
         let left = match position {
             ToastPosition::TopLeft | ToastPosition::BottomLeft => x + 24,
             ToastPosition::TopRight | ToastPosition::BottomRight => x + w - size.0 - 24,
@@ -563,10 +569,11 @@ async fn set_favorite(app: AppHandle, ids: Vec<String>, favorite: bool) -> Res<(
 
 /// The recycle bin goes through the Windows shell and can take a moment per file.
 #[tauri::command]
-async fn delete_items(app: AppHandle, ids: Vec<String>) -> Res<()> {
+async fn delete_items(app: AppHandle, ids: Vec<String>) -> Res<Vec<PathBuf>> {
     in_order(move || {
         let state = app.state::<AppState>();
         let mut removed = Vec::new();
+        let mut paths = Vec::new();
         let result = ids.into_iter().try_for_each(|id| {
             let path = state.path_of(&id)?;
             let _held = library::META_LOCK.lock();
@@ -575,10 +582,23 @@ async fn delete_items(app: AppHandle, ids: Vec<String>) -> Res<()> {
             state.removals.fetch_add(1, Ordering::Relaxed);
             state.index.lock().paths.remove(&id);
             removed.push(id);
+            paths.push(path);
             Ok(())
         });
         let _ = app.emit("items-removed", &removed);
-        result
+        result.map(|()| paths)
+    })
+    .await
+}
+
+/// Undoes `delete_items`: the clips come back from the recycle bin and the library rescans.
+#[tauri::command]
+async fn restore_items(app: AppHandle, paths: Vec<PathBuf>) -> Res<usize> {
+    in_order(move || {
+        let _held = library::META_LOCK.lock();
+        let back = library::restore(&paths).map_err(|e| format!("{e:#}"))?;
+        let _ = app.emit("library-changed", ());
+        Ok(back)
     })
     .await
 }
@@ -702,6 +722,40 @@ async fn export_clip(app: AppHandle, id: String, title: String, request: editor:
     .map_err(err)?
 }
 
+/// One audio track on its own, as an M4A in the exports folder, between `start` and `end`.
+#[tauri::command]
+async fn extract_track(app: AppHandle, id: String, track: usize, title: String, start: f64, end: f64) -> Res<String> {
+    blocking(move || {
+        let state = app.state::<AppState>();
+        let source = state.path_of(&id)?;
+        let root = state.settings.lock().clips_dir.clone();
+        let out = library::export_path(&root, &title, "m4a");
+        let args: Vec<String> = vec![
+            "-y".into(),
+            "-ss".into(),
+            format!("{:.3}", start.max(0.0)),
+            "-t".into(),
+            format!("{:.3}", (end - start).max(0.1)),
+            "-i".into(),
+            ffmpeg::path_arg(&source),
+            "-map".into(),
+            format!("0:a:{track}"),
+            "-vn".into(),
+            "-c:a".into(),
+            "aac".into(),
+            "-b:a".into(),
+            "192k".into(),
+            ffmpeg::path_arg(&out),
+        ];
+        if let Err(e) = ffmpeg::run(&args) {
+            let _ = std::fs::remove_file(&out);
+            return Err(err(e));
+        }
+        Ok(out.to_string_lossy().into_owned())
+    })
+    .await
+}
+
 /// Exports asked to stop, by ticket and when. A cancel can arrive before its export has
 /// started on its thread, or after it ended; both are kept a while rather than lost or
 /// kept for good.
@@ -807,6 +861,54 @@ fn register_hotkeys(app: &AppHandle, settings: &Settings) {
         }
     }
     *app.state::<AppState>().hotkey_conflicts.lock() = conflicts;
+}
+
+/// While a new hotkey is being picked, Replix's own are let go: pressing the current one
+/// should show up in the picker, not save a clip.
+#[tauri::command]
+fn pause_hotkeys(app: AppHandle, paused: bool) {
+    if paused {
+        let _ = app.global_shortcut().unregister_all();
+    } else {
+        let settings = app.state::<AppState>().settings.lock().clone();
+        register_hotkeys(&app, &settings);
+    }
+}
+
+/// Whether Windows would give Replix this key combination: "free", "taken" by another
+/// program, or "invalid". Tried by registering it for a moment.
+#[tauri::command]
+fn check_hotkey(app: AppHandle, keys: String) -> &'static str {
+    let Ok(shortcut) = keys.parse::<Shortcut>() else { return "invalid" };
+    let shortcuts = app.global_shortcut();
+    if shortcuts.is_registered(shortcut) {
+        return "free";
+    }
+    match shortcuts.register(shortcut) {
+        Ok(()) => {
+            let _ = shortcuts.unregister(shortcut);
+            "free"
+        }
+        Err(_) => "taken",
+    }
+}
+
+#[derive(Serialize)]
+struct AppIcon {
+    width: u32,
+    height: u32,
+    rgba: Vec<u8>,
+}
+
+/// A program's icon, for the editor's track heads.
+#[tauri::command]
+async fn app_icon(path: String) -> Option<AppIcon> {
+    tauri::async_runtime::spawn_blocking(move || {
+        win::icon_rgba(&path, 48).map(|(width, height, rgba)| AppIcon { width, height, rgba })
+    })
+    .await
+    .ok()
+    .flatten()
 }
 
 #[tauri::command]
@@ -1102,6 +1204,7 @@ pub fn run() {
             rename_item,
             set_favorite,
             delete_items,
+            restore_items,
             reveal_item,
             reveal_path,
             open_clips_folder,
@@ -1112,6 +1215,10 @@ pub fn run() {
             toggle_session,
             preview_toast,
             hotkey_conflicts,
+            pause_hotkeys,
+            check_hotkey,
+            app_icon,
+            extract_track,
             list_mics,
             storage_info,
             copy_items,

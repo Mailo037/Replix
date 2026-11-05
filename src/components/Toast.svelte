@@ -13,6 +13,7 @@
   let detail = $state("");
   let position = $state<ToastPosition>("topRight");
   let accent = $state("#c5f26b");
+  let scale = $state(1);
   let key = $state(0);
 
   const bottom = $derived(position === "bottomLeft" || position === "bottomRight");
@@ -24,7 +25,8 @@
   }
 
   onMount(() => {
-    const unlisten = listen<{ title: string; detail: string; position: ToastPosition; accent: string }>("toast", (e) => {
+    const unlisten = listen<{ title: string; detail: string; position: ToastPosition; accent: string; scale: number }>("toast", (e) => {
+      scale = e.payload.scale ?? 1;
       title = e.payload.title;
       detail = e.payload.detail;
       position = e.payload.position;
@@ -37,7 +39,7 @@
   });
 </script>
 
-<div class="stage" class:bottom>
+<div class="stage" class:bottom style:zoom={scale} style:--zoom={scale}>
   {#key key}
     {#if title}
       <button
@@ -66,7 +68,7 @@
 
 <style>
   .stage {
-    height: 100vh;
+    height: calc(100vh / var(--zoom, 1));
     display: flex;
     flex-direction: column;
   }

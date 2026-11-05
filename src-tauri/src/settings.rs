@@ -24,6 +24,25 @@ pub enum ToastPosition {
     BottomRight,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ToastSize {
+    Small,
+    #[default]
+    Medium,
+    Large,
+}
+
+impl ToastSize {
+    pub fn scale(self) -> f64 {
+        match self {
+            Self::Small => 0.85,
+            Self::Medium => 1.0,
+            Self::Large => 1.25,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum Quality {
@@ -85,10 +104,13 @@ pub struct Settings {
     pub storage_limit_gb: u32,
     pub hotkeys: Hotkeys,
     pub accent: String,
+    /// Background colours, by id: "plum", "midnight", "graphite" and so on.
+    pub theme: String,
     pub launch_at_startup: bool,
     pub close_to_tray: bool,
     pub show_toast: bool,
     pub toast_position: ToastPosition,
+    pub toast_size: ToastSize,
     /// Games and apps with their own settings.
     pub profiles: Vec<Profile>,
     /// The first-start setup was finished or skipped.
@@ -132,10 +154,12 @@ impl Default for Settings {
             storage_limit_gb: 0,
             hotkeys: Hotkeys::default(),
             accent: "#C5F26B".into(),
+            theme: "plum".into(),
             launch_at_startup: false,
             close_to_tray: true,
             show_toast: true,
             toast_position: ToastPosition::default(),
+            toast_size: ToastSize::default(),
             profiles: Vec::new(),
             onboarded: false,
         }

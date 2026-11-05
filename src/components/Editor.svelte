@@ -1,4 +1,8 @@
 <script lang="ts">
+  import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { appIcon } from "../lib/appIcons.svelte";
+  /** Audio tracks shown at once; more scroll. */
+  const MAX_ROWS = 3;
   import { listen } from "@tauri-apps/api/event";
   import { onDestroy, onMount } from "svelte";
   import { api, fileUrl, type Draft, type EditorData, type Preset, type TrackEdit } from "../lib/api";
@@ -33,6 +37,13 @@
   let vertical = $state(false);
   /** Where the 9:16 frame sits: 0 at the left edge, 1 at the right. */
   let cropX = $state(0.5);
+  let cropY = $state(0.5);
+  /** Frame height as a share of the video's; 1 is the tallest 9:16 frame that fits. */
+  let cropScale = $state(1);
+  /** All sound together, 0 to 2. */
+  let masterVolume = $state(1);
+  let fullscreen = $state(false);
+  let viewer = $state<HTMLDivElement>();
 
   let video = $state<HTMLVideoElement>();
   let audios: HTMLAudioElement[] = $state([]);
@@ -95,6 +106,9 @@
       cuts = d.draft?.cuts ?? [];
       vertical = d.draft?.vertical ?? false;
       cropX = d.draft?.cropX ?? 0.5;
+      cropY = d.draft?.cropY ?? 0.5;
+      cropScale = d.draft?.cropScale ?? 1;
+      masterVolume = d.draft?.masterVolume ?? 1;
     } catch (e) {
       if (mine !== loads) return;
       // Stopped, not failed: the window was hidden while the tracks were being prepared.
@@ -173,7 +187,10 @@
     audios.forEach((audio, i) => {
       if (!audio) return;
       const edit = edits[i];
-      audio.volume = edit?.enabled ? Math.min(1, edit.volume) : 0;
+      // Outside its own start and end the track is silent, as it will be in the export.
+      const heard = edit?.enabled && current >= (edit.start ?? 0) && current <= (edit.end ?? Infinity);
+      // The preview can't go above full volume; the export can.
+      audio.volume = heard ? Math.min(1, edit.volume * masterVolume) : 0;
     });
   });
 
@@ -200,6 +217,18 @@
       current = video.currentTime;
     }
     audios.forEach((a) => a?.pause());
+  }
+
+  /** Mouse wheel over the timeline moves the playhead: a fifth of a second per notch, one frame with Shift. */
+  function wheelScrub(node: HTMLElement) {
+    const onWheel = (e: WheelEvent) => {
+      const delta = e.deltaY || e.deltaX;
+      if (!delta) return;
+      e.preventDefault();
+      seek(current + (delta < 0 ? 1 : -1) * (e.shiftKey ? 1 / 30 : 0.2));
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return { destroy: () => node.removeEventListener("wheel", onWheel) };
   }
 
   function seek(t: number) {
@@ -243,6 +272,91 @@
     target.addEventListener("pointerup", up);
   }
 
+  function outside(node: HTMLElement, close: () => void) {
+    const down = (e: PointerEvent) => !node.contains(e.target as Node) && close();
+    const key = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopImmediatePropagation();
+        close();
+      }
+    };
+    window.addEventListener("pointerdown", down, true);
+    window.addEventListener("keydown", key, true);
+    return {
+      destroy() {
+        window.removeEventListener("pointerdown", down, true);
+        window.removeEventListener("keydown", key, true);
+      },
+    };
+  }
+
+  /** The right-click menu of an audio track, where it opened. */
+  let trackMenu = $state<{ i: number; x: number; y: number } | null>(null);
+  const removedTracks = $derived(edits.filter((e) => e.removed).length);
+
+  function openTrackMenu(i: number, e: MouseEvent) {
+    e.preventDefault();
+    trackMenu = { i, x: Math.min(e.clientX, innerWidth - 230), y: Math.min(e.clientY, innerHeight - 110) };
+  }
+
+  async function extractTrack(i: number) {
+    trackMenu = null;
+    if (!data) return;
+    const track = data.tracks[i];
+    const edit = edits[i];
+    // The part of the track that is heard in the clip.
+    const start = Math.max(trimStart, edit.start ?? 0);
+    const end = Math.min(trimEnd, edit.end ?? data.duration);
+    store.notify("Saving audio…", track.name);
+    try {
+      const out = await api.extractTrack(id, i, `${title.trim() || "Clip"} - ${track.name}`, start, end);
+      store.notify("Audio saved", `${track.name} as M4A`, [
+        { label: "Copy", run: () => share.copy(out) },
+        { label: "Show", run: () => api.revealPath(out) },
+      ]);
+    } catch (e) {
+      store.notify("Couldn't save the audio", String(e));
+    }
+  }
+
+  function removeTrack(i: number) {
+    trackMenu = null;
+    edits[i].removed = true;
+    store.notify("Track removed", `${data?.tracks[i].name ?? "Track"} is left out of the export. Ctrl+Z brings it back.`);
+  }
+
+  function restoreTracks() {
+    for (const edit of edits) delete edit.removed;
+  }
+
+  /** Drags a track's own start or end; the track is silent outside them. */
+  function dragTrack(i: number, side: "start" | "end", e: PointerEvent) {
+    if (!data) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+    const duration = data.duration;
+    const move = (ev: PointerEvent) => {
+      const t = timeAt(ev.clientX);
+      const edit = edits[i];
+      if (side === "start") {
+        const v = Math.min(t, (edit.end ?? duration) - 0.2);
+        edit.start = v <= 0.05 ? undefined : v;
+      } else {
+        const v = Math.max(t, (edit.start ?? 0) + 0.2);
+        edit.end = v >= duration - 0.05 ? undefined : v;
+      }
+      seek(side === "start" ? (edit.start ?? 0) : (edit.end ?? duration));
+    };
+    const up = () => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+  }
+
   function splitHere() {
     if (current <= trimStart + 0.2 || current >= trimEnd - 0.2) return;
     if (splits.some((s) => Math.abs(s - current) < 0.2)) return;
@@ -275,16 +389,29 @@
     }
   }
 
+  const MIN_CROP = 0.2;
+  const frameW = $derived(cropWidth * cropScale);
+  const frameLeft = $derived((1 - frameW) * cropX);
+  const frameTop = $derived((1 - cropScale) * cropY);
+
+  /** Puts the frame's top-left corner at (left, top), as shares of the preview. */
+  function placeFrame(left: number, top: number, scale: number) {
+    const w = cropWidth * scale;
+    cropScale = scale;
+    cropX = w < 1 ? Math.min(1, Math.max(0, left / (1 - w))) : 0.5;
+    cropY = scale < 1 ? Math.min(1, Math.max(0, top / (1 - scale))) : 0.5;
+  }
+
   function dragCrop(e: PointerEvent) {
     if (!preview) return;
     e.preventDefault();
     const target = e.currentTarget as HTMLElement;
     target.setPointerCapture(e.pointerId);
-    const width = preview.getBoundingClientRect().width * (1 - cropWidth);
-    let lastX = e.clientX;
+    const rect = preview.getBoundingClientRect();
+    let last = { x: e.clientX, y: e.clientY };
     const move = (ev: PointerEvent) => {
-      if (width > 0) cropX = Math.min(1, Math.max(0, cropX + (ev.clientX - lastX) / width));
-      lastX = ev.clientX;
+      placeFrame(frameLeft + (ev.clientX - last.x) / rect.width, frameTop + (ev.clientY - last.y) / rect.height, cropScale);
+      last = { x: ev.clientX, y: ev.clientY };
     };
     const up = () => {
       target.removeEventListener("pointermove", move);
@@ -292,6 +419,56 @@
     };
     target.addEventListener("pointermove", move);
     target.addEventListener("pointerup", up);
+  }
+
+  /** Resizes from a corner; the opposite corner stays put and the frame keeps 9:16. */
+  function resizeCrop(corner: "nw" | "ne" | "sw" | "se", e: PointerEvent) {
+    if (!preview) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+    const rect = preview.getBoundingClientRect();
+    const left = corner.endsWith("w");
+    const top = corner.startsWith("n");
+    // The fixed corner, as shares of the preview.
+    const ax = left ? frameLeft + frameW : frameLeft;
+    const ay = top ? frameTop + cropScale : frameTop;
+    const move = (ev: PointerEvent) => {
+      const px = (ev.clientX - rect.left) / rect.width;
+      const py = (ev.clientY - rect.top) / rect.height;
+      const room = Math.min(top ? ay : 1 - ay, (left ? ax : 1 - ax) / cropWidth, 1);
+      const want = Math.max(Math.abs(py - ay), Math.abs(px - ax) / cropWidth);
+      const scale = Math.min(room, Math.max(MIN_CROP, want));
+      placeFrame(left ? ax - cropWidth * scale : ax, top ? ay - scale : ay, scale);
+    };
+    const end = () => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", end);
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", end);
+  }
+
+  /** Sizes the frame around its centre, kept inside the video. */
+  function zoomCrop(scale: number) {
+    scale = Math.min(1, Math.max(MIN_CROP, scale));
+    const cx = frameLeft + frameW / 2;
+    const cy = frameTop + cropScale / 2;
+    const w = cropWidth * scale;
+    placeFrame(Math.min(1 - w, Math.max(0, cx - w / 2)), Math.min(1 - scale, Math.max(0, cy - scale / 2)), scale);
+  }
+
+  /** Mouse wheel over the frame resizes it: up makes it smaller (zooms in). */
+  function wheelCrop(node: HTMLElement) {
+    const onWheel = (e: WheelEvent) => {
+      if (!e.deltaY) return;
+      e.preventDefault();
+      e.stopPropagation();
+      zoomCrop(cropScale * (e.deltaY < 0 ? 0.95 : 1 / 0.95));
+    };
+    node.addEventListener("wheel", onWheel, { passive: false });
+    return { destroy: () => node.removeEventListener("wheel", onWheel) };
   }
 
   // Undo history. Each entry is the edit as it was before a change; a quick run of changes
@@ -330,6 +507,9 @@
     cuts = d.cuts;
     vertical = d.vertical;
     cropX = d.cropX;
+    cropY = d.cropY ?? 0.5;
+    cropScale = d.cropScale ?? 1;
+    masterVolume = d.masterVolume ?? 1;
     committed = json;
     if (current < trimStart || current > trimEnd) seek(trimStart);
   }
@@ -350,7 +530,37 @@
     restore(next);
   }
 
+  /** The player fills the screen; Escape or the button brings it back. */
+  async function toggleFullscreen() {
+    if (!viewer) return;
+    if (document.fullscreenElement) await document.exitFullscreen().catch(() => {});
+    else await viewer.requestFullscreen().catch(() => {});
+  }
+
+  $effect(() => {
+    const sync = () => {
+      fullscreen = document.fullscreenElement === viewer && !!viewer;
+      // The page alone can only fill the window; the window goes full screen with it.
+      getCurrentWindow().setFullscreen(fullscreen).catch(() => {});
+    };
+    document.addEventListener("fullscreenchange", sync);
+    return () => {
+      document.removeEventListener("fullscreenchange", sync);
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+    };
+  });
+
   function onKey(e: KeyboardEvent) {
+    if (fullscreen && e.key === "Escape") {
+      e.preventDefault();
+      toggleFullscreen();
+      return;
+    }
+    if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "f" && !(e.target instanceof HTMLInputElement && e.target.type !== "range")) {
+      e.preventDefault();
+      toggleFullscreen();
+      return;
+    }
     // Text fields keep their own undo; sliders don't.
     const target = e.target;
     if ((target instanceof Element && target.matches("input:not([type=range]), textarea")) || !data) return;
@@ -379,7 +589,7 @@
 
   function back() {
     pause();
-    store.go({ name: "library", filter: "all", game: null });
+    store.go(store.lastLibrary);
   }
 
   function draft(): Draft {
@@ -391,6 +601,9 @@
       cuts: $state.snapshot(cuts) as [number, number][],
       vertical,
       cropX,
+      cropY,
+      cropScale,
+      masterVolume,
     };
   }
 
@@ -487,7 +700,16 @@
       <p class="meta">{failure}</p>
     </div>
   {:else if data}
-    <div class="viewer">
+    <div class="viewer" class:fullscreen bind:this={viewer}>
+      <button
+        type="button"
+        class="fs-toggle"
+        aria-label={fullscreen ? "Leave full screen" : "Full screen"}
+        use:tip={fullscreen ? "Leave full screen · Esc" : "Full screen · F"}
+        onclick={toggleFullscreen}
+      >
+        <Icon name={fullscreen ? "shrink" : "expand"} size={16} />
+      </button>
       <div class="preview" bind:this={preview} style:--ratio={data.width && data.height ? data.width / data.height : 16 / 9}>
         <!-- svelte-ignore a11y_media_has_caption -->
         <video
@@ -503,23 +725,29 @@
           <audio bind:this={audios[i]} src={fileUrl(track.audio)} preload="auto"></audio>
         {/each}
         {#if vertical}
-          <span class="crop-mask" style:left="0" style:width="{(1 - cropWidth) * cropX * 100}%"></span>
-          <span class="crop-mask" style:right="0" style:width="{(1 - cropWidth) * (1 - cropX) * 100}%"></span>
           <button
             type="button"
             class="crop"
-            style:left="{(1 - cropWidth) * cropX * 100}%"
-            style:width="{cropWidth * 100}%"
-            aria-label="9:16 frame. Drag or use the arrow keys to move it"
+            style:left="{frameLeft * 100}%"
+            style:top="{frameTop * 100}%"
+            style:width="{frameW * 100}%"
+            style:height="{cropScale * 100}%"
+            aria-label="9:16 frame. Drag or use the arrow keys to move it; drag a corner, scroll or press + and - to resize it"
+            use:wheelCrop
             onpointerdown={dragCrop}
             onkeydown={(e) => {
-              if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
-                e.preventDefault();
-                e.stopPropagation();
-                cropX = Math.min(1, Math.max(0, cropX + (e.key === "ArrowLeft" ? -0.05 : 0.05)));
-              }
+              const d = 0.05;
+              if (e.key === "ArrowLeft" || e.key === "ArrowRight") placeFrame(frameLeft + (e.key === "ArrowLeft" ? -d : d) * (1 - frameW), frameTop, cropScale);
+              else if (e.key === "ArrowUp" || e.key === "ArrowDown") placeFrame(frameLeft, frameTop + (e.key === "ArrowUp" ? -d : d) * (1 - cropScale), cropScale);
+              else if (e.key === "+" || e.key === "-") zoomCrop(cropScale + (e.key === "+" ? d : -d));
+              else return;
+              e.preventDefault();
+              e.stopPropagation();
             }}
           >
+            {#each ["nw", "ne", "sw", "se"] as const as c (c)}
+              <span class="corner {c}" role="presentation" onpointerdown={(e) => resizeCrop(c, e)}></span>
+            {/each}
             <span class="crop-label mono">9:16</span>
           </button>
         {/if}
@@ -581,12 +809,33 @@
             onchange={(v) => (vertical = v === "tall")}
           />
         </div>
+        <div class="master" use:tip={"Volume of all tracks together"}>
+          <button
+            type="button"
+            class="tool icon"
+            aria-label={masterVolume ? "Mute all" : "Unmute all"}
+            onclick={() => (masterVolume = masterVolume ? 0 : 1)}
+          >
+            <Icon name={masterVolume ? "speaker" : "mute"} size={16} />
+          </button>
+          <span class="master-slider">
+            <Slider
+              label="Volume of all tracks"
+              value={Math.round(masterVolume * 100)}
+              max={200}
+              step={5}
+              valuetext="{Math.round(masterVolume * 100)}%"
+              oninput={(v) => (masterVolume = v / 100)}
+            />
+          </span>
+          <span class="mono meta master-value">{Math.round(masterVolume * 100)}%</span>
+        </div>
         <button type="button" class="tool icon" aria-label="Save this frame as a screenshot" use:tip={"Save this frame as a screenshot"} onclick={saveFrame}>
           <Icon name="camera" size={16} />
         </button>
       </div>
 
-      <div class="tracks">
+      <div class="tracks" use:wheelScrub>
         <div class="row ruler-row">
           <span class="head"></span>
           <div class="lane ruler" role="presentation" onpointerdown={(e) => drag("head", e)}>
@@ -647,9 +896,13 @@
           </div>
         </div>
 
+        <div class="audio-rows scroll" class:many={data.tracks.length > MAX_ROWS} style:--rows={MAX_ROWS}>
         {#each data.tracks as track, i (i)}
-          {#if edits[i]}
-            <div class="row" class:off={!edits[i].enabled}>
+          {#if edits[i] && !edits[i].removed}
+            {@const icon = appIcon(track.exe)}
+            {@const ts = edits[i].start ?? 0}
+            {@const te = edits[i].end ?? data.duration}
+            <div class="row" class:off={!edits[i].enabled} role="group" aria-label={track.name} oncontextmenu={(e) => openTrackMenu(i, e)}>
               <div class="head">
                 <button
                   type="button"
@@ -659,7 +912,13 @@
                   use:tip={edits[i].enabled ? "Mute" : "Unmute"}
                   onclick={() => (edits[i].enabled = !edits[i].enabled)}
                 >
-                  <Icon name={edits[i].enabled ? (icons[track.kind] ?? "speaker") : "mute"} size={16} />
+                  {#if !edits[i].enabled}
+                    <Icon name="mute" size={16} />
+                  {:else if icon}
+                    <img class="app-icon" src={icon} alt="" />
+                  {:else}
+                    <Icon name={icons[track.kind] ?? "speaker"} size={16} />
+                  {/if}
                 </button>
                 <div class="head-body">
                   <span class="name">{track.name}</span>
@@ -674,11 +933,60 @@
               </div>
               <div class="lane audio-lane" role="presentation" onpointerdown={(e) => drag("head", e)}>
                 <Waveform {id} track={i} duration={data.duration} muted={!edits[i].enabled} />
+                {#if ts > 0}<span class="track-dim" style:left="0" style:width="{pct(ts)}%"></span>{/if}
+                {#if te < data.duration}<span class="track-dim" style:left="{pct(te)}%" style:right="0"></span>{/if}
+                <button
+                  type="button"
+                  class="track-handle"
+                  class:set={ts > 0}
+                  style:left="{pct(ts)}%"
+                  aria-label="Where {track.name} starts"
+                  use:tip={"Drag to set where this track starts · double-click to reset"}
+                  onpointerdown={(e) => dragTrack(i, "start", e)}
+                  ondblclick={() => (edits[i].start = undefined)}
+                ></button>
+                <button
+                  type="button"
+                  class="track-handle end"
+                  class:set={te < data.duration}
+                  style:left="{pct(te)}%"
+                  aria-label="Where {track.name} ends"
+                  use:tip={"Drag to set where this track ends · double-click to reset"}
+                  onpointerdown={(e) => dragTrack(i, "end", e)}
+                  ondblclick={() => (edits[i].end = undefined)}
+                ></button>
               </div>
             </div>
           {/if}
         {/each}
+        </div>
+        {#if removedTracks}
+          <div class="row removed-row">
+            <span class="head"></span>
+            <button type="button" class="btn ghost small" onclick={restoreTracks}>
+              {removedTracks} removed {removedTracks === 1 ? "track" : "tracks"} · Bring back
+            </button>
+          </div>
+        {/if}
 
+        {#if trackMenu && data.tracks[trackMenu.i]}
+          {@const m = trackMenu}
+          <div
+            class="track-menu"
+            role="menu"
+            tabindex="-1"
+            style:left="{m.x}px"
+            style:top="{m.y}px"
+            use:outside={() => (trackMenu = null)}
+          >
+            <button type="button" role="menuitem" onclick={() => extractTrack(m.i)}>
+              <Icon name="export" size={16} />Save as audio file
+            </button>
+            <button type="button" role="menuitem" class="danger" onclick={() => removeTrack(m.i)}>
+              <Icon name="trash" size={16} />Remove track
+            </button>
+          </div>
+        {/if}
         <div class="overlay" aria-hidden="true">
           <span class="dim" style:left="0" style:width="{pct(trimStart)}%"></span>
           <span class="dim" style:left="{pct(trimEnd)}%" style:right="0"></span>
@@ -802,11 +1110,51 @@
     background: var(--hover);
   }
 
+  .master {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .master-slider {
+    width: 96px;
+  }
+  .master-value {
+    width: 4.5ch;
+    font-size: 12px;
+  }
+  .fs-toggle {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    z-index: 5;
+    width: 34px;
+    height: 34px;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 12px;
+    background: rgb(0 0 0 / 0.55);
+    color: #fff;
+    opacity: 0;
+    transition: opacity 160ms ease;
+  }
+  .viewer:hover .fs-toggle,
+  .fs-toggle:focus-visible {
+    opacity: 1;
+  }
+  .viewer.fullscreen {
+    background: #000;
+  }
+  .viewer.fullscreen .preview {
+    border-radius: 0;
+  }
+
   /* Player: as large as the room allows, at the clip's own shape. */
   .viewer {
     flex: 1;
     min-height: 120px;
     container-type: size;
+    position: relative;
     display: grid;
     place-items: center;
   }
@@ -846,17 +1194,9 @@
     background: rgb(0 0 0 / 0.7);
     transform: scale(1.06);
   }
-  .crop-mask {
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    background: rgb(10 10 9 / 0.8);
-    pointer-events: none;
-  }
   .crop {
     position: absolute;
-    top: 0;
-    bottom: 0;
+    box-shadow: 0 0 0 9999px rgb(10 10 9 / 0.8);
     padding: 0;
     border: 2px solid var(--accent);
     border-radius: 10px;
@@ -866,6 +1206,34 @@
   }
   .crop:active {
     cursor: grabbing;
+  }
+  .corner {
+    position: absolute;
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    background: var(--accent);
+    touch-action: none;
+  }
+  .corner.nw {
+    top: -7px;
+    left: -7px;
+    cursor: nwse-resize;
+  }
+  .corner.se {
+    bottom: -7px;
+    right: -7px;
+    cursor: nwse-resize;
+  }
+  .corner.ne {
+    top: -7px;
+    right: -7px;
+    cursor: nesw-resize;
+  }
+  .corner.sw {
+    bottom: -7px;
+    left: -7px;
+    cursor: nesw-resize;
   }
   .crop-label {
     position: absolute;
@@ -1036,6 +1404,89 @@
   .strip {
     height: 46px;
     background-size: 100% 100%;
+  }
+  .track-menu {
+    position: fixed;
+    z-index: 50;
+    min-width: 220px;
+    padding: 6px;
+    border-radius: 20px;
+    background: var(--raised);
+    box-shadow:
+      0 0 0 1px rgb(255 255 255 / 0.04),
+      0 14px 36px rgb(0 0 0 / 0.5);
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .track-menu button {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 34px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--ink);
+    font-weight: 600;
+    text-align: left;
+  }
+  .track-menu button:hover {
+    background: var(--hover);
+  }
+  .track-menu .danger {
+    color: var(--red);
+  }
+  .removed-row {
+    justify-items: start;
+  }
+  /* After a few tracks the rest scroll, so the timeline keeps its height. */
+  .audio-rows {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .audio-rows.many {
+    max-height: calc(var(--rows) * 42px - 4px);
+    overflow-y: auto;
+    overscroll-behavior: contain;
+  }
+  .app-icon {
+    width: 18px;
+    height: 18px;
+    object-fit: contain;
+  }
+  .track-dim {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    background: rgb(10 10 9 / 0.7);
+    pointer-events: none;
+  }
+  .track-handle {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 2;
+    width: 6px;
+    padding: 0;
+    border: 0;
+    border-radius: 6px 0 0 6px;
+    background: var(--lavender);
+    opacity: 0;
+    cursor: ew-resize;
+    touch-action: none;
+    transition: opacity 140ms ease;
+  }
+  .track-handle.end {
+    margin-left: -6px;
+    border-radius: 0 6px 6px 0;
+  }
+  .audio-lane:hover .track-handle,
+  .track-handle.set,
+  .track-handle:focus-visible {
+    opacity: 1;
   }
   .audio-lane {
     height: 38px;

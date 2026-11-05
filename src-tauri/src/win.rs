@@ -434,3 +434,68 @@ pub fn cpu_time(child: &std::process::Child) -> Option<std::time::Duration> {
     // In units of 100 ns.
     Some(std::time::Duration::from_nanos((ticks(kernel) + ticks(user)) * 100))
 }
+
+/// A program's icon as RGBA pixels (width, height, pixels), at about `size` pixels.
+pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
+    use windows::Win32::Graphics::Gdi::{
+        DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
+        DIB_RGB_COLORS, HGDIOBJ,
+    };
+    use windows::Win32::UI::Shell::SHDefExtractIconW;
+    use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
+
+    let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
+    unsafe {
+        let mut icon = HICON::default();
+        let found = SHDefExtractIconW(PCWSTR(wide.as_ptr()), 0, 0, Some(&mut icon), None, size);
+        if found.is_err() || found.0 != 0 || icon.is_invalid() {
+            return None;
+        }
+        let mut info = ICONINFO::default();
+        let got = GetIconInfo(icon, &mut info);
+        let result = (|| {
+            got.ok()?;
+            let mut bm = BITMAP::default();
+            if GetObjectW(HGDIOBJ(info.hbmColor.0), size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut c_void)) == 0 {
+                return None;
+            }
+            let (w, h) = (bm.bmWidth as u32, bm.bmHeight as u32);
+            let mut header = BITMAPINFO {
+                bmiHeader: BITMAPINFOHEADER {
+                    biSize: size_of::<BITMAPINFOHEADER>() as u32,
+                    biWidth: w as i32,
+                    biHeight: -(h as i32),
+                    biPlanes: 1,
+                    biBitCount: 32,
+                    biCompression: BI_RGB.0,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+            let mut pixels = vec![0u8; (w * h * 4) as usize];
+            let dc = GetDC(None);
+            let lines = GetDIBits(dc, info.hbmColor, 0, h, Some(pixels.as_mut_ptr() as *mut c_void), &mut header, DIB_RGB_COLORS);
+            ReleaseDC(None, dc);
+            if lines == 0 {
+                return None;
+            }
+            // BGRA to RGBA. Old icons have no alpha at all: then every pixel is solid.
+            let has_alpha = pixels.chunks_exact(4).any(|p| p[3] != 0);
+            for p in pixels.chunks_exact_mut(4) {
+                p.swap(0, 2);
+                if !has_alpha {
+                    p[3] = 255;
+                }
+            }
+            Some((w, h, pixels))
+        })();
+        if !info.hbmColor.is_invalid() {
+            let _ = DeleteObject(HGDIOBJ(info.hbmColor.0));
+        }
+        if !info.hbmMask.is_invalid() {
+            let _ = DeleteObject(HGDIOBJ(info.hbmMask.0));
+        }
+        let _ = DestroyIcon(icon);
+        result
+    }
+}

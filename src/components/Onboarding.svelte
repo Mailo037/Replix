@@ -126,7 +126,7 @@
       </div>
 
       {#key current}
-        <div class="copy">
+        <div class="copy scroll">
           {#if current === "welcome"}
             <h1>Never miss the moment</h1>
             <p>

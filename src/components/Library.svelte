@@ -2,6 +2,8 @@
   import { api, type Item } from "../lib/api";
   import { day, size } from "../lib/format";
   import { store, type Filter } from "../lib/store.svelte";
+  import { recycle, undo } from "../lib/undo";
+  import { tip } from "../lib/tooltip";
   import ClipTile from "./ClipTile.svelte";
   import Icon from "./Icon.svelte";
   import ImageViewer from "./ImageViewer.svelte";
@@ -105,20 +107,37 @@
 
   async function deletePicked() {
     const count = picked.length;
-    await api.deleteItems(picked.map((i) => i.id));
+    const ids = picked.map((i) => i.id);
     stopSelecting();
-    store.notify("Moved to the recycle bin", `${count} ${count === 1 ? "item" : "items"}`);
+    await recycle(ids, count === 1 ? (picked[0]?.title ?? "1 item") : `${count} items`);
   }
+
+  let search = $state<HTMLInputElement>();
 
   function onKey(e: KeyboardEvent) {
     const typing = (e.target as HTMLElement).closest("input, textarea, select");
     if (viewing !== null) return;
-    if (e.key === "Escape") {
+    const mod = e.ctrlKey || e.metaKey;
+    if ((mod && !e.shiftKey && e.key.toLowerCase() === "f") || (!typing && e.key === "/")) {
+      e.preventDefault();
+      search?.focus();
+      search?.select();
+    } else if (mod && !e.shiftKey && e.key.toLowerCase() === "e" && visible.length) {
+      e.preventDefault();
+      if (selecting) stopSelecting();
+      else selecting = true;
+    } else if (e.key === "Escape" && typing === search) {
+      if (query) query = "";
+      else search?.blur();
+    } else if (e.key === "Escape") {
       if (selecting) stopSelecting();
     } else if (!typing && (e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "a" && visible.length) {
       e.preventDefault();
       selecting = true;
       selected = visible.map((i) => i.id);
+    } else if (!typing && (e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === "z") {
+      e.preventDefault();
+      undo.last();
     } else if (!typing && e.key === "Delete" && picked.length) {
       deletePicked();
     }
@@ -151,11 +170,12 @@
       {/if}
       <div class="tools">
         {#if visible.length}
-          <button type="button" class="btn" onclick={() => (selecting = true)}>Select</button>
+          <button type="button" class="btn" use:tip={"Select · Ctrl+E"} onclick={() => (selecting = true)}>Select</button>
         {/if}
         <label class="search">
           <Icon name="search" size={16} />
-          <input type="search" placeholder="Search clips" aria-label="Search clips" spellcheck="false" bind:value={query} />
+          <input type="search" placeholder="Search clips" aria-label="Search clips" spellcheck="false" bind:value={query} bind:this={search} />
+          {#if !query}<kbd class="search-key mono" aria-hidden="true">Ctrl+F</kbd>{/if}
           {#if query}
             <button type="button" class="clear" aria-label="Clear search" onclick={() => (query = "")}>
               <Icon name="close" size={14} />
@@ -310,6 +330,18 @@
     background: transparent;
     outline: none;
     color: var(--ink);
+  }
+  .search-key {
+    flex: none;
+    padding: 2px 7px;
+    border-radius: 7px;
+    background: var(--surface);
+    color: var(--ghost);
+    font-size: 11px;
+    pointer-events: none;
+  }
+  .search:focus-within .search-key {
+    display: none;
   }
   .search input::placeholder {
     color: var(--ghost);

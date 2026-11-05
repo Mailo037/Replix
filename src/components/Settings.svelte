@@ -19,6 +19,8 @@
   import { tip } from "../lib/tooltip";
   import Segmented from "./Segmented.svelte";
   import Select from "./Select.svelte";
+  import HotkeyDialog from "./HotkeyDialog.svelte";
+  import { themes } from "../lib/themes";
   import Slider from "./Slider.svelte";
   import Switch from "./Switch.svelte";
 
@@ -94,60 +96,6 @@
     choosingApp = true;
   }
 
-  const KEY_NAMES: Record<string, string> = {
-    Space: "Space",
-    Enter: "Enter",
-    Tab: "Tab",
-    Backquote: "`",
-    Minus: "-",
-    Equal: "=",
-    Comma: ",",
-    Period: ".",
-    Slash: "/",
-    Semicolon: ";",
-    Quote: "'",
-    BracketLeft: "[",
-    BracketRight: "]",
-    Backslash: "\\",
-    Insert: "Insert",
-    Delete: "Delete",
-    Home: "Home",
-    End: "End",
-    PageUp: "PageUp",
-    PageDown: "PageDown",
-    PrintScreen: "PrintScreen",
-  };
-
-  function keyName(code: string): string | null {
-    if (code.startsWith("Key")) return code.slice(3);
-    if (code.startsWith("Digit")) return code.slice(5);
-    if (/^F\d{1,2}$/.test(code)) return code;
-    if (code.startsWith("Numpad")) return code;
-    return KEY_NAMES[code] ?? null;
-  }
-
-  function onKey(e: KeyboardEvent) {
-    if (!recording) return;
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.key === "Escape") {
-      recording = null;
-      return;
-    }
-    if (e.key === "Backspace") {
-      update({ hotkeys: { ...s.hotkeys, [recording]: "" } });
-      recording = null;
-      return;
-    }
-    const key = keyName(e.code);
-    if (!key) return;
-    const parts = [e.ctrlKey && "Ctrl", e.altKey && "Alt", e.shiftKey && "Shift", e.metaKey && "Super"].filter(Boolean);
-    // Single letters need a modifier, or typing in a game would trigger them.
-    if (!parts.length && !/^F\d/.test(key)) return;
-    update({ hotkeys: { ...s.hotkeys, [recording]: [...parts, key].join("+") } });
-    recording = null;
-  }
-
   const hotkeyRows: { key: keyof Settings["hotkeys"]; label: string; hint: string }[] = [
     { key: "clip", label: "Save clip", hint: "Keeps the last moments" },
     { key: "screenshot", label: "Screenshot", hint: "Saves what's on screen now" },
@@ -155,7 +103,6 @@
   ];
 </script>
 
-<svelte:window onkeydown={onKey} />
 
 <section class="settings">
   {#if s}
@@ -332,13 +279,28 @@
               class="key"
               class:listening={recording === h.key}
               class:taken={store.conflicts.includes(s.hotkeys[h.key])}
+              aria-label="Change the hotkey for {h.label}"
               onclick={() => (recording = h.key)}
             >
-              {recording === h.key ? "Press keys…" : s.hotkeys[h.key] || "Not set"}
+              {s.hotkeys[h.key] || "Not set"}
             </button>
           </div>
         {/each}
       </div>
+
+      {#if recording}
+        {@const row = hotkeyRows.find((r) => r.key === recording)!}
+        <HotkeyDialog
+          label={row.label}
+          current={s.hotkeys[row.key]}
+          others={hotkeyRows.filter((r) => r.key !== row.key).map((r) => ({ label: r.label, keys: s.hotkeys[r.key] }))}
+          onclose={() => (recording = null)}
+          onsave={(keys) => {
+            update({ hotkeys: { ...s.hotkeys, [row.key]: keys } });
+            recording = null;
+          }}
+        />
+      {/if}
 
       <h2>Storage</h2>
       <div class="panel group">
@@ -397,6 +359,23 @@
             {/each}
           </div>
         </div>
+        <div class="row">
+          <div class="text"><span>Background</span></div>
+          <div class="swatches" role="group" aria-label="Background">
+            {#each themes as t (t.id)}
+              <button
+                type="button"
+                class="swatch theme"
+                class:on={(s.theme || "plum") === t.id}
+                style:background="linear-gradient(135deg, {t.colors.canvas} 50%, {t.colors.raised} 50%)"
+                aria-label={t.name}
+                aria-pressed={(s.theme || "plum") === t.id}
+                use:tip={t.name}
+                onclick={() => update({ theme: t.id })}
+              ></button>
+            {/each}
+          </div>
+        </div>
       </div>
 
       <h2>General</h2>
@@ -421,6 +400,19 @@
                 { value: "bottomRight", label: "Bottom right" },
               ]}
               onchange={(v) => store.save({ ...s, toastPosition: v }).then((saved) => void (saved && api.previewToast()))}
+            />
+          </div>
+          <div class="row">
+            <div class="text"><span>Notification size</span></div>
+            <Segmented
+              label="Notification size"
+              value={s.toastSize ?? "medium"}
+              options={[
+                { value: "small", label: "Small" },
+                { value: "medium", label: "Medium" },
+                { value: "large", label: "Large" },
+              ]}
+              onchange={(v) => store.save({ ...s, toastSize: v }).then((saved) => void (saved && api.previewToast()))}
             />
           </div>
         {/if}
@@ -594,6 +586,12 @@
   }
   .swatch.on {
     box-shadow: 0 0 0 2px var(--overlay), 0 0 0 4px var(--ink);
+  }
+  .swatch.theme {
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18);
+  }
+  .swatch.theme.on {
+    box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.18), 0 0 0 2px var(--overlay), 0 0 0 4px var(--ink);
   }
   .swatch:active {
     transform: scale(0.9);

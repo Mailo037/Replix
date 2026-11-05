@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { api, type AppWindow, type Source } from "../lib/api";
+  import { api, type AppWindow, type Monitor, type Source } from "../lib/api";
   import { lengthLabel } from "../lib/format";
   import { store } from "../lib/store.svelte";
   import { ticker } from "../lib/ticker.svelte";
@@ -12,6 +12,13 @@
   let open = $state(false);
   let picking = $state(false);
   let apps = $state<AppWindow[]>([]);
+  let monitors = $state<Monitor[]>([]);
+
+  // Displays are read each time the menu opens, so a plugged-in screen shows up.
+  $effect(() => {
+    if (!open) return;
+    api.listMonitors().then((m) => (monitors = m)).catch(() => (monitors = []));
+  });
   let now = $state(Date.now());
   let root = $state<HTMLElement>();
 
@@ -166,6 +173,24 @@
               <span>{o.l}</span>
               <span class="mono mark" class:on={settings.source === o.v}>{settings.source === o.v ? "[×]" : "[ ]"}</span>
             </button>
+            {#if o.v === "screen" && settings.source === "screen" && monitors.length > 1}
+              <div class="displays">
+                {#each monitors as m (m.index)}
+                  <button
+                    type="button"
+                    class="choice sub"
+                    aria-pressed={settings.monitor === m.index}
+                    onclick={() => update({ monitor: m.index })}
+                  >
+                    <span class="choice-text">
+                      <span>Display {m.index + 1}{m.primary ? " (main)" : ""}</span>
+                      <span class="meta">{m.width} × {m.height}</span>
+                    </span>
+                    <span class="mono mark" class:on={settings.monitor === m.index}>{settings.monitor === m.index ? "(•)" : "( )"}</span>
+                  </button>
+                {/each}
+              </div>
+            {/if}
           {/each}
         {/if}
       </div>
@@ -301,6 +326,15 @@
   }
   .mark.on {
     color: var(--accent);
+  }
+  .displays {
+    display: flex;
+    flex-direction: column;
+    margin: 2px 0 4px 12px;
+  }
+  .choice.sub {
+    min-height: 32px;
+    font-size: 12.5px;
   }
   .app-list {
     max-height: 220px;

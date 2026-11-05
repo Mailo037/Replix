@@ -179,6 +179,7 @@ pub fn prepare(
             meta: meta.tracks.get(i).cloned().unwrap_or(TrackMeta {
                 name: info.titles[i].clone().unwrap_or_else(|| format!("Track {}", i + 1)),
                 kind: crate::audio::TrackKind::App,
+                exe: None,
             }),
             audio: audio[i].to_string_lossy().into_owned(),
         })
@@ -219,6 +220,10 @@ impl Preset {
     }
 }
 
+fn full() -> f64 {
+    1.0
+}
+
 fn centre() -> f64 {
     0.5
 }
@@ -239,6 +244,15 @@ pub struct ExportRequest {
     /// Where the 9:16 frame sits: 0 at the left edge, 1 at the right.
     #[serde(default = "centre")]
     pub crop_x: f64,
+    /// Where the frame sits: 0 at the top, 1 at the bottom.
+    #[serde(default = "centre")]
+    pub crop_y: f64,
+    /// Frame height as a share of the video's; 1 is full height.
+    #[serde(default = "full")]
+    pub crop_scale: f64,
+    /// All sound together: 1 as recorded, up to 2 for twice as loud.
+    #[serde(default = "full")]
+    pub master_volume: f64,
 }
 
 const DISCORD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
@@ -303,15 +317,22 @@ pub fn export(
     ];
 
     let gif = request.preset == Preset::Gif;
-    let enabled: Vec<(usize, f32)> = if gif {
+    // Each track with where it is heard, in seconds of the input (which begins at `start`).
+    let enabled: Vec<(usize, f32, Option<(f64, f64)>)> = if gif {
         Vec::new()
     } else {
         request
             .tracks
             .iter()
             .enumerate()
-            .filter(|(_, t)| t.enabled && t.volume > 0.0)
-            .map(|(i, t)| (i, t.volume))
+            .filter(|(_, t)| t.enabled && !t.removed && t.volume > 0.0 && request.master_volume > 0.0)
+            .filter(|(_, t)| t.start.unwrap_or(0.0) < request.trim_end && t.end.unwrap_or(f64::MAX) > request.trim_start)
+            .map(|(i, t)| {
+                let t = &TrackEdit { volume: t.volume * request.master_volume.clamp(0.0, 2.0) as f32, ..t.clone() };
+                let window = (t.start.is_some() || t.end.is_some())
+                    .then(|| (t.start.unwrap_or(0.0) - start, t.end.unwrap_or(1e9) - start));
+                (i, t.volume, window)
+            })
             .collect()
     };
 
@@ -329,7 +350,13 @@ pub fn export(
         video.push(format!("select='{p}',setpts=N/FRAME_RATE/TB"));
     }
     if request.vertical {
-        video.push(format!("crop=w='min(iw,ih*9/16)':h=ih:x='(iw-ow)*{:.3}':y=0", request.crop_x.clamp(0.0, 1.0)));
+        // Even sizes, as the encoders want them; the scale afterwards brings it to 1080x1920.
+        video.push(format!(
+            "crop=w='trunc(min(iw,ih*9/16)*{:.4}/2)*2':h='trunc(ow*16/9/2)*2':x='(iw-ow)*{:.3}':y='(ih-oh)*{:.3}'",
+            request.crop_scale.clamp(0.2, 1.0),
+            request.crop_x.clamp(0.0, 1.0),
+            request.crop_y.clamp(0.0, 1.0)
+        ));
     }
     match (request.preset, request.vertical) {
         (Preset::Original, true) => video.push("scale=1080:1920:flags=lanczos".into()),
@@ -338,6 +365,10 @@ pub fn export(
         (Preset::Discord, false) => video.push("scale=-2:'min(720,ih)'".into()),
         (Preset::Gif, true) => video.push("fps=15,scale=360:640:flags=lanczos".into()),
         (Preset::Gif, false) => video.push("fps=15,scale=480:-2:flags=lanczos".into()),
+    }
+    if request.vertical {
+        // A smaller frame rounds to sizes a hair off 9:16; the pixels stay square anyway.
+        video.push("setsar=1".into());
     }
     if request.preset == Preset::Discord && video_kbps < 2500 {
         video.push("fps=30".into());
@@ -356,8 +387,11 @@ pub fn export(
     }
     if !enabled.is_empty() {
         let mut inputs = String::new();
-        for (k, (i, volume)) in enabled.iter().enumerate() {
-            filters.push(format!("[0:a:{i}]volume={volume:.3}[a{k}]"));
+        for (k, (i, volume, window)) in enabled.iter().enumerate() {
+            let silence = window
+                .map(|(a, b)| format!(",volume=0:enable='not(between(t,{a:.3},{b:.3}))'"))
+                .unwrap_or_default();
+            filters.push(format!("[0:a:{i}]volume={volume:.3}{silence}[a{k}]"));
             inputs.push_str(&format!("[a{k}]"));
         }
         if enabled.len() == 1 {

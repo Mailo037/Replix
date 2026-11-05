@@ -21,11 +21,31 @@
   } = $props();
 
   const fill = $derived(max > min ? ((value - min) / (max - min)) * 100 : 0);
+
+  let el: HTMLInputElement;
+
+  // Mouse wheel nudges by one step (up = more). Svelte's onwheel is passive, so the
+  // listener is added by hand to be able to stop the page from scrolling.
+  $effect(() => {
+    const onWheel = (e: WheelEvent) => {
+      if (disabled || e.deltaY === 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const dir = e.deltaY < 0 ? 1 : -1;
+      const decimals = (String(step).split('.')[1] ?? '').length;
+      const snapped = Math.round((value - min) / step + dir) * step + min;
+      const next = Math.min(max, Math.max(min, Number(snapped.toFixed(decimals))));
+      if (next !== value) oninput(next);
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => el.removeEventListener('wheel', onWheel);
+  });
 </script>
 
 <input
   type="range"
   class="slider"
+  bind:this={el}
   {min}
   {max}
   {step}

@@ -9,11 +9,18 @@ export type ToastPosition = "topLeft" | "topRight" | "bottomLeft" | "bottomRight
 export interface TrackMeta {
   name: string;
   kind: TrackKind;
+  /** The program's full path, for its icon. */
+  exe?: string;
 }
 
 export interface TrackEdit {
   enabled: boolean;
   volume: number;
+  /** Where this track is heard, in seconds of the clip; the whole clip when left out. */
+  start?: number;
+  end?: number;
+  /** Taken out of the clip: not shown and not exported. */
+  removed?: boolean;
 }
 
 export interface Draft {
@@ -25,6 +32,12 @@ export interface Draft {
   splits: number[];
   vertical: boolean;
   cropX: number;
+  /** Where the frame sits top to bottom, 0 to 1. */
+  cropY?: number;
+  /** Frame height as a share of the video's. */
+  cropScale?: number;
+  /** All sound together: 1 as recorded, up to 2. */
+  masterVolume?: number;
 }
 
 export interface Item {
@@ -95,10 +108,13 @@ export interface Settings {
   storageLimitGb: number;
   hotkeys: Hotkeys;
   accent: string;
+  /** Background colours; see lib/themes. */
+  theme: string;
   launchAtStartup: boolean;
   closeToTray: boolean;
   showToast: boolean;
   toastPosition: ToastPosition;
+  toastSize: "small" | "medium" | "large";
   profiles: Profile[];
   onboarded: boolean;
 }
@@ -191,7 +207,9 @@ export const api = {
   saveDraft: (id: string, title: string, draft: Draft) => inOrder(() => invoke<void>("save_draft", { id, title, draft })),
   renameItem: (id: string, title: string) => inOrder(() => invoke<void>("rename_item", { id, title })),
   setFavorite: (ids: string[], favorite: boolean) => inOrder(() => invoke<void>("set_favorite", { ids, favorite })),
-  deleteItems: (ids: string[]) => inOrder(() => invoke<void>("delete_items", { ids })),
+  /** Says where the files were, for `restoreItems`. */
+  deleteItems: (ids: string[]) => inOrder(() => invoke<string[]>("delete_items", { ids })),
+  restoreItems: (paths: string[]) => inOrder(() => invoke<number>("restore_items", { paths })),
   revealItem: (id: string) => invoke<void>("reveal_item", { id }),
   revealPath: (path: string) => invoke<void>("reveal_path", { path }),
   openClipsFolder: () => invoke<void>("open_clips_folder"),
@@ -208,6 +226,10 @@ export const api = {
   toggleSession: () => invoke<void>("toggle_session"),
   previewToast: () => invoke<void>("preview_toast"),
   hotkeyConflicts: () => invoke<string[]>("hotkey_conflicts"),
+  pauseHotkeys: (paused: boolean) => invoke<void>("pause_hotkeys", { paused }),
+  extractTrack: (id: string, track: number, title: string, start: number, end: number) =>
+    invoke<string>("extract_track", { id, track, title, start, end }),
+  checkHotkey: (keys: string) => invoke<"free" | "taken" | "invalid">("check_hotkey", { keys }),
   listMics: () => invoke<InputDevice[]>("list_mics"),
   storageInfo: () => invoke<StorageInfo>("storage_info"),
   /** Puts the files on the clipboard, ready to paste into Discord or a folder. */

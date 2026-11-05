@@ -4,12 +4,12 @@
   import { store } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
   import Segmented from "./Segmented.svelte";
+  import Select from "./Select.svelte";
   import Switch from "./Switch.svelte";
 
   // Games and apps with their own clip length, quality and so on.
   const s = $derived(store.settings!);
   let open = $state<string | null>(null);
-  let adding = $state(false);
   let apps = $state<AppWindow[]>([]);
 
   /** In the choices, "same as the general setting". */
@@ -31,13 +31,12 @@
     open = null;
   }
 
-  async function startAdding() {
-    apps = await api.listApps();
-    adding = true;
+  async function loadApps() {
+    apps = await api.listApps().catch(() => apps);
   }
+  loadApps();
 
   function add(app: AppWindow) {
-    adding = false;
     if (!s.profiles.some((p) => key(p.exe) === key(app.exe))) {
       save([
         ...s.profiles,
@@ -127,30 +126,25 @@
     </div>
   {/each}
 
-  {#if adding}
-    <div class="picker">
-      <div class="picker-head">
-        <span class="meta">Open the game or app first, then pick it here.</span>
-        <button type="button" class="btn ghost small" onclick={() => (adding = false)}>Cancel</button>
-      </div>
-      <ul class="scroll apps">
-        {#each free as a (a.exe)}
-          <li>
-            <button type="button" onclick={() => add(a)}>
-              <span>{a.name}</span><span class="meta">{a.title}</span>
-            </button>
-          </li>
-        {:else}
-          <li class="meta empty">No other open windows. Start the game, then try again.</li>
-        {/each}
-      </ul>
+  <div class="add-row">
+    <span class="plus" aria-hidden="true"><Icon name="plus" size={14} /></span>
+    <div class="add-select">
+      <Select
+        label="Add a game or app"
+        placeholder="Add a game or app…"
+        value={null}
+        options={free.length
+          ? free.map((a) => ({ value: a.exe, label: a.name, hint: a.title !== a.name ? a.title : undefined }))
+          : [{ value: "", label: "No other open windows", hint: "Start the game first" }]}
+        onopen={loadApps}
+        onchange={(exe) => {
+          const app = free.find((a) => a.exe === exe);
+          if (app) add(app);
+        }}
+      />
     </div>
-  {:else}
-    <button type="button" class="add" onclick={startAdding}>
-      <span class="plus" aria-hidden="true"><Icon name="plus" size={14} /></span>
-      <span>Add a game or app</span>
-    </button>
-  {/if}
+    <span class="meta">Open the game or app first.</span>
+  </div>
 </div>
 
 <style>
@@ -159,12 +153,10 @@
     flex-direction: column;
   }
   .profile + .profile,
-  .profile + .add,
-  .profile + .picker {
+  .profile + .add-row {
     border-top: 1px solid var(--line);
   }
-  .head,
-  .add {
+  .head {
     width: 100%;
     display: flex;
     align-items: center;
@@ -178,9 +170,6 @@
     text-align: left;
   }
   .head:hover,
-  .add:hover {
-    color: var(--ink);
-  }
   .head .text > span:first-child {
     color: var(--ink);
   }
@@ -250,42 +239,22 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .picker {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 12px;
-  }
-  .picker-head {
+  .add-row {
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 12px;
-  }
-  .apps {
-    list-style: none;
-    margin: 0;
-    padding: 4px;
-    max-height: 240px;
-    border-radius: var(--r-row);
-    background: var(--canvas);
-  }
-  .apps button {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
+    min-height: 48px;
     padding: 8px 12px;
-    border: 0;
-    border-radius: 14px;
-    background: transparent;
-    text-align: left;
   }
-  .apps button:hover {
-    background: var(--surface);
+  .add-select {
+    width: 260px;
+    flex: none;
   }
-  .empty {
-    padding: 8px 12px;
+  .add-row .meta {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   @media (prefers-reduced-motion: reduce) {
     .body {

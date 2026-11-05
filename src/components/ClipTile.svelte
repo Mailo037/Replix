@@ -4,6 +4,8 @@
   import { api, fileUrl, type Item } from "../lib/api";
   import { duration, gameColor, time } from "../lib/format";
   import { share } from "../lib/share";
+  import { recycle, rename } from "../lib/undo";
+  import { links, remaining } from "../lib/links.svelte";
   import { store } from "../lib/store.svelte";
   import { fit } from "../lib/place";
   import { tip } from "../lib/tooltip";
@@ -39,6 +41,8 @@
   const thumbUrl = $derived(item.thumb ? fileUrl(item.thumb) : null);
   const isNew = $derived(!item.seen && Date.now() - item.created < 86_400_000 && item.kind !== "screenshot");
   const badge = $derived(isNew ? "new" : item.draft ? "draft" : item.kind === "session" ? "session" : null);
+  const uploading = $derived(!!links.uploading[item.path]);
+  const link = $derived(links.of(item.path));
   const label = $derived(item.kind === "screenshot" ? "PNG" : duration(item.duration));
 
   // At the cursor on right-click, under the ⋯ button otherwise; always inside the window.
@@ -61,16 +65,32 @@
     return () => node.removeEventListener("toggle", sync);
   });
 
-  async function act(what: "favorite" | "reveal" | "delete" | "copy" | "link") {
+  let renaming = $state(false);
+  let draftTitle = $state("");
+
+  function focusSelect(node: HTMLInputElement) {
+    node.focus();
+    node.select();
+  }
+
+  async function finishRename(keep: boolean) {
+    if (!renaming) return;
+    renaming = false;
+    const to = draftTitle.trim();
+    if (keep) await rename(item.id, item.title, to).catch((e) => store.notify("Couldn't rename", String(e)));
+  }
+
+  async function act(what: "favorite" | "reveal" | "delete" | "copy" | "link" | "rename") {
     menuEl?.hidePopover();
     if (what === "favorite") await api.setFavorite([item.id], !item.favorite);
     if (what === "reveal") await api.revealItem(item.id);
     if (what === "copy") await share.copy(item.path);
     if (what === "link") await share.link(item.path);
-    if (what === "delete") {
-      await api.deleteItems([item.id]);
-      store.notify("Moved to the recycle bin", item.title);
+    if (what === "rename") {
+      draftTitle = item.title;
+      renaming = true;
     }
+    if (what === "delete") await recycle([item.id], item.title);
   }
 
   // Dragging a tile hands the file to Windows, so it drops into Discord or a folder.
@@ -117,10 +137,13 @@
       {#if item.favorite}
         <span class="fav" aria-label="Favorite"><Icon name="star" size={14} filled /></span>
       {/if}
+      {#if uploading}
+        <span class="label badge top uploading" aria-label="Uploading"><Icon name="link" size={12} />Uploading…</span>
+      {/if}
       <span class="label badge bottom">{label}</span>
     </span>
     <span class="text">
-      <span class="title">{item.title}</span>
+      <span class="title" class:hidden={renaming}>{item.title}</span>
       <span class="meta">
         {#if item.game}<span class="swatch" style:background={gameColor(item.game)} aria-hidden="true"></span>{/if}
         {item.game && !item.title.includes(item.game) ? `${item.game} · ` : ""}{time(item.created)}
@@ -128,6 +151,21 @@
     </span>
   </button>
 
+  {#if renaming}
+    <input
+      class="rename"
+      aria-label="Name"
+      spellcheck="false"
+      bind:value={draftTitle}
+      use:focusSelect
+      onkeydown={(e) => {
+        e.stopPropagation();
+        if (e.key === "Enter") finishRename(true);
+        else if (e.key === "Escape") finishRename(false);
+      }}
+      onblur={() => finishRename(true)}
+    />
+  {/if}
   {#if !selecting}
     <button type="button" class="more" bind:this={moreBtn}
       aria-label="More actions"
@@ -147,13 +185,20 @@
       <button type="button" role="menuitem" onclick={() => act("copy")}>
         <Icon name="copy" size={16} />Copy
       </button>
-      <button type="button" role="menuitem" onclick={() => act("link")}>
-        <Icon name="link" size={16} />Get a link <span class="hint">72 h</span>
+      <button type="button" role="menuitem" disabled={uploading} onclick={() => act("link")}>
+        {#if uploading}
+          <Icon name="link" size={16} />Uploading… <span class="hint pulse">●</span>
+        {:else if link}
+          <Icon name="link" size={16} />Copy link <span class="hint">{remaining(link)} left</span>
+        {:else}
+          <Icon name="link" size={16} />Get a link <span class="hint">72 h</span>
+        {/if}
       </button>
       <span class="sep" role="separator"></span>
       <button type="button" role="menuitem" onclick={() => act("favorite")}>
-        <Icon name="star" size={16} />{item.favorite ? "Remove favorite" : "Add to favorites"}
+        <Icon name="star" size={16} filled={item.favorite} />{item.favorite ? "Remove favorite" : "Add to favorites"}
       </button>
+      <button type="button" role="menuitem" onclick={() => act("rename")}><Icon name="edit" size={16} />Rename</button>
       <button type="button" role="menuitem" onclick={() => act("reveal")}><Icon name="folder" size={16} />Show in folder</button>
       <button type="button" role="menuitem" class="danger" onclick={() => act("delete")}>
         <Icon name="trash" size={16} />Move to recycle bin
@@ -225,7 +270,7 @@
     height: 24px;
     border-radius: 50%;
     border: 2px solid #fff;
-    background: rgb(23 17 31 / 0.5);
+    background: color-mix(in srgb, var(--canvas) 50%, transparent);
     color: var(--on-accent);
     display: grid;
     place-items: center;
@@ -250,8 +295,27 @@
     position: absolute;
     padding: 3px 9px;
     border-radius: 999px;
-    background: rgb(23 17 31 / 0.82);
+    background: color-mix(in srgb, var(--canvas) 82%, transparent);
     color: var(--ink);
+  }
+  .label.top {
+    left: 10px;
+    top: 10px;
+  }
+  .uploading {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  .pulse {
+    color: var(--accent);
+    animation: pulse 1.2s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    50% {
+      opacity: 0.45;
+    }
   }
   .label.bottom {
     right: 10px;
@@ -295,6 +359,25 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  .title.hidden {
+    visibility: hidden;
+  }
+  .rename {
+    position: absolute;
+    left: 0;
+    right: 36px;
+    bottom: 19px;
+    height: 28px;
+    padding: 0 4px;
+    border: 0;
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--ink);
+    font: inherit;
+    font-size: 15px;
+    font-weight: 700;
+    outline: 2px solid var(--accent);
+  }
   .more {
     position: absolute;
     right: 2px;
@@ -334,6 +417,8 @@
       0 14px 36px rgb(0 0 0 / 0.5);
   }
   .menu {
+    flex-direction: column;
+    gap: 2px;
     opacity: 0;
     transform: translateY(-4px);
     transition:
@@ -368,7 +453,11 @@
     font-weight: 600;
     text-align: left;
   }
-  .menu button:hover {
+  .menu button:disabled {
+    color: var(--muted);
+    cursor: default;
+  }
+  .menu button:hover:not(:disabled) {
     background: var(--hover);
   }
   .menu .danger {

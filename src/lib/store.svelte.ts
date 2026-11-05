@@ -1,6 +1,7 @@
 import { listen } from "@tauri-apps/api/event";
 import { api, type Item, type Settings, type Status } from "./api";
 import { onColor } from "./format";
+import { applyTheme } from "./themes";
 import { syncEditorRound } from "./editorRound.svelte";
 import { updates } from "./updates.svelte";
 
@@ -308,6 +309,7 @@ class Store {
     const root = document.documentElement.style;
     root.setProperty("--accent", this.settings.accent);
     root.setProperty("--on-accent", onColor(this.settings.accent));
+    applyTheme(this.settings.theme);
   }
 
   notify(title: string, detail: string, action?: NoticeAction | NoticeAction[]) {
@@ -332,8 +334,12 @@ class Store {
     );
   }
 
+  /** The library view last shown, so leaving the editor goes back to it. */
+  lastLibrary: View = { name: "library", filter: "all", game: null };
+
   go(view: View) {
     const leaving = this.view.name === "editor" && view.name !== "editor";
+    if (this.view.name === "library") this.lastLibrary = this.view;
     this.view = view;
     // The editor had the media turn; a scan that waited for it can finish now.
     if (leaving && this.stale) this.refresh();

@@ -26,6 +26,9 @@ pub enum Kind {
 pub struct TrackMeta {
     pub name: String,
     pub kind: TrackKind,
+    /// The program's full path, for its icon; none for the desktop and the microphone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exe: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -33,6 +36,14 @@ pub struct TrackMeta {
 pub struct TrackEdit {
     pub enabled: bool,
     pub volume: f32,
+    /// Where this track is heard, in seconds of the clip; the whole clip when left out.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub start: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub end: Option<f64>,
+    /// Taken out of the clip in the editor: not shown and not exported.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub removed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -51,6 +62,19 @@ pub struct Draft {
     pub vertical: bool,
     #[serde(default = "centre")]
     pub crop_x: f64,
+    /// Where the frame sits: 0 at the top, 1 at the bottom.
+    #[serde(default = "centre")]
+    pub crop_y: f64,
+    /// Frame height as a share of the video's; 1 is full height.
+    #[serde(default = "full")]
+    pub crop_scale: f64,
+    /// All sound together: 1 as recorded, up to 2 for twice as loud.
+    #[serde(default = "full")]
+    pub master_volume: f64,
+}
+
+fn full() -> f64 {
+    1.0
 }
 
 fn centre() -> f64 {
@@ -295,7 +319,7 @@ fn tracks_of(info: &ffmpeg::MediaInfo) -> Vec<TrackMeta> {
     info.audio_titles
         .iter()
         .enumerate()
-        .map(|(i, t)| TrackMeta { name: t.clone().unwrap_or_else(|| format!("Track {}", i + 1)), kind: TrackKind::App })
+        .map(|(i, t)| TrackMeta { name: t.clone().unwrap_or_else(|| format!("Track {}", i + 1)), kind: TrackKind::App, exe: None })
         .collect()
 }
 
@@ -580,10 +604,37 @@ pub fn enforce_limit(root: &Path, limit_bytes: u64) -> bool {
     changed
 }
 
+/// The clip and its title, favourite and draft go to the recycle bin together, so a
+/// restore brings all of it back.
 pub fn delete(path: &Path) -> anyhow::Result<()> {
     trash::delete(path)?;
-    let _ = std::fs::remove_file(sidecar(path));
+    let meta = sidecar(path);
+    if meta.exists() && trash::delete(&meta).is_err() {
+        let _ = std::fs::remove_file(&meta);
+    }
     Ok(())
+}
+
+/// Takes clips back out of the recycle bin, with their sidecars; the newest copy of each
+/// if the bin has several. Says how many clips came back.
+pub fn restore(paths: &[PathBuf]) -> anyhow::Result<usize> {
+    let wanted: Vec<PathBuf> = paths.iter().flat_map(|p| [p.clone(), sidecar(p)]).collect();
+    let mut newest: HashMap<PathBuf, trash::TrashItem> = HashMap::new();
+    for item in trash::os_limited::list()? {
+        let original = item.original_path();
+        if !wanted.contains(&original) || original.exists() {
+            continue;
+        }
+        if newest.get(&original).is_none_or(|known| known.time_deleted < item.time_deleted) {
+            newest.insert(original, item);
+        }
+    }
+    let back = paths.iter().filter(|p| newest.contains_key(*p)).count();
+    if back == 0 {
+        anyhow::bail!("It's no longer in the recycle bin.");
+    }
+    trash::os_limited::restore_all(newest.into_values())?;
+    Ok(back)
 }
 
 /// id → path for everything the last scan found.

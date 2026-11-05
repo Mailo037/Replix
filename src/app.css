@@ -130,6 +130,70 @@ h3 {
 
 .scroll {
   overflow-y: auto;
+  /* A faint fade at the top and bottom while there is more to scroll that way. The
+     timeline is inactive when nothing scrolls, so the fades stay at 0 then. */
+  --fade: 28px;
+  mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / 0.25),
+    #000 var(--fade-top),
+    #000 calc(100% - var(--fade-bottom)),
+    rgb(0 0 0 / 0.25)
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    rgb(0 0 0 / calc(1 - var(--fade-top-on) * 0.75)),
+    #000 var(--fade-top),
+    #000 calc(100% - var(--fade-bottom)),
+    rgb(0 0 0 / calc(1 - var(--fade-bottom-on) * 0.75))
+  );
+  animation:
+    scroll-fade-top linear both,
+    scroll-fade-bottom linear both;
+  animation-timeline: scroll(self), scroll(self);
+}
+
+@property --fade-top {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --fade-bottom {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+@property --fade-top-on {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+@property --fade-bottom-on {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+@keyframes scroll-fade-top {
+  0% {
+    --fade-top: 0px;
+    --fade-top-on: 0;
+  }
+  4%,
+  100% {
+    --fade-top: var(--fade);
+    --fade-top-on: 1;
+  }
+}
+@keyframes scroll-fade-bottom {
+  0%,
+  96% {
+    --fade-bottom: var(--fade);
+    --fade-bottom-on: 1;
+  }
+  100% {
+    --fade-bottom: 0px;
+    --fade-bottom-on: 0;
+  }
 }
 
 /* Scrollbars: a slim thumb, no arrows, no track. */

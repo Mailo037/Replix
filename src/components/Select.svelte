@@ -226,6 +226,9 @@
     overflow-y: auto;
   }
   .options {
+    /* Set here too, so the list stays a column while it fades out. */
+    flex-direction: column;
+    gap: 2px;
     opacity: 0;
     transform: translateY(-4px);
     transition:

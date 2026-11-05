@@ -845,7 +845,7 @@ impl SaveJob {
                 duration: info.duration,
                 width: info.width,
                 height: info.height,
-                tracks: self.tracks.iter().map(|t| TrackMeta { name: t.name.clone(), kind: t.kind }).collect(),
+                tracks: self.tracks.iter().map(|t| TrackMeta { name: t.name.clone(), kind: t.kind, exe: t.exe.clone() }).collect(),
                 unread,
                 ..Default::default()
             };
