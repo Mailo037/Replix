@@ -368,7 +368,7 @@ fn black_out_args(
     for (k, name) in names.iter().enumerate() {
         args.push("-map".into());
         args.push(if Some(k) == desktop { "[desk]".into() } else { format!("0:a:{k}") });
-        args.extend([format!("-metadata:s:a:{k}"), format!("title={name}")]);
+        args.extend(ffmpeg::name_track(k, name));
     }
     args.extend(encoder::args(encoder, kbps));
     args.extend(["-c:a".into(), "copy".into()]);
@@ -392,7 +392,7 @@ pub(super) fn joined_input(list: &Path, tracks: &[(usize, &str)], trim: Option<(
     args.extend(["-i".into(), format!("concatf:{}", ffmpeg::path_arg(list)), "-map".into(), "0:v:0".into()]);
     for (k, (slot, name)) in tracks.iter().enumerate() {
         args.extend(["-map".into(), format!("0:a:{slot}")]);
-        args.extend([format!("-metadata:s:a:{k}"), format!("title={name}")]);
+        args.extend(ffmpeg::name_track(k, name));
     }
     if let Some((_, seconds)) = trim {
         args.extend(["-t".into(), format!("{seconds:.3}")]);

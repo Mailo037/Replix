@@ -194,7 +194,7 @@ pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Resul
     let mut cmd = Command::new(tool("ffprobe"));
     crate::platform::background(&mut cmd, true);
     let mut child = cmd
-        .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,channels:stream_tags=title,name", "-of", "json"])
+        .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,channels:stream_tags=title,name,handler_name", "-of", "json"])
         .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -248,15 +248,31 @@ pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Resul
                 info.width = stream.width.unwrap_or(0);
                 info.height = stream.height.unwrap_or(0);
             }
-            // MP4 keeps a track's title in its "name" tag.
             Some("audio") => {
-                info.audio_titles.push(stream.tags.get("title").or(stream.tags.get("name")).cloned());
+                info.audio_titles.push(track_title(&stream.tags));
                 info.audio_channels.push(stream.channels.unwrap_or(2));
             }
             _ => {}
         }
     }
     Ok(info)
+}
+
+/// Options naming audio track `k` of the output. MP4 keeps the title in its "name" box,
+/// which FFmpeg before 7 does not read back; the handler name it does, on every version.
+pub fn name_track(k: usize, name: &str) -> [String; 4] {
+    let stream = format!("-metadata:s:a:{k}");
+    [stream.clone(), format!("title={name}"), stream, format!("handler_name={name}")]
+}
+
+/// A track's name from its tags: the title, else the handler name when a person gave it.
+fn track_title(tags: &std::collections::HashMap<String, String>) -> Option<String> {
+    // What muxers and phones write when nobody named the track.
+    const DEFAULTS: &[&str] = &["SoundHandler", "VideoHandler", "Core Media Audio", "Core Media Video", ""];
+    tags.get("title")
+        .or(tags.get("name"))
+        .or(tags.get("handler_name").filter(|h| !DEFAULTS.contains(&h.trim()) && !h.starts_with("ISO Media")))
+        .cloned()
 }
 
 pub fn path_arg(path: &Path) -> String {

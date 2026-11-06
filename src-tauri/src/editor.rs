@@ -429,10 +429,11 @@ pub fn export(
     } else {
         args.extend(["-map".into(), "[aout]".into()]);
         if separate {
-            args.extend(["-metadata:s:a:0".into(), format!("title={}", crate::i18n::tr("Mix"))]);
+            args.extend(ffmpeg::name_track(0, &crate::i18n::tr("Mix")));
             for (k, (i, _, _)) in enabled.iter().enumerate() {
                 let name = names.get(*i).cloned().unwrap_or_else(|| format!("Track {}", i + 1));
-                args.extend(["-map".into(), format!("[t{k}]"), format!("-metadata:s:a:{}", k + 1), format!("title={name}")]);
+                args.extend(["-map".into(), format!("[t{k}]")]);
+                args.extend(ffmpeg::name_track(k + 1, &name));
             }
         }
         args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), format!("{audio_kbps}k")]);
