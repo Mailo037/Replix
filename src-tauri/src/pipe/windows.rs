@@ -1,4 +1,4 @@
-//! Named pipes that feed raw audio into FFmpeg.
+//! Windows: named pipes.
 
 use anyhow::{bail, Result};
 use windows::core::PCWSTR;

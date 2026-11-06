@@ -11,6 +11,7 @@
   import Mark from "./Mark.svelte";
   import { chooseAndImport } from "../lib/importing";
   import { t, tParts } from "../lib/i18n.svelte";
+  import { isWindows } from "../lib/platform";
 
   let { filter, game }: { filter: Filter; game: string | null } = $props();
   let query = $state("");
@@ -180,7 +181,7 @@
           <div class="actions" role="toolbar" aria-label={t("Selected clips")}>
             <button type="button" onclick={copyPicked}><Icon name="copy" size={16} />{t("Copy")}</button>
             <button type="button" onclick={favoritePicked}><Icon name="star" size={16} />{t("Favorite")}</button>
-            <button type="button" class="danger" onclick={deletePicked}><Icon name="trash" size={16} />{t("Recycle bin")}</button>
+            <button type="button" class="danger" onclick={deletePicked}><Icon name="trash" size={16} />{isWindows ? t("Recycle bin") : t("Trash")}</button>
           </div>
         {/if}
         <button type="button" class="btn ghost small" onclick={() => (selected = visible.map((i) => i.id))}>{t("Select all")}</button>

@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
+    "check:all": "node scripts/check-all.mjs",
     "tauri": "tauri",
     "set-version": "node scripts/set-version.mjs",
     "i18n": "node scripts/i18n.mjs"

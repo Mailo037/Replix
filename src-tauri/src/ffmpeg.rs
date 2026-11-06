@@ -1,7 +1,6 @@
 //! Finding and running FFmpeg.
 
 use std::io::Read;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
@@ -9,15 +8,12 @@ use std::time::{Duration, Instant};
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-/// Helper jobs (saving, thumbnails, probing) yield the CPU to the game. The capture
-/// itself is started elsewhere and keeps normal priority so it never drops frames.
-const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 
-/// FFmpeg as Replix downloaded it; until then (and in tests) whatever is on the PATH.
+/// FFmpeg where setup found it (downloaded on Windows, the system's elsewhere); until then
+/// (and in tests) whatever is on the PATH.
 fn tool(name: &str) -> PathBuf {
     match crate::install::ready_dir() {
-        Some(dir) => dir.join(format!("{name}.exe")),
+        Some(dir) => dir.join(format!("{name}{}", std::env::consts::EXE_SUFFIX)),
         None => PathBuf::from(name),
     }
 }
@@ -29,8 +25,9 @@ pub trait SpawnTied {
 
 impl SpawnTied for Command {
     fn spawn_tied(&mut self) -> std::io::Result<std::process::Child> {
+        crate::platform::prepare_tied(self);
         let child = self.spawn()?;
-        crate::win::tie_to_app(&child);
+        crate::platform::tie_to_app(&child);
         Ok(child)
     }
 }
@@ -39,9 +36,12 @@ pub fn exe() -> PathBuf {
     tool("ffmpeg")
 }
 
+/// FFmpeg for a helper job (saving, thumbnails, probing): these yield the CPU to the game.
+/// The capture itself is started elsewhere and keeps normal priority so it never drops frames.
 pub fn command() -> Command {
     let mut cmd = Command::new(exe());
-    cmd.creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS).arg("-hide_banner").args(["-loglevel", "error", "-nostdin"]);
+    crate::platform::background(&mut cmd, true);
+    cmd.arg("-hide_banner").args(["-loglevel", "error", "-nostdin"]);
     cmd
 }
 
@@ -157,8 +157,9 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
 
 /// Like `probe`, stopped as soon as `keep_going` says no.
 pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Result<MediaInfo> {
-    let mut child = Command::new(tool("ffprobe"))
-        .creation_flags(CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS)
+    let mut cmd = Command::new(tool("ffprobe"));
+    crate::platform::background(&mut cmd, true);
+    let mut child = cmd
         .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,channels:stream_tags=title,name", "-of", "json"])
         .arg(path)
         .stdin(Stdio::null())

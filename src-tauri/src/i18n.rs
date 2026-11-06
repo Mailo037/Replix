@@ -48,10 +48,10 @@ fn catalogs() -> &'static HashMap<&'static str, Catalog> {
 
 static CURRENT: RwLock<&'static str> = parking_lot::const_rwlock("en");
 
-/// The language a setting stands for: "auto" follows Windows.
+/// The language a setting stands for: "auto" follows the system.
 pub fn resolve(setting: &str) -> &'static str {
     if setting == "auto" || setting.is_empty() {
-        matching(&crate::win::ui_language())
+        matching(&crate::platform::ui_language())
     } else {
         matching(setting)
     }

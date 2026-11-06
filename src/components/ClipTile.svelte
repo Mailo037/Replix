@@ -10,6 +10,7 @@
   import { fit } from "../lib/place";
   import { tip } from "../lib/tooltip";
   import { t } from "../lib/i18n.svelte";
+  import { isWindows } from "../lib/platform";
   import Icon from "./Icon.svelte";
 
   let {
@@ -96,7 +97,7 @@
     if (what === "delete") await recycle([item.id], item.title);
   }
 
-  // Dragging a tile hands the file to Windows, so it drops into Discord or a folder.
+  // Dragging a tile hands the file to the system, so it drops into Discord or a folder.
   function drag(e: DragEvent) {
     const icon = item.thumb ?? (item.kind === "screenshot" ? item.path : null);
     if (!icon || selecting) return;
@@ -205,7 +206,7 @@
       <button type="button" role="menuitem" onclick={() => act("rename")}><Icon name="edit" size={16} />{t("Rename")}</button>
       <button type="button" role="menuitem" onclick={() => act("reveal")}><Icon name="folder" size={16} />{t("Show in folder")}</button>
       <button type="button" role="menuitem" class="danger" onclick={() => act("delete")}>
-        <Icon name="trash" size={16} />{t("Move to recycle bin")}
+        <Icon name="trash" size={16} />{isWindows ? t("Move to recycle bin") : t("Move to trash")}
       </button>
     </div>
   {/if}

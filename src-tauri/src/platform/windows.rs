@@ -1,9 +1,12 @@
-//! Small Win32 helpers: windows, processes, monitors.
+//! Windows: Win32 for windows, processes and monitors; Graphics Capture and Desktop
+//! Duplication (through FFmpeg) for the picture.
 
 use std::collections::HashMap;
 use std::ffi::c_void;
+use std::os::windows::process::CommandExt;
+use std::process::Command;
 
-use serde::Serialize;
+use super::{Area, Capture, Grab, MonitorInfo, ProcessEntry, WindowInfo, WindowMemo};
 use windows::core::{BOOL, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
 use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
@@ -19,30 +22,9 @@ use windows::Win32::System::Threading::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
-    GetWindowTextW, GetWindowThreadProcessId, IsWindow, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, MONITORINFOF_PRIMARY,
+    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, MONITORINFOF_PRIMARY,
     WS_EX_TOOLWINDOW,
 };
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct WindowInfo {
-    pub hwnd: u64,
-    pub title: String,
-    pub exe: String,
-    #[serde(skip)]
-    pub exe_path: String,
-    pub pid: u32,
-    pub fullscreen: bool,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct MonitorInfo {
-    pub index: u32,
-    pub width: i32,
-    pub height: i32,
-    pub primary: bool,
-}
 
 fn hwnd(raw: u64) -> HWND {
     HWND(raw as *mut c_void)
@@ -54,35 +36,102 @@ pub fn is_window(raw: u64) -> bool {
 
 /// Minimised windows send Graphics Capture no pictures.
 pub fn is_minimized(raw: u64) -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::IsIconic;
     unsafe { IsIconic(hwnd(raw)).as_bool() }
 }
 
-/// Whether the outlines of a window and a monitor overlap.
-fn on_monitor(h: HWND, monitor: &RECT) -> bool {
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(h, &mut rect) }.is_err() {
-        return false;
+/// Every top-level window, topmost first.
+fn top_level_windows() -> Vec<HWND> {
+    unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
+        let list = &mut *(data.0 as *mut Vec<HWND>);
+        list.push(h);
+        BOOL(1)
     }
-    rect.left < monitor.right && rect.right > monitor.left && rect.top < monitor.bottom && rect.bottom > monitor.top
+    let mut handles: Vec<HWND> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(collect), LPARAM(&mut handles as *mut _ as isize));
+    }
+    handles
 }
 
-/// The name of a program from `exes` (lower-case executable names) that has a window
-/// open on the monitor with this index, minimised windows aside.
-pub fn excluded_on_monitor(index: u32, exes: &[String]) -> Option<String> {
+/// Whether nothing behind a window shows through it: see-through and click-through windows,
+/// like overlays, hide nothing.
+fn is_solid(h: HWND) -> bool {
+    use windows::Win32::UI::WindowsAndMessaging::{WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TRANSPARENT};
+    let ex = unsafe { GetWindowLongPtrW(h, GWL_EXSTYLE) } as u32;
+    ex & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_NOREDIRECTIONBITMAP.0) == 0
+}
+
+/// Where the windows of programs from `exes` (lower-case executable names) show on the
+/// monitor with this index, by window handle; menus and pop-ups count too. Windows that are
+/// minimised, on another virtual desktop or entirely behind one solid window are left out.
+pub fn excluded_areas(index: u32, exes: &[String], memo: &mut WindowMemo) -> Vec<(u64, Area)> {
     if exes.is_empty() {
-        return None;
+        memo.windows.clear();
+        return Vec::new();
+    }
+    if memo.exes != exes {
+        memo.exes = exes.to_vec();
+        memo.windows.clear();
     }
     let handles = monitor_handles();
-    let monitor = *handles.get(index as usize).or(handles.first())?;
+    let Some(&monitor) = handles.get(index as usize).or(handles.first()) else { return Vec::new() };
     let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
     if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-        return None;
+        return Vec::new();
     }
-    list_windows()
-        .into_iter()
-        .find(|w| exes.contains(&w.exe.to_lowercase()) && !is_minimized(w.hwnd) && on_monitor(hwnd(w.hwnd), &info.rcMonitor))
-        .map(|w| app_name(&w.exe_path))
+    let m = info.rcMonitor;
+    let (width, height) = ((m.right - m.left) as f32, (m.bottom - m.top) as f32);
+    if width <= 0.0 || height <= 0.0 {
+        return Vec::new();
+    }
+    let own = std::process::id();
+    // Only windows this look found stay remembered, so closed ones are forgotten.
+    let mut known: HashMap<u64, (u32, bool)> = HashMap::with_capacity(memo.windows.len());
+    // Solid windows above the one being looked at, cut to the monitor.
+    let mut above: Vec<RECT> = Vec::new();
+    let mut out = Vec::new();
+    for h in top_level_windows() {
+        // Cheapest checks first; the cloaking one asks the compositor.
+        let mut r = RECT::default();
+        let shown = unsafe { IsWindowVisible(h).as_bool() && !IsIconic(h).as_bool() && GetWindowRect(h, &mut r).is_ok() };
+        if !shown {
+            continue;
+        }
+        let r = RECT { left: r.left.max(m.left), top: r.top.max(m.top), right: r.right.min(m.right), bottom: r.bottom.min(m.bottom) };
+        if r.right <= r.left || r.bottom <= r.top || is_cloaked(h) {
+            continue;
+        }
+        let mut pid = 0u32;
+        unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
+        let key = h.0 as u64;
+        // A window keeps its process for life; a handle reused by another process is looked up again.
+        let remembered = memo.windows.get(&key).filter(|(p, _)| *p == pid).map(|(_, kept)| *kept);
+        let excluded = remembered.unwrap_or_else(|| {
+            pid != own
+                && known.values().find(|(p, _)| *p == pid).map(|(_, kept)| *kept).unwrap_or_else(|| {
+                    process_path(pid)
+                        .and_then(|p| p.rsplit('\\').next().map(|exe| exes.contains(&exe.to_lowercase())))
+                        .unwrap_or(false)
+                })
+        });
+        known.insert(key, (pid, excluded));
+        if excluded {
+            let hidden = above.iter().any(|a| a.left <= r.left && a.top <= r.top && a.right >= r.right && a.bottom >= r.bottom);
+            if !hidden {
+                let area = Area {
+                    left: (r.left - m.left) as f32 / width,
+                    top: (r.top - m.top) as f32 / height,
+                    right: (r.right - m.left) as f32 / width,
+                    bottom: (r.bottom - m.top) as f32 / height,
+                };
+                out.push((h.0 as u64, area));
+            }
+        } else if is_solid(h) {
+            above.push(r);
+        }
+    }
+    memo.windows = known;
+    out
 }
 
 /// The Windows display language as a locale name, e.g. "de-DE".
@@ -152,17 +201,8 @@ fn describe(h: HWND) -> Option<WindowInfo> {
 
 /// Visible top-level windows a person would recognise as programs.
 pub fn list_windows() -> Vec<WindowInfo> {
-    unsafe extern "system" fn collect(h: HWND, data: LPARAM) -> BOOL {
-        let list = &mut *(data.0 as *mut Vec<HWND>);
-        list.push(h);
-        BOOL(1)
-    }
-    let mut handles: Vec<HWND> = Vec::new();
-    unsafe {
-        let _ = EnumWindows(Some(collect), LPARAM(&mut handles as *mut _ as isize));
-    }
     let own = std::process::id();
-    handles
+    top_level_windows()
         .into_iter()
         .filter(|&h| unsafe {
             IsWindowVisible(h).as_bool()
@@ -186,14 +226,6 @@ pub fn process_path(pid: u32) -> Option<String> {
         result.ok()?;
         Some(String::from_utf16_lossy(&buf[..len as usize]))
     }
-}
-
-pub struct ProcessEntry {
-    pub pid: u32,
-    pub parent: u32,
-    pub exe: String,
-    /// `exe` in lower case, made once per snapshot for comparing names.
-    pub exe_lower: String,
 }
 
 /// Every running process by pid.
@@ -225,50 +257,8 @@ pub fn processes() -> HashMap<u32, ProcessEntry> {
     out
 }
 
-/// The outermost process with the same executable, so a capture includes all of an
-/// app's helper processes (Discord and browsers play sound from child processes).
-pub fn root_of(pid: u32, all: &HashMap<u32, ProcessEntry>) -> u32 {
-    // Embedded browsers play sound on behalf of the app that hosts them.
-    const HELPER: &str = "msedgewebview2.exe";
-    let mut current = pid;
-    for _ in 0..16 {
-        let Some(entry) = all.get(&current) else { break };
-        match all.get(&entry.parent) {
-            Some(parent)
-                if parent.pid != current
-                    && (parent.exe_lower == entry.exe_lower || entry.exe_lower == HELPER) =>
-            {
-                current = parent.pid
-            }
-            _ => break,
-        }
-    }
-    current
-}
-
-/// "Discord" for Discord.exe: the file description, or the file name without extension.
-pub fn app_name(exe_path: &str) -> String {
-    let stem = exe_path
-        .rsplit('\\')
-        .next()
-        .unwrap_or(exe_path)
-        .trim_end_matches(".exe")
-        .trim_end_matches(".EXE")
-        .to_string();
-    file_description(exe_path)
-        .filter(|d| !d.trim().is_empty() && d.len() <= 40)
-        .unwrap_or_else(|| capitalise(&stem))
-}
-
-fn capitalise(s: &str) -> String {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-fn file_description(path: &str) -> Option<String> {
+/// The program's own name for itself, from its version resource.
+pub(super) fn file_description(path: &str) -> Option<String> {
     let wide: Vec<u16> = path.encode_utf16().chain(Some(0)).collect();
     unsafe {
         let size = GetFileVersionInfoSizeW(PCWSTR(wide.as_ptr()), None);
@@ -363,51 +353,6 @@ pub fn monitors() -> Vec<MonitorInfo> {
         .collect()
 }
 
-/// Programs that are never games, even when they cover the screen.
-const NOT_GAMES: &[&str] = &[
-    "explorer.exe", "searchhost.exe", "startmenuexperiencehost.exe", "shellexperiencehost.exe",
-    "applicationframehost.exe", "textinputhost.exe", "lockapp.exe", "chrome.exe", "msedge.exe", "firefox.exe",
-    "brave.exe", "opera.exe", "opera_gx.exe", "vivaldi.exe", "arc.exe", "zen.exe", "discord.exe", "spotify.exe",
-    "vlc.exe", "mpv.exe", "mpc-hc64.exe", "potplayermini64.exe", "wmplayer.exe", "code.exe", "devenv.exe",
-    "obs64.exe", "steam.exe", "steamwebhelper.exe", "epicgameslauncher.exe", "battle.net.exe", "riotclientux.exe",
-    "riotclientservices.exe", "eadesktop.exe", "ubisoftconnect.exe", "galaxyclient.exe", "powerpnt.exe",
-    "winword.exe", "excel.exe", "teams.exe", "ms-teams.exe", "zoom.exe", "slack.exe", "windowsterminal.exe",
-    "claude.exe", "replix.exe", "ffmpeg.exe", "photos.exe", "microsoft.media.player.exe",
-];
-
-/// Folders games are installed into by the common stores.
-const GAME_DIRS: &[&str] = &[
-    "\\steamapps\\common\\", "\\epic games\\", "\\riot games\\", "\\xboxgames\\", "\\gog galaxy\\games\\",
-    "\\gog games\\", "\\ubisoft game launcher\\games\\", "\\ea games\\", "\\rockstar games\\", "\\amazon games\\",
-    "\\itch\\apps\\", "\\battle.net\\games\\",
-];
-
-pub fn looks_like_game(w: &WindowInfo) -> bool {
-    let exe = w.exe.to_lowercase();
-    if NOT_GAMES.contains(&exe.as_str()) || w.pid == std::process::id() {
-        return false;
-    }
-    let path = w.exe_path.to_lowercase();
-    GAME_DIRS.iter().any(|d| path.contains(d)) || w.fullscreen
-}
-
-/// The name shown for a game: its window title when that is short, else the
-/// store folder or the executable's description.
-pub fn game_name(w: &WindowInfo) -> String {
-    let title = w.title.trim();
-    if !title.is_empty() && title.chars().count() <= 48 {
-        return title.to_string();
-    }
-    let lower = w.exe_path.to_lowercase();
-    if let Some(pos) = lower.find("\\steamapps\\common\\") {
-        let rest = &w.exe_path[pos + "\\steamapps\\common\\".len()..];
-        if let Some(folder) = rest.split('\\').next() {
-            return folder.to_string();
-        }
-    }
-    app_name(&w.exe_path)
-}
-
 /// Lets the game have the CPU first: for threads doing work nobody waits for.
 pub fn lower_thread_priority() {
     use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
@@ -436,7 +381,55 @@ pub fn hide_file(path: &std::path::Path) {
 }
 
 /// Shows a window without taking focus from the game.
-pub fn show_passive(raw: u64) {
+pub fn show_passive(window: &tauri::WebviewWindow) {
+    if let Ok(hwnd) = window.hwnd() {
+        show_passive_hwnd(hwnd.0 as u64);
+    }
+}
+
+/// The toast window as built: `show_passive` keeps it from taking focus each time it shows.
+pub fn passive<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
+    builder: tauri::WebviewWindowBuilder<'a, R, M>,
+) -> tauri::WebviewWindowBuilder<'a, R, M> {
+    builder
+}
+
+/// Hidden, WebView2 is asked to keep as little memory as it can: it drops caches and the
+/// pictures and video the page let go of, which leaves more for the game. On screen again,
+/// it goes back to normal. Older WebView2 runtimes without this simply keep their memory.
+pub fn set_page_memory(webview: &tauri::Webview, visible: bool) {
+    use webview2_com::Microsoft::Web::WebView2::Win32::{
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+    };
+    use windows::core::Interface;
+    let level = if visible { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW };
+    let _ = webview.with_webview(move |platform| {
+        // SAFETY: called on the main thread with the controller Tauri keeps alive.
+        let result = unsafe {
+            platform
+                .controller()
+                .CoreWebView2()
+                .and_then(|core| core.cast::<ICoreWebView2_19>())
+                .and_then(|core| core.SetMemoryUsageTargetLevel(level))
+        };
+        if let Err(e) = result {
+            log::debug!("page memory level not set: {e}");
+        }
+    });
+}
+
+/// The Videos folder of the user.
+pub fn videos_dir() -> std::path::PathBuf {
+    let home = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into());
+    home.join("Videos")
+}
+
+/// Graphics Capture records a window by itself, not the screen it is on.
+pub fn screen_of_window(_raw: u64) -> Option<u32> {
+    None
+}
+
+fn show_passive_hwnd(raw: u64) {
     use windows::Win32::UI::WindowsAndMessaging::{
         SetWindowLongPtrW, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
         SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
@@ -465,6 +458,62 @@ pub fn foreground_work_area() -> Option<(i32, i32, i32, i32)> {
         })
     }
 }
+
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
+
+/// Starts a helper without a console window; `low_priority` lets the game have the CPU first.
+pub fn background(cmd: &mut Command, low_priority: bool) {
+    cmd.creation_flags(if low_priority { CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS } else { CREATE_NO_WINDOW });
+}
+
+/// Graphics Capture hands FFmpeg its pictures on the GPU; screenshots need them in memory.
+pub const DOWNLOAD: &str = ",hwdownload,format=bgra";
+
+/// Whether the capture of a whole monitor sends pictures even while the screen is still.
+pub fn steady_screen(index: u32) -> bool {
+    dxgi_output(index).is_some()
+}
+
+/// The FFmpeg input for a window or monitor; `chain` is added to its filters.
+pub fn capture(grab: Grab, fps: u32, cursor: bool, chain: &str) -> Capture {
+    let what = match grab {
+        Grab::Window(hwnd) => format!("hwnd={hwnd}"),
+        Grab::Monitor(index) => match dxgi_output(index) {
+            // Graphics Capture sends nothing while the screen is still, which stalls the
+            // buffer. Desktop Duplication repeats the last frame, so prefer it for screens.
+            Some(output) => {
+                let source = format!("ddagrab=output_idx={output}:framerate={fps}:draw_mouse={}{chain}", u8::from(cursor));
+                return Capture { input: lavfi(source), filter: None };
+            }
+            None => format!("monitor_idx={index}"),
+        },
+    };
+    // Even sizes: several encoders reject odd widths. A game that changes its resolution
+    // or leaves full screen is scaled into the first size, never cut off.
+    let source = format!(
+        "gfxcapture={what}:max_framerate={fps}:capture_cursor={}:width=-2:height=-2:resize_mode=scale_aspect{chain}",
+        u8::from(cursor)
+    );
+    Capture { input: lavfi(source), filter: None }
+}
+
+fn lavfi(source: String) -> Vec<String> {
+    vec!["-f".into(), "lavfi".into(), "-i".into(), source]
+}
+
+/// A test picture as an encoder gets it while recording, for trying encoders.
+pub fn test_capture(chain: &str) -> Capture {
+    Capture { input: lavfi(format!("gfxcapture=monitor_idx=0:max_framerate=30{chain}")), filter: None }
+}
+
+/// Why recording cannot work here, when it cannot: Windows always has a way.
+pub fn capture_unavailable(_whole_screen: bool) -> Option<String> {
+    None
+}
+
+/// Nothing to set up before the start: the job takes the helper once it runs.
+pub fn prepare_tied(_cmd: &mut Command) {}
 
 /// CPU time a process has used so far, in user and kernel mode together.
 pub fn cpu_time(child: &std::process::Child) -> Option<std::time::Duration> {

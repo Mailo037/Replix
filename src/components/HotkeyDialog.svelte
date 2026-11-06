@@ -2,6 +2,7 @@
   import { untrack } from "svelte";
   import { api } from "../lib/api";
   import { t } from "../lib/i18n.svelte";
+  import { isWindows } from "../lib/platform";
 
   // Picks a hotkey: shows the keys as they are held, and says right away whether the
   // combination is free, used by another Replix action, or taken by another program.
@@ -49,7 +50,7 @@
     ArrowRight: "Right",
   };
 
-  /** Shortcuts Windows or almost every program already uses. */
+  /** Shortcuts the system or almost every program already uses. */
   const COMMON: Record<string, string> = $derived({
     "Alt+F4": t("closes the window you're in"),
     "Alt+Tab": t("switches windows"),
@@ -97,7 +98,8 @@
     if (!combo) return { tone: "idle", text: t("Press the keys you want, for example Alt and C together.") };
     if (twin) return { tone: "bad", text: t("Already used for “{label}”.", { label: twin.label }) };
     if (check === "taken") return { tone: "bad", text: t("Another program already uses this. Pick a different one.") };
-    if (check === "invalid") return { tone: "bad", text: t("Windows doesn't accept this combination.") };
+    if (check === "invalid")
+      return { tone: "bad", text: isWindows ? t("Windows doesn't accept this combination.") : t("This key combination can't be used.") };
     if (check === "checking") return { tone: "idle", text: t("Checking…") };
     if (common) return { tone: "warn", text: t("Works, but it also {common}.", { common }) };
     if (combo === current) return { tone: "idle", text: t("This is the current hotkey.") };

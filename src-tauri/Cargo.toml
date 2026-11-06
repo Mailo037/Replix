@@ -12,7 +12,8 @@ crate-type = ["rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "protocol-asset", "image-png"] }
+# macos-private-api: the corner toast needs a see-through window on macOS too.
+tauri = { version = "2", features = ["tray-icon", "protocol-asset", "image-png", "macos-private-api"] }
 tauri-plugin-global-shortcut = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-dialog = "2"
@@ -28,6 +29,12 @@ parking_lot = "0.12"
 chrono = { version = "0.4", features = ["serde"] }
 crossbeam-channel = "0.5"
 trash = "5"
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+nnnoiseless = { version = "0.5.2", default-features = false }
+tauri-plugin-drag = "2"
+
+[target.'cfg(windows)'.dependencies]
 wasapi = "0.26"
 windows = { version = "0.62", features = [
     "Win32_Foundation",
@@ -48,12 +55,21 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell",
     "Win32_Globalization",
 ] }
-tauri-plugin-updater = "2"
-tauri-plugin-process = "2"
-nnnoiseless = { version = "0.5.2", default-features = false }
-tauri-plugin-drag = "2"
 # The same version Tauri uses, to ask WebView2 to give back memory while hidden.
 webview2-com = "0.39"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+sys-locale = "0.3"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# Talks to the X server directly (no C library): windows, the active one, monitors.
+x11rb = { version = "0.13", features = ["randr"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+sysinfo = { version = "0.37", default-features = false, features = ["system"] }
+core-foundation = "0.10"
+core-graphics = "0.25"
 
 # Debug info would need several GB of disk for this dependency tree.
 [profile.dev]

@@ -3,6 +3,7 @@
   import { api, type AppWindow, type InputDevice, type Settings, type Source } from "../lib/api";
   import { lengthLabel } from "../lib/format";
   import { t, tParts } from "../lib/i18n.svelte";
+  import { isWindows } from "../lib/platform";
   import { store } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
   import MicMeter from "./MicMeter.svelte";
@@ -28,7 +29,7 @@
   const keys = (combo: string) => (combo ? combo.split("+") : [t("Not set")]);
   const micDevice = $derived(store.settings?.micDevice ?? null);
   const micOptions = $derived([
-    { value: null, label: t("Windows default"), hint: mics.find((m) => m.default)?.name },
+    { value: null, label: isWindows ? t("Windows default") : t("System default"), hint: mics.find((m) => m.default)?.name },
     ...mics.map((m) => ({ value: m.id as string | null, label: m.name })),
   ]);
   const appOptions = $derived([
@@ -219,8 +220,8 @@
             <p>{t("Start a game whenever you like. Replix waits in the tray and stays out of your way.")}</p>
             <div class="rows">
               <div class="line">
-                <span>{t("Start with Windows")}</span>
-                <Switch checked={s.launchAtStartup} label={t("Start with Windows")} onchange={(v) => update({ launchAtStartup: v })} />
+                <span>{isWindows ? t("Start with Windows") : t("Start when you log in")}</span>
+                <Switch checked={s.launchAtStartup} label={isWindows ? t("Start with Windows") : t("Start when you log in")} onchange={(v) => update({ launchAtStartup: v })} />
               </div>
               <div class="line">
                 <span>{t("Notifications in the corner")}</span>

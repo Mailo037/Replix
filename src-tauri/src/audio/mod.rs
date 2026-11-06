@@ -2,7 +2,8 @@
 //!
 //! FFmpeg reads a fixed number of audio inputs (named pipes), one per slot. A slot
 //! is silent until an app starts playing, then that app's process tree is captured
-//! into it with WASAPI process loopback. The game always has slot 0, the microphone
+//! into it on its own (WASAPI process loopback on Windows, the app's PulseAudio stream on
+//! Linux). The game always has slot 0, the microphone
 //! the last one. Which app sat in which slot, and when, is kept so a saved clip can
 //! name its tracks and leave out the silent ones.
 
@@ -15,10 +16,28 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use nnnoiseless::DenoiseState;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use wasapi::{AudioClient, DeviceEnumerator, DeviceState, Direction, SampleType, SessionState, StreamMode, WaveFormat};
 
 use crate::pipe::PipeServer;
-use crate::win;
+use crate::platform;
+
+#[cfg(target_os = "linux")]
+mod linux;
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(unix)]
+mod process;
+#[cfg(windows)]
+mod windows;
+
+#[cfg(target_os = "linux")]
+use self::linux as imp;
+#[cfg(target_os = "macos")]
+use self::macos as imp;
+#[cfg(windows)]
+use self::windows as imp;
+
+use imp::{audio_sessions, stream};
+pub use imp::{init_thread, input_devices};
 
 pub const RATE: usize = 48_000;
 pub const CHANNELS: usize = 2;
@@ -77,8 +96,10 @@ impl Ring {
 
 #[derive(Debug, Clone)]
 pub enum Source {
+    // macOS cannot capture one app's sound, so it never looks at the process.
+    #[cfg_attr(target_os = "macos", allow(dead_code))]
     Process(u32),
-    /// A capture device by id; `None` follows the Windows default.
+    /// A capture device by id; `None` follows the system default.
     Mic(Option<String>),
     Desktop,
 }
@@ -155,27 +176,6 @@ impl MicChain {
     }
 }
 
-fn open(source: &Source) -> anyhow::Result<AudioClient> {
-    Ok(match source {
-        Source::Process(pid) => AudioClient::new_application_loopback_client(*pid, true)?,
-        Source::Mic(id) => {
-            let devices = DeviceEnumerator::new()?;
-            // A microphone that was unplugged falls back to the default one.
-            let chosen = id
-                .as_deref()
-                .and_then(|id| devices.get_device(id).ok())
-                .filter(|d| matches!(d.get_state(), Ok(DeviceState::Active)));
-            match chosen {
-                Some(device) => device,
-                None => devices.get_default_device(&Direction::Capture)?,
-            }
-            .get_iaudioclient()?
-        }
-        // Capturing from a render device is loopback.
-        Source::Desktop => DeviceEnumerator::new()?.get_default_device(&Direction::Render)?.get_iaudioclient()?,
-    })
-}
-
 fn capture(source: Source, ring: Arc<Ring>, stop: Arc<AtomicBool>) -> anyhow::Result<()> {
     let mut mic = matches!(source, Source::Mic(_)).then(MicChain::new);
     stream(&source, &stop, |samples| {
@@ -186,63 +186,12 @@ fn capture(source: Source, ring: Arc<Ring>, stop: Arc<AtomicBool>) -> anyhow::Re
     })
 }
 
-/// Runs a capture stream until `stop`, handing each batch of samples to `sink`.
-fn stream(source: &Source, stop: &AtomicBool, mut sink: impl FnMut(&mut Vec<f32>)) -> anyhow::Result<()> {
-    let _ = wasapi::initialize_mta();
-    let format = WaveFormat::new(32, 32, &SampleType::Float, RATE, CHANNELS, None);
-    let mut client = open(source)?;
-    let mode = StreamMode::EventsShared { autoconvert: true, buffer_duration_hns: 0 };
-    client.initialize_client(&format, &Direction::Capture, &mode)?;
-    let event = client.set_get_eventhandle()?;
-    let reader = client.get_audiocaptureclient()?;
-    client.start_stream()?;
-    let mut bytes: VecDeque<u8> = VecDeque::new();
-    let mut floats: Vec<f32> = Vec::new();
-    while !stop.load(Ordering::Relaxed) {
-        // A silent process sends no events; the pipe writer fills the gap.
-        if event.wait_for_event(100).is_err() {
-            continue;
-        }
-        while let Ok(Some(frames)) = reader.get_next_packet_size() {
-            if frames == 0 {
-                break;
-            }
-            reader.read_from_device_to_deque(&mut bytes)?;
-        }
-        let whole = bytes.len() / 4 * 4;
-        floats.clear();
-        // Usually contiguous already, so this neither moves nor allocates.
-        floats.extend(bytes.make_contiguous()[..whole].as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)));
-        bytes.drain(..whole);
-        sink(&mut floats);
-    }
-    let _ = client.stop_stream();
-    Ok(())
-}
-
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InputDevice {
     pub id: String,
     pub name: String,
     pub default: bool,
-}
-
-/// Every active microphone, as Windows names it.
-pub fn input_devices() -> Vec<InputDevice> {
-    let _ = wasapi::initialize_mta();
-    let Ok(enumerator) = DeviceEnumerator::new() else { return Vec::new() };
-    let default = enumerator.get_default_device(&Direction::Capture).and_then(|d| d.get_id()).ok();
-    let Ok(devices) = enumerator.get_device_collection(&Direction::Capture) else { return Vec::new() };
-    (&devices)
-        .into_iter()
-        .flatten()
-        .filter_map(|d| {
-            let id = d.get_id().ok()?;
-            let name = d.get_friendlyname().unwrap_or_else(|_| "Microphone".into());
-            Some(InputDevice { default: default.as_deref() == Some(id.as_str()), id, name })
-        })
-        .collect()
 }
 
 /// Listens to a microphone until `stop` and reports its peak level (0 to 1, after the
@@ -414,7 +363,7 @@ impl Router {
             Some((pid, exe, name)) => {
                 let key = exe.to_lowercase();
                 self.game_key = Some(key.clone());
-                self.assign(0, key, name, win::process_path(pid), TrackKind::Game, Source::Process(pid));
+                self.assign(0, key, name, platform::process_path(pid), TrackKind::Game, Source::Process(pid));
             }
             None => {
                 self.game_key = None;
@@ -433,14 +382,14 @@ impl Router {
     pub fn poll(&mut self, excluded: &[String]) {
         // In screen mode slot 0 already holds every sound, so separate app tracks would
         // only duplicate it. They still help there: muting Discord needs its own track.
-        let processes = win::processes();
+        let processes = platform::processes();
         let mut seen: HashSet<String> = HashSet::new();
         let own = std::process::id();
         for (pid, active) in audio_sessions() {
             if pid == 0 || pid == own || processes.get(&pid).is_some_and(|p| p.parent == own) {
                 continue;
             }
-            let root = win::root_of(pid, &processes);
+            let root = platform::root_of(pid, &processes);
             // Replix's own previews play through its WebView.
             if root == own {
                 continue;
@@ -460,8 +409,8 @@ impl Router {
                 log::info!("no free audio slot for {key}");
                 continue;
             };
-            let path = win::process_path(root);
-            let name = path.as_deref().map(win::app_name).unwrap_or_else(|| entry.exe.clone());
+            let path = platform::process_path(root);
+            let name = path.as_deref().map(platform::app_name).unwrap_or_else(|| entry.exe.clone());
             log::info!("audio track {slot}: {name} ({key}, pid {root})");
             self.assign(slot, key, name, path, TrackKind::App, Source::Process(root));
         }
@@ -515,28 +464,4 @@ impl Drop for Router {
     fn drop(&mut self) {
         self.stop();
     }
-}
-
-/// (pid, playing) for every audio session on every output device.
-fn audio_sessions() -> Vec<(u32, bool)> {
-    let mut out = Vec::new();
-    let Ok(enumerator) = DeviceEnumerator::new() else { return out };
-    let Ok(devices) = enumerator.get_device_collection(&Direction::Render) else { return out };
-    let count = devices.get_nbr_devices().unwrap_or(0);
-    for i in 0..count {
-        let Ok(device) = devices.get_device_at_index(i) else { continue };
-        let Ok(manager) = device.get_iaudiosessionmanager() else { continue };
-        let Ok(sessions) = manager.get_audiosessionenumerator() else { continue };
-        for j in 0..sessions.get_count().unwrap_or(0) {
-            let Ok(session) = sessions.get_session(j) else { continue };
-            let state = session.get_state().ok();
-            if matches!(state, Some(SessionState::Expired) | None) {
-                continue;
-            }
-            if let Ok(pid) = session.get_process_id() {
-                out.push((pid, matches!(state, Some(SessionState::Active))));
-            }
-        }
-    }
-    out
 }

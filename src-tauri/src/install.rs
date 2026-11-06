@@ -1,38 +1,66 @@
-//! Getting FFmpeg onto the PC. The installer does not carry it: Replix downloads one pinned
-//! build on first start, checks it against the hashes below and keeps it in a folder of its
-//! own version. A new Replix that pins a newer FFmpeg fetches it into a new folder and drops
-//! the old one, so a file that is in use is never overwritten.
+//! Getting FFmpeg onto the PC.
+//!
+//! Windows: the installer does not carry it. Replix downloads one pinned build on first
+//! start, checks it against the hashes below and keeps it in a folder of its own version. A
+//! new Replix that pins a newer FFmpeg fetches it into a new folder and drops the old one,
+//! so a file that is in use is never overwritten.
+//!
+//! Linux and macOS: FFmpeg comes from the system's package manager (apt, dnf, pacman,
+//! Homebrew), which keeps it up to date and built for the machine. Replix finds it and
+//! checks it is new enough and can grab the screen.
 
 use std::io::Read;
+#[cfg(windows)]
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+#[cfg(windows)]
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::OnceLock;
+#[cfg(windows)]
 use std::time::Duration;
 
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, Result};
+#[cfg(windows)]
+use anyhow::Context;
 use parking_lot::{Condvar, Mutex};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use tauri::{AppHandle, Emitter, Manager};
+use tauri::{AppHandle, Emitter};
+#[cfg(windows)]
+use tauri::Manager;
 
+#[cfg(windows)]
 use crate::ffmpeg::SpawnTied;
 
+#[cfg(windows)]
 pub const VERSION: &str = "9.0.2";
+#[cfg(windows)]
 const URL: &str = "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip";
+#[cfg(windows)]
 const ARCHIVE_SIZE: u64 = 114_768_076;
+#[cfg(windows)]
 const ARCHIVE_SHA256: &str = "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba";
 /// Inside the archive, under this folder's `bin`.
+#[cfg(windows)]
 const ARCHIVE_ROOT: &str = "ffmpeg-9.0.2-essentials_build";
+#[cfg(windows)]
 const TOOLS: [(&str, &str); 2] = [
     ("ffmpeg.exe", "3256173f3f8bffd7df12227c68adf68025edb1832273a9530688a7bb1ed8edec"),
     ("ffprobe.exe", "f0d36ecbbdd3bcfac3efa078c96c7271c2e68b3810595552ac3b7f17e9a65c52"),
 ];
+#[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+/// The oldest FFmpeg found on the system that Replix works with.
+#[cfg(unix)]
+const MIN_MAJOR: u32 = 6;
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(tag = "state", rename_all = "camelCase")]
+// Only Windows downloads; the other systems go from checking straight to ready or failed.
+#[cfg_attr(unix, allow(dead_code))]
 pub enum Setup {
     Checking,
     Downloading { done: u64, total: u64 },
@@ -90,7 +118,10 @@ pub fn start(app: &AppHandle) {
     std::thread::Builder::new()
         .name("ffmpeg-setup".into())
         .spawn(move || {
+            #[cfg(windows)]
             let result = app.path().app_local_data_dir().context("no data folder").and_then(|data| prepare(&|step| set(&app, step), &data.join("ffmpeg")));
+            #[cfg(unix)]
+            let result = find_system();
             match result {
                 Ok(dir) => {
                     let _ = READY.set(dir);
@@ -108,6 +139,74 @@ pub fn start(app: &AppHandle) {
         .expect("thread");
 }
 
+/// The folder with the system's ffmpeg and ffprobe, once one is good enough.
+#[cfg(unix)]
+fn find_system() -> Result<PathBuf> {
+    let mut dirs: Vec<PathBuf> = std::env::var_os("PATH").map(|p| std::env::split_paths(&p).collect()).unwrap_or_default();
+    // An app started from the Dock or a desktop menu may not get the shell's PATH.
+    dirs.extend(["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin", "/usr/bin", "/snap/bin"].map(PathBuf::from));
+    let mut problem = None;
+    for dir in dirs {
+        if !(dir.join("ffmpeg").is_file() && dir.join("ffprobe").is_file()) {
+            continue;
+        }
+        match check_system(&dir) {
+            Ok(()) => {
+                log::info!("using FFmpeg in {}", dir.display());
+                return Ok(dir);
+            }
+            Err(e) => problem = problem.or(Some(e)),
+        }
+    }
+    Err(problem.unwrap_or_else(|| anyhow::anyhow!(install_hint())))
+}
+
+#[cfg(target_os = "linux")]
+fn install_hint() -> String {
+    crate::i18n::tr("Replix needs FFmpeg 6 or newer. Install it with your package manager, e.g. sudo apt install ffmpeg, then try again.")
+}
+
+#[cfg(target_os = "macos")]
+fn install_hint() -> String {
+    crate::i18n::tr("Replix needs FFmpeg 6 or newer. Install it with Homebrew (brew install ffmpeg), then try again.")
+}
+
+/// The screen grabber this system's FFmpeg must have.
+#[cfg(target_os = "linux")]
+const GRABBER: &str = "x11grab";
+#[cfg(target_os = "macos")]
+const GRABBER: &str = "avfoundation";
+
+#[cfg(unix)]
+fn check_system(dir: &Path) -> Result<()> {
+    let run = |args: &[&str]| -> Result<String> {
+        let out = Command::new(dir.join("ffmpeg")).args(args).stdin(std::process::Stdio::null()).output()?;
+        Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+    };
+    let version = run(&["-version"])?;
+    let number = parse_version(&version).unwrap_or_default();
+    let major: u32 = number.split('.').next().and_then(|m| m.parse().ok()).unwrap_or(0);
+    // Builds from Git name a date or commit instead of a version; those are new.
+    let from_git = !number.is_empty() && !number.chars().next().is_some_and(|c| c.is_ascii_digit());
+    if major < MIN_MAJOR && !from_git {
+        bail!(crate::i18n::trf("The FFmpeg on this computer is version {version}. Replix needs 6 or newer.", &[("version", &number)]));
+    }
+    let devices = run(&["-hide_banner", "-devices"])?;
+    if !devices.split_whitespace().any(|w| w == GRABBER) {
+        bail!(crate::i18n::trf("This FFmpeg can't record the screen: it was built without {grabber}.", &[("grabber", &GRABBER)]));
+    }
+    Ok(())
+}
+
+/// "6.1.1" from "ffmpeg version 6.1.1-3ubuntu5 Copyright …", or "7.1" from "ffmpeg version n7.1".
+#[cfg(unix)]
+fn parse_version(text: &str) -> Option<String> {
+    let word = text.lines().next()?.strip_prefix("ffmpeg version ")?.split_whitespace().next()?;
+    let word = word.strip_prefix('n').filter(|w| w.starts_with(|c: char| c.is_ascii_digit())).unwrap_or(word);
+    Some(word.split(['-', '+', '~']).next().unwrap_or(word).to_string())
+}
+
+#[cfg(windows)]
 fn prepare(report: &dyn Fn(Setup), root: &Path) -> Result<PathBuf> {
     let dir = root.join(VERSION);
     if TOOLS.iter().all(|(name, _)| dir.join(name).is_file()) {
@@ -139,6 +238,7 @@ fn prepare(report: &dyn Fn(Setup), root: &Path) -> Result<PathBuf> {
 
 /// Replix up to 0.1.5 installed FFmpeg next to itself. When that copy is the pinned build
 /// it is moved over instead of downloaded again.
+#[cfg(windows)]
 fn adopt_bundled(part: &Path) -> bool {
     let Some(exe_dir) = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf)) else {
         return false;
@@ -160,11 +260,13 @@ fn adopt_bundled(part: &Path) -> bool {
     true
 }
 
+#[cfg(windows)]
 fn system_tool(name: &str) -> PathBuf {
     let root = std::env::var_os("SystemRoot").map(PathBuf::from).unwrap_or_else(|| PathBuf::from(r"C:\Windows"));
     root.join("System32").join(name)
 }
 
+#[cfg(windows)]
 fn download(report: &dyn Fn(Setup), archive: &Path) -> Result<()> {
     let _ = std::fs::remove_file(archive);
     log::info!("downloading FFmpeg {VERSION}");
@@ -213,6 +315,7 @@ fn download(report: &dyn Fn(Setup), archive: &Path) -> Result<()> {
     Ok(())
 }
 
+#[cfg(windows)]
 fn unpack(archive: &Path, into: &Path) -> Result<()> {
     let members: Vec<String> = TOOLS.iter().map(|(name, _)| format!("{ARCHIVE_ROOT}/bin/{name}")).collect();
     let out = Command::new(system_tool("tar.exe"))
@@ -233,6 +336,7 @@ fn unpack(archive: &Path, into: &Path) -> Result<()> {
 }
 
 /// Older FFmpeg versions and leftovers of an interrupted setup.
+#[cfg(windows)]
 fn remove_others(root: &Path) {
     let Ok(entries) = std::fs::read_dir(root) else { return };
     for entry in entries.flatten() {
@@ -243,6 +347,7 @@ fn remove_others(root: &Path) {
     }
 }
 
+#[cfg_attr(unix, allow(dead_code))]
 fn hash_file(path: &Path) -> Result<String> {
     let mut file = std::fs::File::open(path)?;
     let mut hasher = Sha256::new();
@@ -271,7 +376,18 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn system_versions_are_read() {
+        assert_eq!(parse_version("ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023").as_deref(), Some("6.1.1"));
+        assert_eq!(parse_version("ffmpeg version n7.1 Copyright").as_deref(), Some("7.1"));
+        assert_eq!(parse_version("ffmpeg version 8.0 Copyright").as_deref(), Some("8.0"));
+        assert_eq!(parse_version("ffmpeg version N-118000-gabc Copyright").as_deref(), Some("N"));
+        assert_eq!(parse_version("something else"), None);
+    }
+
     /// Only the current version's folder stays.
+    #[cfg(windows)]
     #[test]
     fn old_versions_and_leftovers_are_removed() {
         let root = std::env::temp_dir().join(format!("replix-ffmpeg-{}", std::process::id()));
@@ -287,6 +403,7 @@ mod tests {
 
     /// The real thing: downloads the pinned build (about 110 MB), checks and unpacks it.
     /// `cargo test --lib install -- --ignored`
+    #[cfg(windows)]
     #[test]
     #[ignore]
     fn the_pinned_build_downloads_and_unpacks() {

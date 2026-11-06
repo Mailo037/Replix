@@ -11,7 +11,7 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, Wry};
 use crate::i18n::tr;
 use crate::recorder::Command;
 use crate::settings::ToastPosition;
-use crate::{media, win, AppState};
+use crate::{media, platform, AppState};
 
 #[derive(Clone, Serialize)]
 struct Toast {
@@ -53,7 +53,7 @@ pub(crate) fn corner_toast(app: &AppHandle, title: &str, detail: &str) {
     let Some(window) = app.get_webview_window("toast") else { return };
     let _ = window.emit("toast", ToastShown { title: title.into(), detail: detail.into(), position, accent, theme, scale });
     let _ = window.set_size(tauri::LogicalSize::new(TOAST_SIZE.0 * scale, TOAST_SIZE.1 * scale));
-    if let Some((x, y, w, h)) = win::foreground_work_area() {
+    if let Some((x, y, w, h)) = platform::foreground_work_area().or_else(|| work_area_under_cursor(&window)) {
         let dpi = window.scale_factor().unwrap_or(1.0);
         let size = ((TOAST_SIZE.0 * scale * dpi) as i32, (TOAST_SIZE.1 * scale * dpi) as i32);
         let left = match position {
@@ -66,9 +66,17 @@ pub(crate) fn corner_toast(app: &AppHandle, title: &str, detail: &str) {
         };
         let _ = window.set_position(PhysicalPosition::new(left, top));
     }
-    if let Ok(hwnd) = window.hwnd() {
-        win::show_passive(hwnd.0 as u64);
-    }
+    platform::show_passive(&window);
+}
+
+/// The work area of the monitor the mouse is on, which is where the game is played.
+fn work_area_under_cursor(window: &tauri::WebviewWindow) -> Option<(i32, i32, i32, i32)> {
+    let cursor = window.cursor_position().ok();
+    let monitor = cursor
+        .and_then(|c| window.monitor_from_point(c.x, c.y).ok().flatten())
+        .or_else(|| window.primary_monitor().ok().flatten())?;
+    let area = monitor.work_area();
+    Some((area.position.x, area.position.y, area.size.width as i32, area.size.height as i32))
 }
 
 /// Whether the main window is on screen. Work done ahead of time stops when it is not:
@@ -105,32 +113,8 @@ pub(crate) fn set_page_visible(window: &tauri::WebviewWindow, visible: bool) {
         return;
     }
     PAGE_VISIBLE.store(visible, Ordering::Relaxed);
-    set_page_memory(webview, visible);
+    platform::set_page_memory(webview, visible);
     media::wake();
-}
-
-/// Hidden, WebView2 is asked to keep as little memory as it can: it drops caches and the
-/// pictures and video the page let go of, which leaves more for the game. On screen again,
-/// it goes back to normal. Older WebView2 runtimes without this simply keep their memory.
-fn set_page_memory(webview: &tauri::Webview, visible: bool) {
-    use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
-    };
-    use windows::core::Interface;
-    let level = if visible { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW };
-    let _ = webview.with_webview(move |platform| {
-        // SAFETY: called on the main thread with the controller Tauri keeps alive.
-        let result = unsafe {
-            platform
-                .controller()
-                .CoreWebView2()
-                .and_then(|core| core.cast::<ICoreWebView2_19>())
-                .and_then(|core| core.SetMemoryUsageTargetLevel(level))
-        };
-        if let Err(e) = result {
-            log::debug!("page memory level not set: {e}");
-        }
-    });
 }
 
 pub(crate) fn show_main(app: &AppHandle) {

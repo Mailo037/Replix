@@ -10,12 +10,13 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::pipeline::{segment_name, BufferDir};
+use super::pipeline::{segment_name, BufferDir, Mask};
 use crate::audio::{self, Track, TrackKind};
 use crate::encoder::{self, Encoder};
 use crate::ffmpeg;
 use crate::i18n::{tr, trf};
 use crate::library::{self, Kind, Meta, TrackMeta};
+use crate::platform::Area;
 
 static SAVE_ID: AtomicU64 = AtomicU64::new(0);
 static PUBLISH_LOCK: Mutex<()> = parking_lot::const_mutex(());
@@ -146,8 +147,9 @@ pub(super) struct SaveJob {
     pub origin: f64,
     /// Marked moments, in stream time.
     pub markers: Vec<f64>,
-    /// Stretches to black out, in stream time: a program kept out of recordings was on screen.
-    pub private: Vec<(f64, f64)>,
+    /// Parts of the picture to black out, in stream time: windows of programs kept out of
+    /// recordings.
+    pub private: Vec<Mask>,
     /// For blacking out, which means encoding the picture again.
     pub encoder: &'static Encoder,
     pub kbps: u32,
@@ -193,13 +195,14 @@ impl SaveJob {
         let joined = folder.with_file_name(format!(".replix-{stamp}.part"));
         let trimmed = folder.with_file_name(format!(".replix-{stamp}-trimmed.part"));
         let hidden = folder.with_file_name(format!(".replix-{stamp}-hidden.part"));
+        let graph = self.dir.0.join(format!("hide-{stamp}.txt"));
         let result = (|| {
             let (mut source, length, skipped) = self.render(&list, &joined, &trimmed)?;
             // Markers and private stretches move with the clip's own start.
             let zero = self.origin + skipped;
-            let hide = relative_spans(&self.private, zero, length);
+            let hide = relative_masks(&self.private, zero, length);
             if !hide.is_empty() {
-                self.black_out(source, &hidden, &hide, length).context(tr("Could not hide a program kept out of recordings, so the clip was not saved"))?;
+                self.black_out(source, &hidden, &graph, &hide, length).context(tr("Could not hide a program kept out of recordings, so the clip was not saved"))?;
                 source = &hidden;
             }
             // The recording is finished; a probe that fails (a busy drive) only costs the
@@ -237,7 +240,7 @@ impl SaveJob {
             }
             Ok((meta, out))
         })();
-        for path in [list, joined, trimmed, hidden] {
+        for path in [list, joined, trimmed, hidden, graph] {
             let _ = std::fs::remove_file(path);
         }
         result
@@ -286,16 +289,18 @@ impl SaveJob {
         ffmpeg::run_in(&self.dir.0, &args)
     }
 
-    /// Writes `source` again with the picture black, and the desktop's sound silent, while a
-    /// kept-out program was on screen. With the capture's encoder first; software if that
-    /// one refuses frames from a file.
-    fn black_out(&self, source: &Path, out: &Path, hide: &[(f64, f64)], length: f64) -> Result<()> {
+    /// Writes `source` again with the windows of kept-out programs black, and the desktop's
+    /// sound silent while one was on screen. With the capture's encoder first; software if
+    /// that one refuses frames from a file. The filter graph goes into the file `graph`: with
+    /// many boxes it would not fit on a command line.
+    fn black_out(&self, source: &Path, out: &Path, graph: &Path, hide: &[Mask], length: f64) -> Result<()> {
         let desktop = self.tracks.iter().position(|t| t.kind == TrackKind::Desktop);
         let names: Vec<&str> = self.tracks.iter().map(|t| t.name.as_str()).collect();
         let timeout = Duration::from_secs_f64(120.0 + length * 3.0);
         let mut last = None;
-        for encoder in [self.encoder, encoder::software()] {
-            let args = black_out_args(source, out, hide, desktop, &names, encoder, self.kbps);
+        for encoder in [self.encoder.for_export(), encoder::software()] {
+            std::fs::write(graph, black_out_graph(hide, desktop, encoder))?;
+            let args = black_out_args(source, out, graph, desktop, &names, encoder, self.kbps);
             match ffmpeg::run_with_timeout(&args, timeout) {
                 Ok(()) => return Ok(()),
                 Err(e) => {
@@ -312,33 +317,53 @@ impl SaveJob {
     }
 }
 
-/// Stretches in stream time as seconds of a clip that starts at `zero` and runs `length`.
-fn relative_spans(spans: &[(f64, f64)], zero: f64, length: f64) -> Vec<(f64, f64)> {
-    spans
+/// Masks in stream time as seconds of a clip that starts at `zero` and runs `length`.
+fn relative_masks(masks: &[Mask], zero: f64, length: f64) -> Vec<Mask> {
+    masks
         .iter()
-        .map(|(a, b)| ((a - zero).max(0.0), (b - zero).min(length)))
-        .filter(|(a, b)| b > a)
+        .map(|m| Mask { start: (m.start - zero).max(0.0), end: (m.end - zero).min(length), ..*m })
+        .filter(|m| m.end > m.start)
         .collect()
+}
+
+/// A black box over each mask while it lasts, a little bigger than the window so no edge
+/// shows; the desktop's sound is silent while any is shown.
+pub(super) fn black_out_graph(hide: &[Mask], desktop: Option<usize>, encoder: &Encoder) -> String {
+    let between = |m: &Mask| format!("between(t,{:.3},{:.3})", m.start, m.end);
+    let mut graph = String::from("[0:v]");
+    for m in hide {
+        graph.push_str(&format!("{}:enable='{}',", black_box(&m.area), between(m)));
+    }
+    graph.push_str(&format!("format={}[v]", encoder.export_pix_fmt));
+    if let Some(d) = desktop {
+        let when = hide.iter().map(between).collect::<Vec<_>>().join("+");
+        graph.push_str(&format!(";[0:a:{d}]volume=0:enable='{when}'[desk]"));
+    }
+    graph
+}
+
+/// A filter that fills this part of the picture black, whatever size the picture is.
+pub(crate) fn black_box(a: &Area) -> String {
+    format!(
+        "drawbox=x='floor(iw*{:.5})-2':y='floor(ih*{:.5})-2':w='ceil(iw*{:.5})+4':h='ceil(ih*{:.5})+4':color=black:t=fill",
+        a.left,
+        a.top,
+        a.right - a.left,
+        a.bottom - a.top
+    )
 }
 
 fn black_out_args(
     source: &Path,
     out: &Path,
-    hide: &[(f64, f64)],
+    graph: &Path,
     desktop: Option<usize>,
     names: &[&str],
     encoder: &Encoder,
     kbps: u32,
 ) -> Vec<String> {
-    let when = hide.iter().map(|(a, b)| format!("between(t,{a:.3},{b:.3})")).collect::<Vec<_>>().join("+");
-    let mut graph = format!(
-        "[0:v]drawbox=x=0:y=0:w=iw:h=ih:color=black:t=fill:enable='{when}',format={}[v]",
-        encoder.export_pix_fmt
-    );
-    if let Some(d) = desktop {
-        graph.push_str(&format!(";[0:a:{d}]volume=0:enable='{when}'[desk]"));
-    }
-    let mut args: Vec<String> = vec!["-y".into(), "-i".into(), ffmpeg::path_arg(source), "-filter_complex".into(), graph];
+    let mut args: Vec<String> =
+        vec!["-y".into(), "-i".into(), ffmpeg::path_arg(source), "-/filter_complex".into(), ffmpeg::path_arg(graph)];
     args.extend(["-map".into(), "[v]".into()]);
     for (k, name) in names.iter().enumerate() {
         args.push("-map".into());
@@ -451,10 +476,10 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Blacking out turns the picture black in the stretch only, silences the desktop's
-    /// sound there, keeps every track with its name and leaves the rest of the sound alone.
+    /// Blacking out turns only the window's part of the picture black, only while it is
+    /// shown, silences the desktop's sound then, and keeps every track with its name.
     #[test]
-    fn a_private_stretch_is_black_and_silent() {
+    fn only_the_private_window_is_black() {
         if ffmpeg::missing_for_test() {
             return;
         }
@@ -462,36 +487,43 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         run(&dir, &[
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=f=440:r=48000",
+            "-f", "lavfi", "-i", "color=c=white:size=320x180:rate=30", "-f", "lavfi", "-i", "sine=f=440:r=48000",
             "-f", "lavfi", "-i", "sine=f=880:r=48000", "-t", "4", "-map", "0:v", "-map", "1:a", "-map", "2:a",
             "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "in.mp4",
         ]);
-        let args = black_out_args(&dir.join("in.mp4"), &dir.join("out.mp4"), &[(1.0, 2.0)], Some(0), &["Desktop", "Microphone"], encoder::software(), 2000);
+        let window = Area { left: 0.0, top: 0.0, right: 0.4, bottom: 1.0 };
+        let hide = [Mask { area: window, start: 1.0, end: 2.0 }];
+        let graph = dir.join("graph.txt");
+        std::fs::write(&graph, black_out_graph(&hide, Some(0), encoder::software())).unwrap();
+        let args = black_out_args(&dir.join("in.mp4"), &dir.join("out.mp4"), &graph, Some(0), &["Desktop", "Microphone"], encoder::software(), 2000);
         let ok = Command::new("ffmpeg").args(["-hide_banner", "-loglevel", "error"]).args(&args).status().unwrap();
         assert!(ok.success());
-        let level = |filter: &str, at: &str| {
+        // How bright a part of the picture is: `crop` picks it.
+        let level = |crop: &str, at: &str| {
             let out = Command::new("ffmpeg")
                 .args(["-hide_banner", "-ss", at, "-t", "0.5", "-i"])
                 .arg(dir.join("out.mp4"))
-                .args(["-af", filter, "-vf", "signalstats,metadata=print:key=lavfi.signalstats.YAVG", "-f", "null", "-"])
+                .args(["-vf", &format!("{crop},signalstats,metadata=print:key=lavfi.signalstats.YAVG"), "-f", "null", "-"])
                 .output()
                 .unwrap();
-            String::from_utf8_lossy(&out.stderr).into_owned()
-        };
-        let brightness = |log: &str| {
+            let log = String::from_utf8_lossy(&out.stderr).into_owned();
             log.lines().filter_map(|l| l.split("YAVG=").nth(1)).filter_map(|v| v.trim().parse::<f64>().ok()).fold(0.0, f64::max)
         };
-        assert!(brightness(&level("anull", "1.2")) < 20.0, "black inside the stretch");
-        assert!(brightness(&level("anull", "3.0")) > 40.0, "untouched after it");
+        let (left, right) = ("crop=iw*0.3:ih:0:0", "crop=iw*0.5:ih:iw*0.5:0");
+        assert!(level(left, "1.2") < 20.0, "the window is black while shown");
+        assert!(level(right, "1.2") > 200.0, "the rest of the screen stays");
+        assert!(level(left, "3.0") > 200.0, "untouched after it");
         let info = ffmpeg::probe(&dir.join("out.mp4")).unwrap();
         assert_eq!(info.audio_titles, vec![Some("Desktop".to_string()), Some("Microphone".to_string())]);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn spans_follow_the_clip_start() {
-        assert_eq!(relative_spans(&[(9.0, 12.0), (40.0, 50.0)], 10.0, 20.0), vec![(0.0, 2.0)]);
-        assert!(relative_spans(&[(1.0, 2.0)], 10.0, 20.0).is_empty());
+    fn masks_follow_the_clip_start() {
+        let area = Area { left: 0.0, top: 0.0, right: 0.5, bottom: 0.5 };
+        let masks = [Mask { area, start: 9.0, end: 12.0 }, Mask { area, start: 40.0, end: 50.0 }];
+        assert_eq!(relative_masks(&masks, 10.0, 20.0), vec![Mask { area, start: 0.0, end: 2.0 }]);
+        assert!(relative_masks(&masks[..1], 30.0, 20.0).is_empty());
     }
 
     #[test]

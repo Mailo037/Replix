@@ -10,7 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::i18n::tr;
 use crate::library::{self, Draft, Item};
-use crate::{blocking, err, in_order, media, share, win, AppState, Res};
+use crate::{blocking, err, in_order, media, share, platform, AppState, Res};
 
 #[tauri::command]
 pub async fn list_library(app: AppHandle) -> Res<Vec<Item>> {
@@ -178,7 +178,7 @@ pub async fn set_favorite(app: AppHandle, ids: Vec<String>, favorite: bool) -> R
     .await
 }
 
-/// The recycle bin goes through the Windows shell and can take a moment per file.
+/// The recycle bin goes through the system's shell and can take a moment per file.
 #[tauri::command]
 pub async fn delete_items(app: AppHandle, ids: Vec<String>) -> Res<Vec<PathBuf>> {
     in_order(move || {
@@ -290,7 +290,7 @@ pub async fn storage_info(app: AppHandle) -> StorageInfo {
     let dir = app.state::<AppState>().settings.lock().clips_dir.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let (clips, exports) = library::usage(&dir);
-        StorageInfo { clips, exports, free: win::disk_free(&dir) }
+        StorageInfo { clips, exports, free: platform::disk_free(&dir) }
     })
     .await
     .unwrap_or(StorageInfo { clips: 0, exports: 0, free: 0 })

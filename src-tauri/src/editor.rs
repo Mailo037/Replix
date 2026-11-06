@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader};
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::{Arc, OnceLock};
@@ -453,8 +452,9 @@ pub fn export(
     args.extend(["-y".into(), ffmpeg::path_arg(out)]);
 
     // Below normal priority, like the other helper jobs: an export can run while a game does.
-    let mut child = Reaped(std::process::Command::new(ffmpeg::exe())
-        .creation_flags(0x0800_0000 | 0x0000_4000)
+    let mut cmd = std::process::Command::new(ffmpeg::exe());
+    crate::platform::background(&mut cmd, true);
+    let mut child = Reaped(cmd
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
@@ -579,7 +579,7 @@ fn watch_export(
         } else {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
-        if let Some(cpu) = crate::win::cpu_time(&child.0) {
+        if let Some(cpu) = crate::platform::cpu_time(&child.0) {
             watch.worked(cpu, std::time::Instant::now());
         }
         if cancelled() {
@@ -685,7 +685,7 @@ fn decode_peaks(
     let frames = (duration.max(0.1) * crate::audio::RATE as f64) as usize;
     let (done, result) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        crate::win::lower_thread_priority();
+        crate::platform::lower_thread_priority();
         let _ = done.send(count_peaks(stdout, frames, channels));
     });
     // Decoding AAC runs far faster than real time; this only catches a stuck decoder.

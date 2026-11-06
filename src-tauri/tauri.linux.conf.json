@@ -1,0 +1,14 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "bundle": {
+    "targets": ["deb", "rpm", "appimage"],
+    "linux": {
+      "deb": {
+        "depends": ["ffmpeg", "pulseaudio-utils", "xclip | wl-clipboard"]
+      },
+      "rpm": {
+        "depends": ["/usr/bin/ffmpeg", "pulseaudio-utils", "(xclip or wl-clipboard)"]
+      }
+    }
+  }
+}

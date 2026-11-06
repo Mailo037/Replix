@@ -1,6 +1,7 @@
 import { api } from "./api";
 import { store } from "./store.svelte";
 import { t } from "./i18n.svelte";
+import { isWindows } from "./platform";
 
 // Ctrl+Z in the library: the last few things done to clips, newest last.
 
@@ -29,7 +30,7 @@ export const undo = {
   },
 };
 
-/** Sends clips to the recycle bin, with a notice that can bring them back. */
+/** Sends clips to the recycle bin (the Trash on macOS and Linux), with a notice that can bring them back. */
 export async function recycle(ids: string[], what: string) {
   const paths = await api.deleteItems(ids);
   const restore = async () => {
@@ -37,7 +38,7 @@ export async function recycle(ids: string[], what: string) {
     store.notify(t("Restored"), what);
   };
   undo.push(what, restore);
-  store.notify(t("Moved to the recycle bin"), t("{what} · Ctrl+Z to undo", { what }), {
+  store.notify(isWindows ? t("Moved to the recycle bin") : t("Moved to the trash"), t("{what} · Ctrl+Z to undo", { what }), {
     label: t("Undo"),
     run: () => {
       // The button and Ctrl+Z undo the same step; whichever comes first takes it.

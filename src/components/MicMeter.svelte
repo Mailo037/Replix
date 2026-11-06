@@ -4,6 +4,7 @@
   import { api } from "../lib/api";
   import { store } from "../lib/store.svelte";
   import { t } from "../lib/i18n.svelte";
+  import { isMac, isWindows } from "../lib/platform";
 
   // Live microphone level while it is on screen, drawn as a row of characters.
   let { device }: { device: string | null } = $props();
@@ -58,10 +59,14 @@
   const peakCell = $derived(Math.min(CELLS - 1, Math.round(peak * CELLS) - 1));
 
   const message = $derived.by(() => {
-    // The stream itself stopped or never started: unplugged, in use, or blocked by Windows.
+    // The stream itself stopped or never started: unplugged, in use, or blocked by the system.
     if (now - Math.max(signalAt, startedAt) > 2500)
       return {
-        text: t("No signal from this mic. Check it's plugged in and allowed in the Windows privacy settings."),
+        text: isWindows
+          ? t("No signal from this mic. Check it's plugged in and allowed in the Windows privacy settings.")
+          : isMac
+            ? t("No signal from this mic. Check it's plugged in and allowed under System Settings › Privacy & Security › Microphone.")
+            : t("No signal from this mic. Check it's plugged in and not muted in the sound settings."),
         warn: true,
       };
     if (now - clippedAt < 1200) return { text: t("Too loud. Turn the volume down a little."), warn: true };

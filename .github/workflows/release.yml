@@ -11,9 +11,20 @@ permissions:
 
 jobs:
   release:
-    runs-on: windows-latest
-    env:
-      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-msvc
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            args: ""
+          # The oldest supported Ubuntu, so the AppImage and packages run on older systems too.
+          - os: ubuntu-22.04
+            args: ""
+          - os: macos-latest
+            args: --target aarch64-apple-darwin
+          - os: macos-latest
+            args: --target x86_64-apple-darwin
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -32,11 +43,17 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable-x86_64-pc-windows-msvc
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev patchelf
 
       - run: npm ci
 
@@ -48,7 +65,10 @@ jobs:
         with:
           tagName: ${{ github.ref_name }}
           releaseName: ${{ github.ref_name }}
-          releaseBody: Download the installer below. Replix keeps itself up to date from here on.
+          releaseBody: |
+            Windows: the installer (.exe). Linux: the AppImage, or the .deb / .rpm package. macOS: the .dmg (Apple Silicon: aarch64, Intel: x64).
+            On Linux and macOS, install FFmpeg first (sudo apt install ffmpeg, or brew install ffmpeg). Replix keeps itself up to date from here on.
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
+          args: ${{ matrix.args }}

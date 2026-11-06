@@ -10,12 +10,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  check:
-    runs-on: windows-latest
-    env:
-      # rust-toolchain.toml pins the GNU toolchain for local builds without Visual Studio;
-      # the runners have MSVC, which is what releases ship with.
-      RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-msvc
+  # The page is the same on every system: checked once.
+  ui:
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -35,17 +32,47 @@ jobs:
       - name: Build UI
         run: npm run build
 
+  # Replix runs on Windows, Linux and macOS; every change has to build, pass clippy and pass
+  # the tests on all three (see AGENTS.md).
+  rust:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # Tauri embeds the built page, so it has to exist for the Rust build.
+      - run: npm ci
+      - run: npm run build
+
       - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable-x86_64-pc-windows-msvc
           components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
 
+      - name: Linux libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev ffmpeg pulseaudio-utils
+
+      - name: macOS FFmpeg
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
       # The same FFmpeg Replix downloads (src-tauri/src/install.rs): the media tests run against it.
-      - name: Fetch FFmpeg
+      - name: Windows FFmpeg
+        if: runner.os == 'Windows'
         shell: pwsh
         run: |
           ./scripts/fetch-ffmpeg.ps1 -Triple x86_64-pc-windows-msvc
@@ -60,7 +87,8 @@ jobs:
 
       # The test binary links the Tauri UI, which needs version 6 of the Common Controls;
       # outside an app bundle that takes a manifest next to the executable.
-      - name: Tests
+      - name: Tests (Windows)
+        if: runner.os == 'Windows'
         working-directory: src-tauri
         shell: pwsh
         env:
@@ -72,3 +100,10 @@ jobs:
           Set-Content "$exe.manifest" '<?xml version="1.0" encoding="UTF-8" standalone="yes"?><assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0"><dependency><dependentAssembly><assemblyIdentity type="win32" name="Microsoft.Windows.Common-Controls" version="6.0.0.0" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/></dependentAssembly></dependency></assembly>'
           & $exe --test-threads 1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Tests (Linux, macOS)
+        if: runner.os != 'Windows'
+        working-directory: src-tauri
+        env:
+          REPLIX_TESTS_NEED_FFMPEG: "1"
+        run: cargo test --locked --lib -- --test-threads 1

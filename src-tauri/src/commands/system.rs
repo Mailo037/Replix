@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
 use crate::recorder::{Command, Status};
-use crate::{audio, install, media, own_thread, win, AppState, FOCUSED};
+use crate::{audio, install, media, own_thread, platform, AppState, FOCUSED};
 
 #[tauri::command]
 pub fn ffmpeg_setup() -> install::Setup {
@@ -50,10 +50,10 @@ pub struct AppWindow {
 pub async fn list_apps() -> Vec<AppWindow> {
     tauri::async_runtime::spawn_blocking(|| {
         let mut seen = std::collections::HashSet::new();
-        win::list_windows()
+        platform::list_windows()
             .into_iter()
             .filter(|w| seen.insert(w.exe.to_lowercase()))
-            .map(|w| AppWindow { name: win::app_name(&w.exe_path), exe: w.exe, path: w.exe_path, title: w.title })
+            .map(|w| AppWindow { name: platform::app_name(&w.exe_path), exe: w.exe, path: w.exe_path, title: w.title })
             .collect()
     })
     .await
@@ -61,8 +61,8 @@ pub async fn list_apps() -> Vec<AppWindow> {
 }
 
 #[tauri::command]
-pub fn list_monitors() -> Vec<win::MonitorInfo> {
-    win::monitors()
+pub fn list_monitors() -> Vec<platform::MonitorInfo> {
+    platform::monitors()
 }
 
 #[tauri::command]
@@ -103,7 +103,7 @@ pub struct AppIcon {
 #[tauri::command]
 pub async fn app_icon(path: String) -> Option<AppIcon> {
     tauri::async_runtime::spawn_blocking(move || {
-        win::icon_rgba(&path, 48).map(|(width, height, rgba)| AppIcon { width, height, rgba })
+        platform::icon_rgba(&path, 48).map(|(width, height, rgba)| AppIcon { width, height, rgba })
     })
     .await
     .ok()
@@ -139,7 +139,7 @@ pub fn add_marker(state: State<AppState>) {
     state.recorder.send(Command::Marker);
 }
 
-/// The language the page should use: the chosen one, or the one Windows is set to.
+/// The language the page should use: the chosen one, or the one the system is set to.
 #[tauri::command]
 pub fn ui_language() -> &'static str {
     crate::i18n::current()

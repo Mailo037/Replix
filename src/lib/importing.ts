@@ -1,6 +1,7 @@
 import { open } from "@tauri-apps/plugin-dialog";
 import { api } from "./api";
 import { t } from "./i18n.svelte";
+import { isInside } from "./platform";
 import { store } from "./store.svelte";
 
 /** What the library can show, as the file picker offers it. */
@@ -11,8 +12,8 @@ const EXTENSIONS = ["mp4", "mkv", "mov", "webm", "png", "jpg", "jpeg", "webp"];
  * out quietly: dragging a tile and letting go over Replix itself is no import.
  */
 export async function importPaths(paths: string[]) {
-  const root = store.settings?.clipsDir.replace(/[\\/]+$/, "").toLowerCase();
-  const outside = paths.filter((p) => !root || !(p.toLowerCase() + "\\").startsWith(root + "\\"));
+  const root = store.settings?.clipsDir ?? "";
+  const outside = paths.filter((p) => !isInside(p, root));
   if (!outside.length) return;
   store.notify(t("Importing…"), t("{n} files", { n: outside.length }));
   try {

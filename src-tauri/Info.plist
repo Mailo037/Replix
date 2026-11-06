@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Merged into the macOS app bundle's Info.plist by Tauri. -->
+<plist version="1.0">
+<dict>
+  <key>NSMicrophoneUsageDescription</key>
+  <string>Replix records your microphone on its own track, so you can turn it down or off in every clip.</string>
+  <key>NSCameraUsageDescription</key>
+  <string>Replix never uses the camera. macOS asks because screen recording goes through the same system framework.</string>
+</dict>
+</plist>

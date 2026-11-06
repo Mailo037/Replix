@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::audio::TrackKind;
 use crate::ffmpeg;
-use crate::win;
+use crate::platform;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -163,7 +163,7 @@ pub fn write_meta(path: &Path, meta: &Meta) -> std::io::Result<()> {
     };
     let written = std::io::Write::write_all(&mut handle, text.as_bytes()).and_then(|()| {
         drop(handle);
-        win::hide_file(&temp);
+        platform::hide_file(&temp);
         std::fs::rename(&temp, &file)
     });
     if written.is_err() {
@@ -615,9 +615,9 @@ pub fn enforce_limit(root: &Path, limit_bytes: u64) -> bool {
 /// The clip and its title, favourite and draft go to the recycle bin together, so a
 /// restore brings all of it back.
 pub fn delete(path: &Path) -> anyhow::Result<()> {
-    trash::delete(path)?;
+    platform::bin::put(path)?;
     let meta = sidecar(path);
-    if meta.exists() && trash::delete(&meta).is_err() {
+    if meta.exists() && platform::bin::put(&meta).is_err() {
         let _ = std::fs::remove_file(&meta);
     }
     Ok(())
@@ -627,22 +627,11 @@ pub fn delete(path: &Path) -> anyhow::Result<()> {
 /// if the bin has several. Says how many clips came back.
 pub fn restore(paths: &[PathBuf]) -> anyhow::Result<usize> {
     let wanted: Vec<PathBuf> = paths.iter().flat_map(|p| [p.clone(), sidecar(p)]).collect();
-    let mut newest: HashMap<PathBuf, trash::TrashItem> = HashMap::new();
-    for item in trash::os_limited::list()? {
-        let original = item.original_path();
-        if !wanted.contains(&original) || original.exists() {
-            continue;
-        }
-        if newest.get(&original).is_none_or(|known| known.time_deleted < item.time_deleted) {
-            newest.insert(original, item);
-        }
+    let clips = platform::bin::restore(paths, &wanted)?;
+    if clips == 0 {
+        anyhow::bail!(platform::bin::gone());
     }
-    let back = paths.iter().filter(|p| newest.contains_key(*p)).count();
-    if back == 0 {
-        anyhow::bail!(crate::i18n::tr("It's no longer in the recycle bin."));
-    }
-    trash::os_limited::restore_all(newest.into_values())?;
-    Ok(back)
+    Ok(clips)
 }
 
 /// Markers sorted, inside the clip and not on top of each other.
@@ -731,7 +720,7 @@ mod tests {
         let taken = |n: u64| sidecar(&clip).with_extension(format!("json.{}-{n}.tmp", std::process::id()));
         for n in next..next + 3 {
             std::fs::write(taken(n), b"{}").unwrap();
-            win::hide_file(&taken(n));
+            platform::hide_file(&taken(n));
         }
         write_meta(&clip, &Meta { title: "two".into(), ..Default::default() }).unwrap();
         assert_eq!(read_meta(&clip).unwrap().title, "two");

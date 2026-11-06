@@ -153,7 +153,7 @@ export interface Settings {
   profiles: Profile[];
   /** Kept out of every recording: not in the picture, not in the sound. */
   excluded: Excluded[];
-  /** "auto" follows Windows. */
+  /** "auto" follows the system. */
   language: string;
   onboarded: boolean;
 }

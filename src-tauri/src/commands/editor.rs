@@ -110,7 +110,7 @@ pub async fn export_clip(app: AppHandle, id: String, title: String, request: edi
         let state = app.state::<AppState>();
         let source = state.path_of(&id)?;
         let root = state.settings.lock().clips_dir.clone();
-        let encoder = state.recorder.encoders.lock().first().copied().unwrap_or_else(encoder::software);
+        let encoder = state.recorder.encoders.lock().first().copied().unwrap_or_else(encoder::software).for_export();
         // One export at a time, from choosing its name to the software retry: a second
         // one waits instead of doubling the load beside a game.
         static ONE_AT_A_TIME: Mutex<()> = parking_lot::const_mutex(());

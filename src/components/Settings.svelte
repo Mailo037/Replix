@@ -19,6 +19,7 @@
   import Privacy from "./Privacy.svelte";
   import { languages, t } from "../lib/i18n.svelte";
   import { tip } from "../lib/tooltip";
+  import { isWindows } from "../lib/platform";
   import Segmented from "./Segmented.svelte";
   import Select from "./Select.svelte";
   import HotkeyDialog from "./HotkeyDialog.svelte";
@@ -39,7 +40,7 @@
   const micDevice = $derived(store.settings?.micDevice ?? null);
   const defaultMic = $derived(mics.find((m) => m.default));
   const micOptions = $derived([
-    { value: null, label: t("Windows default"), hint: defaultMic?.name },
+    { value: null, label: isWindows ? t("Windows default") : t("System default"), hint: defaultMic?.name },
     ...mics.map((m) => ({ value: m.id as string | null, label: m.name })),
     ...(s.micDevice && !mics.some((m) => m.id === s.micDevice) ? [{ value: s.micDevice, label: t("Not connected") }] : []),
   ]);
@@ -224,7 +225,7 @@
           <div class="row">
             <div class="text">
               <span>{t("Device")}</span>
-              <span class="meta">{s.micDevice ? t("Stays on this mic") : defaultMic ? t("Follows Windows · {device}", { device: defaultMic.name }) : t("Follows Windows")}</span>
+              <span class="meta">{s.micDevice ? t("Stays on this mic") : defaultMic ? (isWindows ? t("Follows Windows · {device}", { device: defaultMic.name }) : t("Follows the system · {device}", { device: defaultMic.name })) : isWindows ? t("Follows Windows") : t("Follows the system")}</span>
             </div>
             <div class="pick wide">
               <Select
@@ -272,7 +273,7 @@
 
       <h2>{t("Privacy")}</h2>
       <p class="meta intro">
-        {t("These programs never end up in a recording. Replix doesn't record them as a game or app, gives their sound no track, and on the whole screen it turns the picture black while one of their windows is open.")}
+        {t("These programs never end up in a recording. Replix doesn't record them as a game or app, gives their sound no track, and on the whole screen it turns only their windows black, while the rest of the screen is recorded as usual.")}
       </p>
       <Privacy />
 
@@ -350,7 +351,7 @@
         <div class="row stack">
           <div class="text">
             <span>{t("Space limit")}</span>
-            <span class="meta">{t("When full, the oldest clips go to the recycle bin. Favorites, drafts and imported videos stay.")}</span>
+            <span class="meta">{isWindows ? t("When full, the oldest clips go to the recycle bin. Favorites, drafts and imported videos stay.") : t("When full, the oldest clips go to the trash. Favorites, drafts and imported videos stay.")}</span>
           </div>
           <Segmented
             label={t("Space limit")}
@@ -406,7 +407,7 @@
             <Select
               label={t("Language")}
               value={s.language ?? "auto"}
-              options={[{ value: "auto", label: t("Same as Windows") }, ...languages.map((l) => ({ value: l.code as string, label: l.name }))]}
+              options={[{ value: "auto", label: isWindows ? t("Same as Windows") : t("Same as the system") }, ...languages.map((l) => ({ value: l.code as string, label: l.name }))]}
               onchange={(v) => update({ language: v })}
             />
           </div>
@@ -448,8 +449,8 @@
           </div>
         {/if}
         <div class="row">
-          <div class="text"><span>{t("Start with Windows")}</span><span class="meta">{t("Opens quietly in the tray")}</span></div>
-          <Switch checked={s.launchAtStartup} label={t("Start with Windows")} onchange={(v) => update({ launchAtStartup: v })} />
+          <div class="text"><span>{isWindows ? t("Start with Windows") : t("Start when you log in")}</span><span class="meta">{t("Opens quietly in the tray")}</span></div>
+          <Switch checked={s.launchAtStartup} label={isWindows ? t("Start with Windows") : t("Start when you log in")} onchange={(v) => update({ launchAtStartup: v })} />
         </div>
         <div class="row">
           <div class="text"><span>{t("Keep running when closed")}</span><span class="meta">{t("Closing the window leaves Replix recording in the tray")}</span></div>

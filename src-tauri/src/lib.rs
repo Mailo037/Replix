@@ -14,7 +14,7 @@ mod settings;
 mod settings_sync;
 mod share;
 mod shell;
-mod win;
+mod platform;
 
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -151,7 +151,7 @@ pub fn run() {
             hotkeys::register_hotkeys(&handle, &settings);
             shell::build_tray(&handle)?;
 
-            WebviewWindowBuilder::new(app, "toast", WebviewUrl::App("index.html#toast".into()))
+            let toast = WebviewWindowBuilder::new(app, "toast", WebviewUrl::App("index.html#toast".into()))
                 .title("Replix")
                 .inner_size(340.0, 76.0)
                 .decorations(false)
@@ -161,8 +161,8 @@ pub fn run() {
                 .skip_taskbar(true)
                 .resizable(false)
                 .focused(false)
-                .visible(false)
-                .build()?;
+                .visible(false);
+            platform::passive(toast).build()?;
 
             if std::env::args().any(|a| a == "--minimized") {
                 if let Some(main) = app.get_webview_window("main") {

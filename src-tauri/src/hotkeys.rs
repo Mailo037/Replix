@@ -37,7 +37,7 @@ pub fn pause_hotkeys(app: AppHandle, paused: bool) {
     }
 }
 
-/// Whether Windows would give Replix this key combination: "free", "taken" by another
+/// Whether the system would give Replix this key combination: "free", "taken" by another
 /// program, or "invalid". Tried by registering it for a moment.
 #[tauri::command]
 pub fn check_hotkey(app: AppHandle, keys: String) -> &'static str {

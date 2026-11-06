@@ -112,9 +112,10 @@ pub struct Settings {
     /// "auto" or an encoder id from `encoder::candidates`.
     pub encoder: String,
     pub record_mic: bool,
-    /// WASAPI id of the microphone; `None` follows the Windows default.
+    /// The microphone's id (WASAPI on Windows, the PulseAudio source on Linux, the
+    /// AVFoundation name on macOS); `None` follows the system default.
     pub mic_device: Option<String>,
-    /// 1.0 is the microphone as Windows delivers it.
+    /// 1.0 is the microphone as the system delivers it.
     pub mic_volume: f32,
     /// Filter background noise out of the microphone.
     pub mic_noise_suppression: bool,
@@ -135,7 +136,7 @@ pub struct Settings {
     pub profiles: Vec<Profile>,
     /// Programs Replix keeps out of every recording.
     pub excluded: Vec<Excluded>,
-    /// "auto" follows Windows; otherwise a code from `i18n::LANGUAGES`.
+    /// "auto" follows the system; otherwise a code from `i18n::LANGUAGES`.
     pub language: String,
     /// The first-start setup was finished or skipped.
     pub onboarded: bool,
@@ -195,9 +196,9 @@ impl Default for Settings {
     }
 }
 
+/// Videos\Replix on Windows, ~/Videos/Replix on Linux, ~/Movies/Replix on macOS.
 fn default_clips_dir() -> PathBuf {
-    let base = std::env::var_os("USERPROFILE").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("."));
-    base.join("Videos").join("Replix")
+    crate::platform::videos_dir().join("Replix")
 }
 
 impl Settings {

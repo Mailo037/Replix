@@ -1,16 +1,17 @@
 //! Picks a video encoder that actually works on this PC.
 //!
-//! Capture frames live on the GPU that drives the monitor. Some encoders can take them
-//! directly; others need the frames copied to system memory first (a GPU from another
-//! vendor, an outdated driver). Every candidate is tried with a real capture, so the
-//! result holds for this machine rather than for what the hardware claims.
+//! On Windows, capture frames live on the GPU that drives the monitor. Some encoders can
+//! take them directly; others need the frames copied to system memory first (a GPU from
+//! another vendor, an outdated driver). On Linux and macOS frames arrive in memory and go to
+//! the encoder from there. Every candidate is tried for real, so the result holds for this
+//! machine rather than for what the hardware claims.
 
 use std::path::Path;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ffmpeg, win};
+use crate::{ffmpeg, platform};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -23,15 +24,50 @@ pub struct Encoder {
     pub filters: &'static str,
     /// Pixel format the encoder wants for frames decoded in system memory (exports).
     pub export_pix_fmt: &'static str,
+    /// Options in front of the inputs, e.g. the graphics device VA-API encodes on.
+    #[serde(skip)]
+    pub device: &'static [&'static str],
 }
 
+const fn encoder(
+    id: &'static str,
+    label: &'static str,
+    codec: &'static str,
+    filters: &'static str,
+    export_pix_fmt: &'static str,
+) -> Encoder {
+    Encoder { id, label, codec, filters, export_pix_fmt, device: &[] }
+}
+
+/// Best first; the software one last, as it always works.
+#[cfg(windows)]
 pub const CANDIDATES: &[Encoder] = &[
-    Encoder { id: "nvenc", label: "NVIDIA NVENC", codec: "h264_nvenc", filters: "", export_pix_fmt: "yuv420p" },
-    Encoder { id: "nvenc-copy", label: "NVIDIA NVENC (copy)", codec: "h264_nvenc", filters: ",hwdownload,format=bgra", export_pix_fmt: "yuv420p" },
-    Encoder { id: "amf", label: "AMD AMF", codec: "h264_amf", filters: "", export_pix_fmt: "yuv420p" },
-    Encoder { id: "amf-copy", label: "AMD AMF (copy)", codec: "h264_amf", filters: ",hwdownload,format=bgra", export_pix_fmt: "yuv420p" },
-    Encoder { id: "qsv-copy", label: "Intel Quick Sync", codec: "h264_qsv", filters: ",hwdownload,format=bgra,format=nv12", export_pix_fmt: "nv12" },
-    Encoder { id: "x264", label: "Software (x264)", codec: "libx264", filters: ",hwdownload,format=bgra,format=yuv420p", export_pix_fmt: "yuv420p" },
+    encoder("nvenc", "NVIDIA NVENC", "h264_nvenc", "", "yuv420p"),
+    encoder("nvenc-copy", "NVIDIA NVENC (copy)", "h264_nvenc", ",hwdownload,format=bgra", "yuv420p"),
+    encoder("amf", "AMD AMF", "h264_amf", "", "yuv420p"),
+    encoder("amf-copy", "AMD AMF (copy)", "h264_amf", ",hwdownload,format=bgra", "yuv420p"),
+    encoder("qsv-copy", "Intel Quick Sync", "h264_qsv", ",hwdownload,format=bgra,format=nv12", "nv12"),
+    encoder("x264", "Software (x264)", "libx264", ",hwdownload,format=bgra,format=yuv420p", "yuv420p"),
+];
+
+/// Best first; the software one last, as it always works.
+#[cfg(target_os = "linux")]
+pub const CANDIDATES: &[Encoder] = &[
+    encoder("nvenc", "NVIDIA NVENC", "h264_nvenc", ",format=yuv420p", "yuv420p"),
+    // AMD and Intel through Mesa or Intel's media driver. Frames are uploaded to the GPU
+    // here, so it records only; exports use the software encoder (`for_export`).
+    Encoder {
+        device: &["-vaapi_device", "/dev/dri/renderD128"],
+        ..encoder("vaapi", "VA-API (AMD, Intel)", "h264_vaapi", ",format=nv12,hwupload", "nv12")
+    },
+    encoder("x264", "Software (x264)", "libx264", ",format=yuv420p", "yuv420p"),
+];
+
+/// Best first; the software one last, as it always works.
+#[cfg(target_os = "macos")]
+pub const CANDIDATES: &[Encoder] = &[
+    encoder("videotoolbox", "Apple VideoToolbox", "h264_videotoolbox", ",format=nv12", "nv12"),
+    encoder("x264", "Software (x264)", "libx264", ",format=yuv420p", "yuv420p"),
 ];
 
 pub fn by_id(id: &str) -> Option<&'static Encoder> {
@@ -40,6 +76,18 @@ pub fn by_id(id: &str) -> Option<&'static Encoder> {
 
 pub fn software() -> &'static Encoder {
     by_id("x264").unwrap()
+}
+
+impl Encoder {
+    /// The encoder for exports and other work on decoded files. One that needs extra
+    /// device options (VA-API) hands that work to the software encoder.
+    pub fn for_export(&'static self) -> &'static Encoder {
+        if self.device.is_empty() {
+            self
+        } else {
+            software()
+        }
+    }
 }
 
 /// Encoder options for a target bitrate.
@@ -51,6 +99,8 @@ pub fn args(encoder: &Encoder, kbps: u32) -> Vec<String> {
         "h264_nvenc" => &["-preset", "p4", "-rc", "cbr"],
         "h264_amf" => &["-quality", "speed", "-rc", "cbr"],
         "h264_qsv" => &["-preset", "veryfast"],
+        "h264_vaapi" => &["-rc_mode", "CBR"],
+        "h264_videotoolbox" => &["-realtime", "1"],
         _ => &["-preset", "veryfast"],
     };
     a.extend(extra.iter().map(|s| s.to_string()));
@@ -59,8 +109,13 @@ pub fn args(encoder: &Encoder, kbps: u32) -> Vec<String> {
 }
 
 fn works(encoder: &Encoder) -> bool {
-    let source = format!("gfxcapture=monitor_idx=0:max_framerate=30{}", encoder.filters);
-    let mut args: Vec<String> = vec!["-f".into(), "lavfi".into(), "-i".into(), source, "-frames:v".into(), "15".into()];
+    let capture = platform::test_capture(encoder.filters);
+    let mut args: Vec<String> = encoder.device.iter().map(|a| a.to_string()).collect();
+    args.extend(capture.input);
+    if let Some(filter) = capture.filter {
+        args.extend(["-filter:v".into(), filter]);
+    }
+    args.extend(["-frames:v".into(), "15".into()]);
     args.extend(self::args(encoder, 4_000));
     args.extend(["-f".into(), "null".into(), "-".into()]);
     ffmpeg::run_with_timeout(&args, Duration::from_secs(10)).is_ok()
@@ -74,7 +129,7 @@ struct Cached {
 
 /// What the test result depends on: the graphics adapters with their drivers, and FFmpeg.
 fn machine() -> String {
-    let mut parts = win::gpu_signature();
+    let mut parts = platform::gpu_signature();
     if let Ok(meta) = std::fs::metadata(ffmpeg::exe()) {
         parts.push(format!("ffmpeg {}", meta.len()));
     }
@@ -117,4 +172,17 @@ pub fn detect() -> Vec<&'static Encoder> {
         }
     }
     found
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every system has the software encoder to fall back on, and exports never need
+    /// device options.
+    #[test]
+    fn software_is_always_there_and_exports_need_no_device() {
+        assert_eq!(software().codec, "libx264");
+        assert!(CANDIDATES.iter().all(|e| e.for_export().device.is_empty()));
+    }
 }

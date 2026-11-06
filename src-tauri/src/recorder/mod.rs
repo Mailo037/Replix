@@ -20,12 +20,12 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::audio;
 use crate::encoder::{self, Encoder};
 use crate::ffmpeg;
-use crate::i18n::{tr, trf};
+use crate::i18n::tr;
 use crate::library::{self, Kind, Meta};
 use crate::settings::{CaptureSource, Settings};
-use crate::win;
+use crate::platform;
 use health::Health;
-use pipeline::{private_spans, segment_name, Pipeline, Segment, Session, Target, SEGMENT_SECONDS};
+use pipeline::{private_masks, segment_name, Pipeline, Segment, Session, Target, SEGMENT_SECONDS};
 use save::{Placeholder, SaveJob};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -118,7 +118,7 @@ struct Worker {
 
 impl Worker {
     fn run(mut self, rx: Receiver<Command>) {
-        let _ = wasapi::initialize_mta();
+        audio::init_thread();
         // Nothing records before FFmpeg is on the PC; on first start it is still downloading.
         crate::install::wait_ready();
         let (found, cached) = encoder::detect_cached(&self.encoder_cache());
@@ -202,29 +202,29 @@ impl Worker {
             CaptureSource::Screen => {
                 // A display that was unplugged falls back to the main one.
                 let index = self.settings.monitor;
-                let index = if (index as usize) < win::monitors().len() { index } else { 0 };
+                let index = if (index as usize) < platform::monitors().len() { index } else { 0 };
                 Some(Target::Monitor { index })
             }
             CaptureSource::Game => {
                 let ignored = |exe: &str| self.settings.profile(exe).is_some_and(|p| p.ignore) || self.settings.is_excluded(exe);
                 if let Some(t @ Target::Window { hwnd, exe, .. }) = current {
-                    if win::is_window(*hwnd) && !ignored(exe) {
+                    if platform::is_window(*hwnd) && !ignored(exe) {
                         return Some(t.clone());
                     }
                 }
-                let w = win::foreground()?;
+                let w = platform::foreground()?;
                 if self.settings.is_excluded(&w.exe) {
                     return None;
                 }
                 // A program with its own settings counts as a game, even one Replix would not spot.
                 let wanted = match self.settings.profile(&w.exe) {
                     Some(p) => !p.ignore,
-                    None => win::looks_like_game(&w),
+                    None => platform::looks_like_game(&w),
                 };
                 if !wanted {
                     return None;
                 }
-                Some(Target::Window { hwnd: w.hwnd, pid: w.pid, name: win::game_name(&w), exe: w.exe })
+                Some(Target::Window { hwnd: w.hwnd, pid: w.pid, name: platform::game_name(&w), exe: w.exe })
             }
             CaptureSource::App => {
                 let exe = self.settings.app_exe.as_ref()?.to_lowercase();
@@ -232,12 +232,12 @@ impl Worker {
                     return None;
                 }
                 if let Some(t @ Target::Window { hwnd, exe: e, .. }) = current {
-                    if win::is_window(*hwnd) && e.to_lowercase() == exe {
+                    if platform::is_window(*hwnd) && e.to_lowercase() == exe {
                         return Some(t.clone());
                     }
                 }
-                let w = win::list_windows().into_iter().find(|w| w.exe.to_lowercase() == exe)?;
-                Some(Target::Window { hwnd: w.hwnd, pid: w.pid, name: win::app_name(&w.exe_path), exe: w.exe })
+                let w = platform::list_windows().into_iter().find(|w| w.exe.to_lowercase() == exe)?;
+                Some(Target::Window { hwnd: w.hwnd, pid: w.pid, name: platform::app_name(&w.exe_path), exe: w.exe })
             }
         }
     }
@@ -245,6 +245,17 @@ impl Worker {
     fn tick(&mut self) {
         if matches!(self.status.lock().state, RecState::Starting) && self.encoders.lock().is_empty() {
             return;
+        }
+        // Nothing can be recorded at all here, e.g. a Linux session without X11.
+        if self.settings.enabled {
+            if let Some(problem) = platform::capture_unavailable(matches!(self.settings.source, CaptureSource::Screen)) {
+                if let Some(mut p) = self.pipeline.take() {
+                    p.stop();
+                    Self::finish_saves(&self.app, &self.settings, &mut p);
+                }
+                self.set_status(RecState::Error, None, Some(problem));
+                return;
+            }
         }
         let desired = self.desired_target();
         let running = self.pipeline.as_ref().map(|p| p.target.clone());
@@ -420,7 +431,7 @@ impl Worker {
                 limit_gb: settings.storage_limit_gb,
                 origin,
                 markers: p.markers.iter().copied().filter(|m| *m >= origin && *m <= until).collect(),
-                private: private_spans(&p.private, origin, until, stream_now),
+                private: private_masks(&p.private, origin, until, stream_now),
                 encoder: p.encoder,
                 kbps: p.settings.quality.video_kbps(),
                 _pin: clip.pin,
@@ -467,7 +478,7 @@ impl Worker {
         let (origin, until, first) = (head.start, tail.end, head.index);
         let tracks = p.router.tracks_between(since, audio::now_ms());
         let name = p.target.label();
-        let private = private_spans(&p.private, origin, until, stream_now);
+        let private = private_masks(&p.private, origin, until, stream_now);
         let preview = private.is_empty().then(|| p.dir.0.join(segment_name(first)));
         let placeholder = Placeholder::announce(app, Kind::Session, &name, duration, preview);
         let job = SaveJob {
@@ -512,36 +523,36 @@ impl Worker {
 
     fn screenshot(&self) {
         let target = self.pipeline.as_ref().map(|p| p.target.clone()).or_else(|| {
-            let w = win::foreground()?;
-            (!self.settings.is_excluded(&w.exe)).then(|| Target::Window { hwnd: w.hwnd, pid: w.pid, name: win::game_name(&w), exe: w.exe })
+            let w = platform::foreground()?;
+            (!self.settings.is_excluded(&w.exe)).then(|| Target::Window { hwnd: w.hwnd, pid: w.pid, name: platform::game_name(&w), exe: w.exe })
         });
         let Some(target) = target else { return };
-        // A picture of the whole screen would show a program kept out of recordings.
-        if let Target::Monitor { index } = target {
-            if let Some(name) = win::excluded_on_monitor(index, &self.settings.excluded_exes()) {
-                crate::toast(&self.app, &tr("Screenshot not taken"), &trf("{name} is on screen.", &[("name", &name)]));
-                return;
+        // On a picture of the whole screen, windows of programs kept out of recordings are black.
+        let hide: String = match target.screen() {
+            Some(index) => {
+                platform::excluded_areas(index, &self.settings.excluded_exes(), &mut platform::WindowMemo::default()).iter().map(|(_, a)| format!(",{}", save::black_box(a))).collect()
             }
-        }
+            None => String::new(),
+        };
         let app = self.app.clone();
         let clips_dir = self.settings.clips_dir.clone();
         let cursor = self.settings.capture_cursor;
         std::thread::spawn(move || {
             let name = target.label();
             let path = library::new_path(&clips_dir, &name, "png", None);
-            let source = format!("{},hwdownload,format=bgra", target.capture_source(30, cursor));
-            let args: Vec<String> = vec![
-                "-f".into(),
-                "lavfi".into(),
-                "-i".into(),
-                source,
+            let capture = target.capture(30, cursor, &format!("{}{hide}", platform::DOWNLOAD));
+            let mut args: Vec<String> = capture.input;
+            if let Some(filter) = capture.filter {
+                args.extend(["-filter:v".into(), filter]);
+            }
+            args.extend([
                 "-frames:v".into(),
                 "1".into(),
                 "-update".into(),
                 "1".into(),
                 "-y".into(),
                 ffmpeg::path_arg(&path),
-            ];
+            ]);
             match ffmpeg::run_with_timeout(&args, Duration::from_secs(10)) {
                 Ok(()) => {
                     let info = ffmpeg::probe(&path).unwrap_or_default();

@@ -57,7 +57,7 @@ class Updates {
           this.progress = total ? received / total : null;
         }
       });
-      // Windows closes the app for the installer; elsewhere start the new version.
+      // Windows closes the app for the installer; on macOS and Linux start the new version.
       await relaunch();
     } catch (e) {
       console.warn("update failed", e);

@@ -4,7 +4,7 @@
 
 ![Replix library with clips from several games](docs/images/library.png)
 
-**[Download for Windows](https://github.com/Mailo037/Replix/releases/latest)** · Windows 10 and 11, 64-bit · Free
+**[Download](https://github.com/Mailo037/Replix/releases/latest)** · Windows 10 and 11 · Linux · macOS 11 or newer · 64-bit · Free
 
 ## Keep what just happened
 
@@ -46,11 +46,11 @@ A short setup walks you through the clip length, what to record, the tracks and 
 
 ![Setup step explaining audio tracks](docs/images/setup-tracks.png)
 
-Every game can have its own clip length, frame rate, quality and microphone setting, or be left out entirely. A space limit moves the oldest clips to the recycle bin; favorites, drafts and imported videos stay.
+Every game can have its own clip length, frame rate, quality and microphone setting, or be left out entirely. A space limit moves the oldest clips to the recycle bin (the Trash on Linux and macOS); favorites, drafts and imported videos stay.
 
-Under **Privacy**, keep programs like a password manager or a private chat out of every recording: they never count as a game, their sound gets no track, and on the whole screen the picture turns black while one of their windows is open.
+Under **Privacy**, keep programs like a password manager or a private chat out of every recording: they never count as a game, their sound gets no track, and on the whole screen only their windows turn black, while the rest of the screen is recorded as usual.
 
-Replix speaks English, Deutsch, Español, Français, Italiano, Português, Polski, Русский, Türkçe, 日本語, 한국어 and 简体中文, and follows the Windows language unless you pick one.
+Replix speaks English, Deutsch, Español, Français, Italiano, Português, Polski, Русский, Türkçe, 日本語, 한국어 and 简体中文, and follows the system's language unless you pick one.
 
 ![Settings](docs/images/settings.png)
 
@@ -67,11 +67,27 @@ All four can be changed in Settings, which tells you right away if another progr
 
 ## Your clips stay yours
 
-Everything is recorded and kept on your PC, in `Videos\Replix` unless you choose another folder. Nothing is uploaded unless you click **Get a link**, which sends that one clip to [Litterbox](https://litterbox.catbox.moe) for 72 hours. Replix checks GitHub for new versions and updates itself.
+Everything is recorded and kept on your computer, in `Videos\Replix` (`~/Videos/Replix` on Linux, `~/Movies/Replix` on macOS) unless you choose another folder. Nothing is uploaded unless you click **Get a link**, which sends that one clip to [Litterbox](https://litterbox.catbox.moe) for 72 hours. Replix checks GitHub for new versions and updates itself.
 
 ## Good to know
 
 - Recording uses your graphics card's video encoder (NVIDIA, AMD or Intel) and falls back to the processor when there is none.
-- Replix waits in the tray and can start with Windows.
+- Replix waits in the tray (the menu bar on macOS) and can start when you log in.
+
+## Linux and macOS
+
+Replix runs on all three systems. Windows has everything above; on the others a few things depend on what the system allows.
+
+| | Windows | Linux | macOS |
+| --- | --- | --- | --- |
+| FFmpeg | downloaded by Replix | from your package manager: `sudo apt install ffmpeg` (or dnf, pacman) | from Homebrew: `brew install ffmpeg` |
+| Games, one app | yes | X11, and games under XWayland on Wayland (most games, Proton too) | yes, recorded as the display the game is on |
+| Whole screen | yes | X11 session | yes, after allowing *Screen Recording* |
+| A track per app | yes | yes, through PulseAudio or PipeWire (`pulseaudio-utils`) | no: the microphone, plus all system sound when a loopback device like [BlackHole](https://existential.audio/blackhole/) is installed |
+| Video encoder | NVIDIA, AMD, Intel, processor | NVIDIA, VA-API (AMD, Intel), processor | VideoToolbox, processor |
+| Copy a clip | yes | with `wl-clipboard` or `xclip` | yes |
+| Hotkeys | yes | X11 | yes |
+
+On macOS the app is not notarized: the first time, open it with right-click › **Open**.
 
 Replix uses [FFmpeg](https://ffmpeg.org), licensed under the GPL v3, and downloads it on first start. Its source is available at [ffmpeg.org](https://ffmpeg.org/download.html).

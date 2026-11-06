@@ -1,6 +1,7 @@
 <script lang="ts">
   import { api, type AppWindow, type Profile, type Quality } from "../lib/api";
   import { appIcon } from "../lib/appIcons.svelte";
+  import { endsWithExe } from "../lib/platform";
   import { lengthLabel } from "../lib/format";
   import { t } from "../lib/i18n.svelte";
   import { store } from "../lib/store.svelte";
@@ -66,9 +67,8 @@
     if (p.path) return p.path;
     const running = apps.find((a) => key(a.exe) === key(p.exe));
     if (running?.path) return running.path;
-    const tail = "\\" + key(p.exe);
     for (const item of store.items) {
-      for (const track of item.tracks) if (track.exe && key(track.exe).endsWith(tail)) return track.exe;
+      for (const track of item.tracks) if (track.exe && endsWithExe(track.exe, p.exe)) return track.exe;
     }
     return null;
   }
