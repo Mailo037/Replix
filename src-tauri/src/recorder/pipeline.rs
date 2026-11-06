@@ -122,9 +122,6 @@ pub(crate) struct Mask {
     pub end: f64,
 }
 
-/// More boxes than this make the saving pass slow; they are then drawn coarser.
-const MAX_MASKS: usize = 120;
-
 pub(super) struct Pipeline {
     pub target: Target,
     pub dir: Arc<BufferDir>,
@@ -407,8 +404,13 @@ fn segment_index(name: &str) -> Option<u64> {
     name.strip_prefix("seg")?.strip_suffix(".ts")?.parse().ok()
 }
 
+pub(super) fn area_key(area: &Area) -> [u32; 4] {
+    [area.left, area.top, area.right, area.bottom].map(f32::to_bits)
+}
+
 /// Adds what a look at the screen found: the last look lasts longer when nothing changed.
-pub(super) fn note_private(looks: &mut Vec<Look>, shown: Vec<(u64, Area)>, now: f64) {
+pub(super) fn note_private(looks: &mut Vec<Look>, mut shown: Vec<(u64, Area)>, now: f64) {
+    shown.sort_unstable_by_key(|(hwnd, area)| (*hwnd, area_key(area)));
     match looks.last_mut() {
         Some(last) if last.shown == shown => last.to = now,
         None if shown.is_empty() => {}
@@ -416,31 +418,68 @@ pub(super) fn note_private(looks: &mut Vec<Look>, shown: Vec<(u64, Area)>, now: 
     }
 }
 
-fn area_of(look: &Look, hwnd: u64) -> Option<Area> {
-    look.shown.iter().find(|(h, _)| *h == hwnd).map(|(_, a)| *a)
+/// Samples are sorted by handle, with all the visible fragments of a window together.
+fn areas_of(look: &Look, hwnd: u64) -> &[(u64, Area)] {
+    let from = look.shown.partition_point(|(h, _)| *h < hwnd);
+    let to = look.shown.partition_point(|(h, _)| *h <= hwnd);
+    &look.shown[from..to]
 }
 
 /// The boxes to black out in `from..to`, in stream time. A window that shows up or goes away
-/// is hidden for the margin longer on that side, and between two looks it is hidden
-/// everywhere it could have moved through. The newest look lasts until `now`.
+/// is hidden for the margin longer on that side. Changed geometry is bounded between looks;
+/// unchanged fragments stay separate so foreground windows remain visible through the gaps.
+/// The newest look lasts until `now`.
 pub(super) fn private_masks(looks: &[Look], from: f64, to: f64, now: f64) -> Vec<Mask> {
     let mut raw = Vec::new();
     for (i, look) in looks.iter().enumerate() {
         let prev = i.checked_sub(1).map(|p| &looks[p]);
         let next = looks.get(i + 1);
-        let until = if next.is_none() { now.max(look.to) } else { look.to };
-        for &(hwnd, area) in &look.shown {
-            let before = prev.and_then(|p| area_of(p, hwnd));
-            let after = next.and_then(|n| area_of(n, hwnd));
-            let start = if before.is_some() { look.from } else { look.from - PRIVACY_MARGIN };
-            let end = match (after, next) {
-                (Some(_), _) => until,
-                (None, Some(n)) => n.from + PRIVACY_MARGIN,
-                (None, None) => until + PRIVACY_MARGIN,
+        let until = if next.is_none() {
+            now.max(look.to)
+        } else {
+            look.to
+        };
+        for window in look.shown.chunk_by(|(a, _), (b, _)| a == b) {
+            let hwnd = window[0].0;
+            let before = prev.is_some_and(|p| !areas_of(p, hwnd).is_empty());
+            let after = next.map(|n| areas_of(n, hwnd)).unwrap_or(&[]);
+            let start = if before {
+                look.from
+            } else {
+                look.from - PRIVACY_MARGIN
             };
-            raw.push(Mask { area, start, end });
-            if let (Some(later), Some(n)) = (after, next) {
-                raw.push(Mask { area: area.union(later), start: look.to, end: n.from });
+            let end = if !after.is_empty() {
+                until
+            } else {
+                next.map_or(until, |n| n.from) + PRIVACY_MARGIN
+            };
+            raw.extend(window.iter().map(|&(_, area)| Mask { area, start, end }));
+            if let Some(n) = next.filter(|_| !after.is_empty()) {
+                let unchanged = window
+                    .iter()
+                    .map(|(_, a)| area_key(a))
+                    .eq(after.iter().map(|(_, a)| area_key(a)));
+                if unchanged {
+                    raw.extend(window.iter().map(|&(_, area)| Mask {
+                        area,
+                        start: look.to,
+                        end: n.from,
+                    }));
+                } else {
+                    // Bounding all endpoint fragments keeps movement private, but only in
+                    // the gap between samples: never join sibling fragments at rest.
+                    let area = window
+                        .iter()
+                        .chain(after)
+                        .map(|(_, a)| *a)
+                        .reduce(Area::union)
+                        .unwrap();
+                    raw.push(Mask {
+                        area,
+                        start: look.to,
+                        end: n.from,
+                    });
+                }
             }
         }
     }
@@ -450,59 +489,22 @@ pub(super) fn private_masks(looks: &[Look], from: f64, to: f64, now: f64) -> Vec
         .filter(|m| m.end > m.start)
         .collect();
     // The same box over touching stretches is one box.
-    let key = |a: &Area| [a.left, a.top, a.right, a.bottom].map(f32::to_bits);
-    masks.sort_by(|a, b| key(&a.area).cmp(&key(&b.area)).then(a.start.total_cmp(&b.start)));
+    masks.sort_by(|a, b| {
+        area_key(&a.area)
+            .cmp(&area_key(&b.area))
+            .then(a.start.total_cmp(&b.start))
+    });
     let mut joined: Vec<Mask> = Vec::new();
     for m in masks {
         match joined.last_mut() {
-            Some(last) if last.area == m.area && m.start <= last.end => last.end = last.end.max(m.end),
+            Some(last) if last.area == m.area && m.start <= last.end => {
+                last.end = last.end.max(m.end)
+            }
             _ => joined.push(m),
         }
     }
     joined.sort_by(|a, b| a.start.total_cmp(&b.start));
-    if joined.len() > MAX_MASKS {
-        joined = coarsen(joined);
-    }
     joined
-}
-
-/// Fewer, bigger boxes: those that overlap in time become one, then the ones with the
-/// shortest pauses between them are joined until few enough are left; in one pass, so a long
-/// session saves as quickly. `masks` is sorted by start.
-fn coarsen(masks: Vec<Mask>) -> Vec<Mask> {
-    let mut runs: Vec<Mask> = Vec::with_capacity(masks.len());
-    for m in masks {
-        match runs.last_mut() {
-            Some(last) if m.start <= last.end => {
-                last.area = last.area.union(m.area);
-                last.end = last.end.max(m.end);
-            }
-            _ => runs.push(m),
-        }
-    }
-    if runs.len() <= MAX_MASKS {
-        return runs;
-    }
-    // Pause `i` lies between run `i` and the next; the shortest ones are joined over.
-    let mut pauses: Vec<usize> = (0..runs.len() - 1).collect();
-    pauses.sort_unstable_by(|&a, &b| (runs[a + 1].start - runs[a].end).total_cmp(&(runs[b + 1].start - runs[b].end)));
-    let mut join = vec![false; runs.len()];
-    for &i in &pauses[..runs.len() - MAX_MASKS] {
-        join[i] = true;
-    }
-    let mut out: Vec<Mask> = Vec::with_capacity(MAX_MASKS);
-    let mut joining = false;
-    for (i, m) in runs.into_iter().enumerate() {
-        match out.last_mut() {
-            Some(last) if joining => {
-                last.area = last.area.union(m.area);
-                last.end = last.end.max(m.end);
-            }
-            _ => out.push(m),
-        }
-        joining = join[i];
-    }
-    out
 }
 
 #[cfg(test)]
@@ -514,6 +516,93 @@ mod tests {
 
     fn mask(area: Area, start: f64, end: f64) -> Mask {
         Mask { area, start, end }
+    }
+
+    fn hidden_at(masks: &[Mask], at: f64, x: f32, y: f32) -> bool {
+        masks.iter().any(|m| {
+            m.start <= at
+                && at <= m.end
+                && m.area.left <= x
+                && x < m.area.right
+                && m.area.top <= y
+                && y < m.area.bottom
+        })
+    }
+
+    #[test]
+    fn reordered_samples_extend_the_same_look() {
+        let mut looks = Vec::new();
+        note_private(&mut looks, vec![(2, B), (1, B), (1, A)], 10.0);
+        note_private(&mut looks, vec![(1, A), (2, B), (1, B)], 10.5);
+        assert_eq!(
+            looks,
+            vec![Look {
+                from: 10.0,
+                to: 10.5,
+                shown: vec![(1, A), (1, B), (2, B)]
+            }]
+        );
+    }
+
+    #[test]
+    fn stable_fragments_keep_the_gap_when_another_window_changes() {
+        let other = Area {
+            left: 0.8,
+            top: 0.0,
+            right: 1.0,
+            bottom: 0.2,
+        };
+        let mut looks = Vec::new();
+        note_private(&mut looks, vec![(1, B), (1, A)], 10.0);
+        note_private(&mut looks, vec![(1, A), (1, B)], 11.0);
+        note_private(&mut looks, vec![(2, other), (1, B), (1, A)], 11.5);
+        let masks = private_masks(&looks, 0.0, 30.0, 12.0);
+        assert_eq!(looks.len(), 2);
+        assert_eq!(masks.len(), 3);
+        assert!(masks.contains(&mask(A, 9.0, 13.0)));
+        assert!(masks.contains(&mask(B, 9.0, 13.0)));
+        assert!(hidden_at(&masks, 11.25, 0.2, 0.3));
+        assert!(hidden_at(&masks, 11.25, 0.6, 0.3));
+        assert!(!hidden_at(&masks, 11.25, 0.4, 0.3));
+    }
+
+    #[test]
+    fn changed_fragment_sets_cover_all_endpoints_only_between_samples() {
+        let c = Area {
+            left: 0.0,
+            top: 0.0,
+            right: 0.2,
+            bottom: 0.2,
+        };
+        let d = Area {
+            left: 0.8,
+            top: 0.7,
+            right: 1.0,
+            bottom: 1.0,
+        };
+        let mut looks = Vec::new();
+        note_private(&mut looks, vec![(1, A), (1, B)], 10.0);
+        note_private(&mut looks, vec![(1, B), (1, A)], 11.0);
+        note_private(&mut looks, vec![(1, d), (1, c)], 11.5);
+        note_private(&mut looks, vec![(1, c), (1, d)], 12.0);
+        note_private(&mut looks, vec![], 13.0);
+        let masks = private_masks(&looks, 0.0, 30.0, 20.0);
+        assert_eq!(masks.len(), 5);
+        assert!(masks.contains(&mask(A, 9.0, 11.0)));
+        assert!(masks.contains(&mask(B, 9.0, 11.0)));
+        assert!(masks.contains(&mask(c, 11.5, 14.0)));
+        assert!(masks.contains(&mask(d, 11.5, 14.0)));
+        assert!(masks.contains(&mask(A.union(B).union(c).union(d), 11.0, 11.5)));
+        for area in [A, B, c, d] {
+            assert!(hidden_at(
+                &masks,
+                11.25,
+                (area.left + area.right) / 2.0,
+                (area.top + area.bottom) / 2.0
+            ));
+        }
+        assert!(!hidden_at(&masks, 10.5, 0.9, 0.8));
+        assert!(!hidden_at(&masks, 12.0, 0.4, 0.6));
     }
 
     #[test]
@@ -549,22 +638,35 @@ mod tests {
     }
 
     #[test]
-    fn many_boxes_are_drawn_coarser() {
+    fn more_than_120_fragments_keep_the_foreground_opening() {
+        let shown: Vec<_> = (0..160)
+            .map(|i| {
+                let (left, right) = if i % 2 == 0 { (0.0, 0.25) } else { (0.75, 1.0) };
+                (
+                    1,
+                    Area {
+                        left,
+                        top: i as f32 / 160.0,
+                        right,
+                        bottom: (i + 1) as f32 / 160.0,
+                    },
+                )
+            })
+            .collect();
         let mut looks = Vec::new();
-        for i in 0..400 {
-            let x = (i % 7) as f32 / 10.0;
-            let area = Area { left: x, top: 0.0, right: x + 0.1, bottom: 0.1 };
-            note_private(&mut looks, vec![(1, area)], i as f64 * 0.5);
+        note_private(&mut looks, shown.clone(), 10.0);
+        note_private(&mut looks, shown.clone(), 10.5);
+        let masks = private_masks(&looks, 0.0, 30.0, 20.0);
+        assert_eq!(masks.len(), 160);
+        for (_, area) in shown {
+            assert!(masks.contains(&mask(area, 9.0, 21.0)));
         }
-        let masks = private_masks(&looks, 0.0, 1000.0, 200.0);
-        assert!(masks.len() <= MAX_MASKS);
-        assert!(masks.iter().any(|m| m.start <= 0.0) && masks.iter().any(|m| m.end >= 200.0));
+        assert!(!hidden_at(&masks, 15.0, 0.5, 0.5));
     }
 
-    /// A window that keeps coming back over a long session: the shortest pauses are bridged,
-    /// every moment it was shown stays covered, and the longest pauses stay open.
+    /// Even short pauses stay open once a window has appeared many times in a long session.
     #[test]
-    fn many_appearances_join_over_the_shortest_pauses() {
+    fn more_than_120_appearances_keep_every_time_gap() {
         let mut looks = Vec::new();
         let mut shown_at = Vec::new();
         let mut t = 0.0;
@@ -576,10 +678,17 @@ mod tests {
             t += if i % 10 == 0 { 60.0 } else { 5.0 };
         }
         let masks = private_masks(&looks, 0.0, t, t);
-        assert_eq!(masks.len(), MAX_MASKS);
-        assert!(shown_at.iter().all(|s| masks.iter().any(|m| m.start <= *s && m.end >= s + 0.5)));
-        // 100 long pauses; with room for 120 boxes, none of them is bridged.
-        assert_eq!(masks.windows(2).filter(|w| w[1].start - w[0].end > 50.0).count(), 100, "long pauses stay open");
+        assert_eq!(masks.len(), shown_at.len());
+        assert!(shown_at
+            .iter()
+            .all(|s| masks.iter().any(|m| m.start <= *s && m.end >= s + 0.5)));
+        assert!(shown_at
+            .iter()
+            .all(|s| !hidden_at(&masks, s + 3.0, 0.2, 0.3)));
+        assert!(
+            masks.windows(2).all(|w| w[1].start > w[0].end),
+            "every pause stays open"
+        );
     }
 
     #[cfg(windows)]

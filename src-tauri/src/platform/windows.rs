@@ -6,14 +6,21 @@ use std::ffi::c_void;
 use std::os::windows::process::CommandExt;
 use std::process::Command;
 
-use super::{Area, Capture, Grab, MonitorInfo, ProcessEntry, WindowInfo, WindowMemo};
+use super::{
+    areas_of, Area, Capture, Grab, MonitorInfo, ProcessEntry, Seen, WindowInfo, WindowMemo,
+};
 use windows::core::{BOOL, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM, RECT};
-use windows::Win32::Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED};
-use windows::Win32::Graphics::Gdi::{
-    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO, MONITOR_DEFAULTTONEAREST,
+use windows::Win32::Graphics::Dwm::{
+    DwmGetWindowAttribute, DWMWA_CLOAKED, DWMWA_EXTENDED_FRAME_BOUNDS,
 };
-use windows::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW};
+use windows::Win32::Graphics::Gdi::{
+    EnumDisplayMonitors, GetMonitorInfoW, MonitorFromWindow, HDC, HMONITOR, MONITORINFO,
+    MONITOR_DEFAULTTONEAREST,
+};
+use windows::Win32::Storage::FileSystem::{
+    GetFileVersionInfoSizeW, GetFileVersionInfoW, VerQueryValueW,
+};
 use windows::Win32::System::Diagnostics::ToolHelp::{
     CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
 };
@@ -21,9 +28,9 @@ use windows::Win32::System::Threading::{
     OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW,
-    GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, GWL_EXSTYLE, GW_OWNER, MONITORINFOF_PRIMARY,
-    WS_EX_TOOLWINDOW,
+    EnumWindows, GetForegroundWindow, GetWindow, GetWindowLongPtrW, GetWindowRect,
+    GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic, IsWindow,
+    IsWindowVisible, GWL_EXSTYLE, GW_OWNER, MONITORINFOF_PRIMARY, WS_EX_TOOLWINDOW,
 };
 
 fn hwnd(raw: u64) -> HWND {
@@ -56,14 +63,16 @@ fn top_level_windows() -> Vec<HWND> {
 /// Whether nothing behind a window shows through it: see-through and click-through windows,
 /// like overlays, hide nothing.
 fn is_solid(h: HWND) -> bool {
-    use windows::Win32::UI::WindowsAndMessaging::{WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TRANSPARENT};
+    use windows::Win32::UI::WindowsAndMessaging::{
+        WS_EX_LAYERED, WS_EX_NOREDIRECTIONBITMAP, WS_EX_TRANSPARENT,
+    };
     let ex = unsafe { GetWindowLongPtrW(h, GWL_EXSTYLE) } as u32;
     ex & (WS_EX_LAYERED.0 | WS_EX_TRANSPARENT.0 | WS_EX_NOREDIRECTIONBITMAP.0) == 0
 }
 
 /// Where the windows of programs from `exes` (lower-case executable names) show on the
-/// monitor with this index, by window handle; menus and pop-ups count too. Windows that are
-/// minimised, on another virtual desktop or entirely behind one solid window are left out.
+/// monitor with this index, by window handle; menus and pop-ups count too. Minimised and
+/// cloaked windows are left out; solid windows in front keep their own picture.
 pub fn excluded_areas(index: u32, exes: &[String], memo: &mut WindowMemo) -> Vec<(u64, Area)> {
     if exes.is_empty() {
         memo.windows.clear();
@@ -74,64 +83,48 @@ pub fn excluded_areas(index: u32, exes: &[String], memo: &mut WindowMemo) -> Vec
         memo.windows.clear();
     }
     let handles = monitor_handles();
-    let Some(&monitor) = handles.get(index as usize).or(handles.first()) else { return Vec::new() };
-    let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+    let Some(&monitor) = handles.get(index as usize).or(handles.first()) else {
+        return Vec::new();
+    };
+    let mut info = MONITORINFO {
+        cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+        ..Default::default()
+    };
     if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
         return Vec::new();
     }
     let m = info.rcMonitor;
-    let (width, height) = ((m.right - m.left) as f32, (m.bottom - m.top) as f32);
-    if width <= 0.0 || height <= 0.0 {
-        return Vec::new();
-    }
-    let own = std::process::id();
-    // Only windows this look found stay remembered, so closed ones are forgotten.
-    let mut known: HashMap<u64, (u32, bool)> = HashMap::with_capacity(memo.windows.len());
-    // Solid windows above the one being looked at, cut to the monitor.
-    let mut above: Vec<RECT> = Vec::new();
-    let mut out = Vec::new();
-    for h in top_level_windows() {
+    let seen = top_level_windows().into_iter().filter_map(|h| {
         // Cheapest checks first; the cloaking one asks the compositor.
-        let mut r = RECT::default();
-        let shown = unsafe { IsWindowVisible(h).as_bool() && !IsIconic(h).as_bool() && GetWindowRect(h, &mut r).is_ok() };
-        if !shown {
-            continue;
+        if !unsafe { IsWindowVisible(h).as_bool() && !IsIconic(h).as_bool() } || is_cloaked(h) {
+            return None;
         }
-        let r = RECT { left: r.left.max(m.left), top: r.top.max(m.top), right: r.right.min(m.right), bottom: r.bottom.min(m.bottom) };
-        if r.right <= r.left || r.bottom <= r.top || is_cloaked(h) {
-            continue;
+        let mut r = RECT::default();
+        // GetWindowRect includes invisible resize borders. They must not punch holes in a
+        // private window behind this one, so prefer the compositor's visible frame bounds.
+        let frame = unsafe {
+            DwmGetWindowAttribute(
+                h,
+                DWMWA_EXTENDED_FRAME_BOUNDS,
+                &mut r as *mut RECT as *mut c_void,
+                std::mem::size_of::<RECT>() as u32,
+            )
+        };
+        if frame.is_err() && unsafe { GetWindowRect(h, &mut r) }.is_err() {
+            return None;
         }
         let mut pid = 0u32;
         unsafe { GetWindowThreadProcessId(h, Some(&mut pid)) };
-        let key = h.0 as u64;
-        // A window keeps its process for life; a handle reused by another process is looked up again.
-        let remembered = memo.windows.get(&key).filter(|(p, _)| *p == pid).map(|(_, kept)| *kept);
-        let excluded = remembered.unwrap_or_else(|| {
-            pid != own
-                && known.values().find(|(p, _)| *p == pid).map(|(_, kept)| *kept).unwrap_or_else(|| {
-                    process_path(pid)
-                        .and_then(|p| p.rsplit('\\').next().map(|exe| exes.contains(&exe.to_lowercase())))
-                        .unwrap_or(false)
-                })
-        });
-        known.insert(key, (pid, excluded));
-        if excluded {
-            let hidden = above.iter().any(|a| a.left <= r.left && a.top <= r.top && a.right >= r.right && a.bottom >= r.bottom);
-            if !hidden {
-                let area = Area {
-                    left: (r.left - m.left) as f32 / width,
-                    top: (r.top - m.top) as f32 / height,
-                    right: (r.right - m.left) as f32 / width,
-                    bottom: (r.bottom - m.top) as f32 / height,
-                };
-                out.push((h.0 as u64, area));
-            }
-        } else if is_solid(h) {
-            above.push(r);
-        }
-    }
-    memo.windows = known;
-    out
+        Some(Seen {
+            id: h.0 as u64,
+            pid,
+            rect: (r.left, r.top, r.right, r.bottom),
+            // Uncertain bounds may hide private pixels around the frame, so they cannot
+            // be used to uncover another window.
+            solid: frame.is_ok() && is_solid(h),
+        })
+    });
+    areas_of(seen, (m.left, m.top, m.right, m.bottom), exes, memo)
 }
 
 /// The Windows display language as a locale name, e.g. "de-DE".
@@ -168,7 +161,8 @@ fn title_of(h: HWND) -> String {
 fn is_cloaked(h: HWND) -> bool {
     let mut cloaked: u32 = 0;
     unsafe {
-        DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut c_void, 4).is_ok() && cloaked != 0
+        DwmGetWindowAttribute(h, DWMWA_CLOAKED, &mut cloaked as *mut u32 as *mut c_void, 4).is_ok()
+            && cloaked != 0
     }
 }
 
@@ -179,7 +173,10 @@ fn covers_monitor(h: HWND) -> bool {
             return false;
         }
         let monitor = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
         if !GetMonitorInfoW(monitor, &mut info).as_bool() {
             return false;
         }
@@ -196,7 +193,14 @@ fn describe(h: HWND) -> Option<WindowInfo> {
     }
     let exe_path = process_path(pid).unwrap_or_default();
     let exe = exe_path.rsplit('\\').next().unwrap_or("").to_string();
-    Some(WindowInfo { hwnd: h.0 as u64, title: title_of(h), exe, exe_path, pid, fullscreen: covers_monitor(h) })
+    Some(WindowInfo {
+        hwnd: h.0 as u64,
+        title: title_of(h),
+        exe,
+        exe_path,
+        pid,
+        fullscreen: covers_monitor(h),
+    })
 }
 
 /// Visible top-level windows a person would recognise as programs.
@@ -206,7 +210,9 @@ pub fn list_windows() -> Vec<WindowInfo> {
         .into_iter()
         .filter(|&h| unsafe {
             IsWindowVisible(h).as_bool()
-                && GetWindow(h, GW_OWNER).map(|o| o.0.is_null()).unwrap_or(true)
+                && GetWindow(h, GW_OWNER)
+                    .map(|o| o.0.is_null())
+                    .unwrap_or(true)
                 && (GetWindowLongPtrW(h, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0) == 0
                 && !is_cloaked(h)
                 && GetWindowTextLengthW(h) > 0
@@ -221,7 +227,12 @@ pub fn process_path(pid: u32) -> Option<String> {
         let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
         let mut buf = vec![0u16; 1024];
         let mut len = buf.len() as u32;
-        let result = QueryFullProcessImageNameW(handle, PROCESS_NAME_WIN32, PWSTR(buf.as_mut_ptr()), &mut len);
+        let result = QueryFullProcessImageNameW(
+            handle,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        );
         let _ = CloseHandle(handle);
         result.ok()?;
         Some(String::from_utf16_lossy(&buf[..len as usize]))
@@ -232,11 +243,20 @@ pub fn process_path(pid: u32) -> Option<String> {
 pub fn processes() -> HashMap<u32, ProcessEntry> {
     let mut out = HashMap::new();
     unsafe {
-        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else { return out };
-        let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+        let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+            return out;
+        };
+        let mut entry = PROCESSENTRY32W {
+            dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+            ..Default::default()
+        };
         if Process32FirstW(snap, &mut entry).is_ok() {
             loop {
-                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
                 let exe = String::from_utf16_lossy(&entry.szExeFile[..len]);
                 out.insert(
                     entry.th32ProcessID,
@@ -266,18 +286,46 @@ pub(super) fn file_description(path: &str) -> Option<String> {
             return None;
         }
         let mut data = vec![0u8; size as usize];
-        GetFileVersionInfoW(PCWSTR(wide.as_ptr()), None, size, data.as_mut_ptr() as *mut c_void).ok()?;
+        GetFileVersionInfoW(
+            PCWSTR(wide.as_ptr()),
+            None,
+            size,
+            data.as_mut_ptr() as *mut c_void,
+        )
+        .ok()?;
         // Read the first language/codepage pair, then FileDescription for it.
         let mut ptr: *mut c_void = std::ptr::null_mut();
         let mut len = 0u32;
-        let query: Vec<u16> = "\\VarFileInfo\\Translation".encode_utf16().chain(Some(0)).collect();
-        if !VerQueryValueW(data.as_ptr() as *const c_void, PCWSTR(query.as_ptr()), &mut ptr, &mut len).as_bool() || len < 4 {
+        let query: Vec<u16> = "\\VarFileInfo\\Translation"
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        if !VerQueryValueW(
+            data.as_ptr() as *const c_void,
+            PCWSTR(query.as_ptr()),
+            &mut ptr,
+            &mut len,
+        )
+        .as_bool()
+            || len < 4
+        {
             return None;
         }
         let pair = std::slice::from_raw_parts(ptr as *const u16, 2);
-        let key = format!("\\StringFileInfo\\{:04x}{:04x}\\FileDescription", pair[0], pair[1]);
+        let key = format!(
+            "\\StringFileInfo\\{:04x}{:04x}\\FileDescription",
+            pair[0], pair[1]
+        );
         let key: Vec<u16> = key.encode_utf16().chain(Some(0)).collect();
-        if !VerQueryValueW(data.as_ptr() as *const c_void, PCWSTR(key.as_ptr()), &mut ptr, &mut len).as_bool() || len == 0 {
+        if !VerQueryValueW(
+            data.as_ptr() as *const c_void,
+            PCWSTR(key.as_ptr()),
+            &mut ptr,
+            &mut len,
+        )
+        .as_bool()
+            || len == 0
+        {
             return None;
         }
         let text = std::slice::from_raw_parts(ptr as *const u16, len as usize);
@@ -294,7 +342,12 @@ fn monitor_handles() -> Vec<HMONITOR> {
     }
     let mut handles: Vec<HMONITOR> = Vec::new();
     unsafe {
-        let _ = EnumDisplayMonitors(None, None, Some(collect), LPARAM(&mut handles as *mut _ as isize));
+        let _ = EnumDisplayMonitors(
+            None,
+            None,
+            Some(collect),
+            LPARAM(&mut handles as *mut _ as isize),
+        );
     }
     handles
 }
@@ -319,19 +372,32 @@ pub fn dxgi_output(index: u32) -> Option<u32> {
 
 /// Each graphics adapter as "name vendor:device driver", to notice new hardware or drivers.
 pub fn gpu_signature() -> Vec<String> {
-    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIDevice, IDXGIFactory1};
     use windows::core::Interface;
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIDevice, IDXGIFactory1};
     let mut out = Vec::new();
     unsafe {
-        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else { return out };
+        let Ok(factory) = CreateDXGIFactory1::<IDXGIFactory1>() else {
+            return out;
+        };
         let mut i = 0;
         while let Ok(adapter) = factory.EnumAdapters1(i) {
             i += 1;
-            let Ok(desc) = adapter.GetDesc1() else { continue };
-            let len = desc.Description.iter().position(|&c| c == 0).unwrap_or(desc.Description.len());
+            let Ok(desc) = adapter.GetDesc1() else {
+                continue;
+            };
+            let len = desc
+                .Description
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(desc.Description.len());
             let name = String::from_utf16_lossy(&desc.Description[..len]);
-            let driver = adapter.CheckInterfaceSupport(&IDXGIDevice::IID).unwrap_or(0);
-            out.push(format!("{name} {:04x}:{:04x} {driver:x}", desc.VendorId, desc.DeviceId));
+            let driver = adapter
+                .CheckInterfaceSupport(&IDXGIDevice::IID)
+                .unwrap_or(0);
+            out.push(format!(
+                "{name} {:04x}:{:04x} {driver:x}",
+                desc.VendorId, desc.DeviceId
+            ));
         }
     }
     out
@@ -342,20 +408,27 @@ pub fn monitors() -> Vec<MonitorInfo> {
         .into_iter()
         .enumerate()
         .filter_map(|(i, m)| unsafe {
-            let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
-            GetMonitorInfoW(m, &mut info).as_bool().then(|| MonitorInfo {
-                index: i as u32,
-                width: info.rcMonitor.right - info.rcMonitor.left,
-                height: info.rcMonitor.bottom - info.rcMonitor.top,
-                primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
-            })
+            let mut info = MONITORINFO {
+                cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+                ..Default::default()
+            };
+            GetMonitorInfoW(m, &mut info)
+                .as_bool()
+                .then(|| MonitorInfo {
+                    index: i as u32,
+                    width: info.rcMonitor.right - info.rcMonitor.left,
+                    height: info.rcMonitor.bottom - info.rcMonitor.top,
+                    primary: info.dwFlags & MONITORINFOF_PRIMARY != 0,
+                })
         })
         .collect()
 }
 
 /// Lets the game have the CPU first: for threads doing work nobody waits for.
 pub fn lower_thread_priority() {
-    use windows::Win32::System::Threading::{GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL};
+    use windows::Win32::System::Threading::{
+        GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_BELOW_NORMAL,
+    };
     unsafe {
         let _ = SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_BELOW_NORMAL);
     }
@@ -364,7 +437,11 @@ pub fn lower_thread_priority() {
 /// Free bytes on the drive that holds `path`.
 pub fn disk_free(path: &std::path::Path) -> u64 {
     use windows::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
-    let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain(Some(0)).collect();
+    let wide: Vec<u16> = path
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
     let mut free = 0u64;
     unsafe {
         let _ = GetDiskFreeSpaceExW(PCWSTR(wide.as_ptr()), Some(&mut free), None, None);
@@ -374,7 +451,11 @@ pub fn disk_free(path: &std::path::Path) -> u64 {
 
 pub fn hide_file(path: &std::path::Path) {
     use windows::Win32::Storage::FileSystem::{SetFileAttributesW, FILE_ATTRIBUTE_HIDDEN};
-    let wide: Vec<u16> = path.to_string_lossy().encode_utf16().chain(Some(0)).collect();
+    let wide: Vec<u16> = path
+        .to_string_lossy()
+        .encode_utf16()
+        .chain(Some(0))
+        .collect();
     unsafe {
         let _ = SetFileAttributesW(PCWSTR(wide.as_ptr()), FILE_ATTRIBUTE_HIDDEN);
     }
@@ -399,10 +480,15 @@ pub fn passive<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
 /// it goes back to normal. Older WebView2 runtimes without this simply keep their memory.
 pub fn set_page_memory(webview: &tauri::Webview, visible: bool) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
+        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
     };
     use windows::core::Interface;
-    let level = if visible { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL } else { COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW };
+    let level = if visible {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
+    } else {
+        COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
+    };
     let _ = webview.with_webview(move |platform| {
         // SAFETY: called on the main thread with the controller Tauri keeps alive.
         let result = unsafe {
@@ -420,7 +506,9 @@ pub fn set_page_memory(webview: &tauri::Webview, visible: bool) {
 
 /// The Videos folder of the user.
 pub fn videos_dir() -> std::path::PathBuf {
-    let home = std::env::var_os("USERPROFILE").map(std::path::PathBuf::from).unwrap_or_else(|| ".".into());
+    let home = std::env::var_os("USERPROFILE")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| ".".into());
     home.join("Videos")
 }
 
@@ -431,8 +519,8 @@ pub fn screen_of_window(_raw: u64) -> Option<u32> {
 
 fn show_passive_hwnd(raw: u64) {
     use windows::Win32::UI::WindowsAndMessaging::{
-        SetWindowLongPtrW, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-        SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
+        SetWindowLongPtrW, SetWindowPos, ShowWindow, HWND_TOPMOST, SWP_NOACTIVATE, SWP_NOMOVE,
+        SWP_NOSIZE, SW_SHOWNOACTIVATE, WS_EX_NOACTIVATE,
     };
     let h = hwnd(raw);
     unsafe {
@@ -442,7 +530,15 @@ fn show_passive_hwnd(raw: u64) {
             SetWindowLongPtrW(h, GWL_EXSTYLE, wanted as isize);
         }
         let _ = ShowWindow(h, SW_SHOWNOACTIVATE);
-        let _ = SetWindowPos(h, Some(HWND_TOPMOST), 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        let _ = SetWindowPos(
+            h,
+            Some(HWND_TOPMOST),
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
 }
 
@@ -451,7 +547,10 @@ pub fn foreground_work_area() -> Option<(i32, i32, i32, i32)> {
     unsafe {
         let h = GetForegroundWindow();
         let monitor = MonitorFromWindow(h, MONITOR_DEFAULTTONEAREST);
-        let mut info = MONITORINFO { cbSize: std::mem::size_of::<MONITORINFO>() as u32, ..Default::default() };
+        let mut info = MONITORINFO {
+            cbSize: std::mem::size_of::<MONITORINFO>() as u32,
+            ..Default::default()
+        };
         GetMonitorInfoW(monitor, &mut info).as_bool().then(|| {
             let r = info.rcWork;
             (r.left, r.top, r.right - r.left, r.bottom - r.top)
@@ -464,7 +563,11 @@ const BELOW_NORMAL_PRIORITY_CLASS: u32 = 0x0000_4000;
 
 /// Starts a helper without a console window; `low_priority` lets the game have the CPU first.
 pub fn background(cmd: &mut Command, low_priority: bool) {
-    cmd.creation_flags(if low_priority { CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS } else { CREATE_NO_WINDOW });
+    cmd.creation_flags(if low_priority {
+        CREATE_NO_WINDOW | BELOW_NORMAL_PRIORITY_CLASS
+    } else {
+        CREATE_NO_WINDOW
+    });
 }
 
 /// Graphics Capture hands FFmpeg its pictures on the GPU; screenshots need them in memory.
@@ -483,8 +586,14 @@ pub fn capture(grab: Grab, fps: u32, cursor: bool, chain: &str) -> Capture {
             // Graphics Capture sends nothing while the screen is still, which stalls the
             // buffer. Desktop Duplication repeats the last frame, so prefer it for screens.
             Some(output) => {
-                let source = format!("ddagrab=output_idx={output}:framerate={fps}:draw_mouse={}{chain}", u8::from(cursor));
-                return Capture { input: lavfi(source), filter: None };
+                let source = format!(
+                    "ddagrab=output_idx={output}:framerate={fps}:draw_mouse={}{chain}",
+                    u8::from(cursor)
+                );
+                return Capture {
+                    input: lavfi(source),
+                    filter: None,
+                };
             }
             None => format!("monitor_idx={index}"),
         },
@@ -495,7 +604,10 @@ pub fn capture(grab: Grab, fps: u32, cursor: bool, chain: &str) -> Capture {
         "gfxcapture={what}:max_framerate={fps}:capture_cursor={}:width=-2:height=-2:resize_mode=scale_aspect{chain}",
         u8::from(cursor)
     );
-    Capture { input: lavfi(source), filter: None }
+    Capture {
+        input: lavfi(source),
+        filter: None,
+    }
 }
 
 fn lavfi(source: String) -> Vec<String> {
@@ -504,7 +616,10 @@ fn lavfi(source: String) -> Vec<String> {
 
 /// A test picture as an encoder gets it while recording, for trying encoders.
 pub fn test_capture(chain: &str) -> Capture {
-    Capture { input: lavfi(format!("gfxcapture=monitor_idx=0:max_framerate=30{chain}")), filter: None }
+    Capture {
+        input: lavfi(format!("gfxcapture=monitor_idx=0:max_framerate=30{chain}")),
+        filter: None,
+    }
 }
 
 /// Why recording cannot work here, when it cannot: Windows always has a way.
@@ -522,10 +637,21 @@ pub fn cpu_time(child: &std::process::Child) -> Option<std::time::Duration> {
     use windows::Win32::System::Threading::GetProcessTimes;
     let (mut created, mut exited, mut kernel, mut user) = Default::default();
     // SAFETY: the handle belongs to `child`, which outlives the call.
-    unsafe { GetProcessTimes(HANDLE(child.as_raw_handle()), &mut created, &mut exited, &mut kernel, &mut user) }.ok()?;
+    unsafe {
+        GetProcessTimes(
+            HANDLE(child.as_raw_handle()),
+            &mut created,
+            &mut exited,
+            &mut kernel,
+            &mut user,
+        )
+    }
+    .ok()?;
     let ticks = |t: FILETIME| (u64::from(t.dwHighDateTime) << 32) | u64::from(t.dwLowDateTime);
     // In units of 100 ns.
-    Some(std::time::Duration::from_nanos((ticks(kernel) + ticks(user)) * 100))
+    Some(std::time::Duration::from_nanos(
+        (ticks(kernel) + ticks(user)) * 100,
+    ))
 }
 
 /// Ties a helper process to Replix's lifetime: once Replix ends, however it ends (closed,
@@ -579,8 +705,8 @@ fn app_job() -> Option<windows::Win32::Foundation::HANDLE> {
 /// A program's icon as RGBA pixels (width, height, pixels), at about `size` pixels.
 pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
     use windows::Win32::Graphics::Gdi::{
-        DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO, BITMAPINFOHEADER, BI_RGB,
-        DIB_RGB_COLORS, HGDIOBJ,
+        DeleteObject, GetDC, GetDIBits, GetObjectW, ReleaseDC, BITMAP, BITMAPINFO,
+        BITMAPINFOHEADER, BI_RGB, DIB_RGB_COLORS, HGDIOBJ,
     };
     use windows::Win32::UI::Shell::SHDefExtractIconW;
     use windows::Win32::UI::WindowsAndMessaging::{DestroyIcon, GetIconInfo, HICON, ICONINFO};
@@ -597,7 +723,12 @@ pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
         let result = (|| {
             got.ok()?;
             let mut bm = BITMAP::default();
-            if GetObjectW(HGDIOBJ(info.hbmColor.0), size_of::<BITMAP>() as i32, Some(&mut bm as *mut _ as *mut c_void)) == 0 {
+            if GetObjectW(
+                HGDIOBJ(info.hbmColor.0),
+                size_of::<BITMAP>() as i32,
+                Some(&mut bm as *mut _ as *mut c_void),
+            ) == 0
+            {
                 return None;
             }
             let (w, h) = (bm.bmWidth as u32, bm.bmHeight as u32);
@@ -615,7 +746,15 @@ pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
             };
             let mut pixels = vec![0u8; (w * h * 4) as usize];
             let dc = GetDC(None);
-            let lines = GetDIBits(dc, info.hbmColor, 0, h, Some(pixels.as_mut_ptr() as *mut c_void), &mut header, DIB_RGB_COLORS);
+            let lines = GetDIBits(
+                dc,
+                info.hbmColor,
+                0,
+                h,
+                Some(pixels.as_mut_ptr() as *mut c_void),
+                &mut header,
+                DIB_RGB_COLORS,
+            );
             ReleaseDC(None, dc);
             if lines == 0 {
                 return None;

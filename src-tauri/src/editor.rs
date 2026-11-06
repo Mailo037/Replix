@@ -38,8 +38,8 @@ pub struct EditorData {
     pub tracks: Vec<EditorTrack>,
     pub filmstrip: Option<String>,
     pub draft: Option<Draft>,
-    /// Moments marked while recording or here, in seconds.
-    pub markers: Vec<f64>,
+    /// Moments marked while recording or here.
+    pub markers: Vec<crate::library::Marker>,
 }
 
 pub const FILMSTRIP_FRAMES: u32 = 14;

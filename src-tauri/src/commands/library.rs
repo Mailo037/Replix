@@ -298,7 +298,7 @@ pub async fn storage_info(app: AppHandle) -> StorageInfo {
 
 /// The clip's markers as the editor has them now.
 #[tauri::command]
-pub async fn set_markers(app: AppHandle, id: String, markers: Vec<f64>) -> Res<()> {
+pub async fn set_markers(app: AppHandle, id: String, markers: Vec<library::Marker>) -> Res<()> {
     in_order(move || {
         let changed = update_meta(&app, &id, |m| m.markers = library::tidy_markers(markers, m.duration))?;
         let _ = app.emit("items-meta", [changed]);

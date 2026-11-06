@@ -81,6 +81,51 @@ fn centre() -> f64 {
     0.5
 }
 
+/// A marked moment, with the name and icon the person may have given it in the editor.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
+#[serde(from = "StoredMarker")]
+pub struct Marker {
+    /// Seconds of the clip.
+    pub at: f64,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub name: String,
+    /// One of the page's marker icons; empty for the plain flag.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub icon: String,
+}
+
+impl Marker {
+    pub fn at(at: f64) -> Self {
+        Marker { at, ..Default::default() }
+    }
+}
+
+/// Clips from before marker names kept each marker as a bare number of seconds.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum StoredMarker {
+    Seconds(f64),
+    Full {
+        at: f64,
+        #[serde(default)]
+        name: String,
+        #[serde(default)]
+        icon: String,
+    },
+}
+
+impl From<StoredMarker> for Marker {
+    fn from(m: StoredMarker) -> Self {
+        match m {
+            StoredMarker::Seconds(at) => Marker::at(at),
+            StoredMarker::Full { at, name, icon } => Marker { at, name, icon },
+        }
+    }
+}
+
+/// Names longer than this are cut, so a pasted paragraph cannot swell the sidecar.
+const MARKER_NAME: usize = 80;
+
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Meta {
@@ -99,9 +144,9 @@ pub struct Meta {
     /// The file could not be read when the sidecar was written (a busy drive, say); a
     /// later scan reads it and fills in its length and size.
     pub unread: bool,
-    /// Moments marked while recording or in the editor, in seconds of the clip.
+    /// Moments marked while recording or in the editor.
     #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub markers: Vec<f64>,
+    pub markers: Vec<Marker>,
     /// Brought in from elsewhere: the space limit leaves it alone, as it may be the only copy.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub imported: bool,
@@ -634,11 +679,15 @@ pub fn restore(paths: &[PathBuf]) -> anyhow::Result<usize> {
     Ok(clips)
 }
 
-/// Markers sorted, inside the clip and not on top of each other.
-pub fn tidy_markers(mut markers: Vec<f64>, duration: f64) -> Vec<f64> {
-    markers.retain(|m| m.is_finite() && *m >= 0.0 && (duration <= 0.0 || *m <= duration));
-    markers.sort_by(f64::total_cmp);
-    markers.dedup_by(|a, b| (*a - *b).abs() < 0.25);
+/// Markers sorted, inside the clip and not on top of each other, with tidy names.
+pub fn tidy_markers(mut markers: Vec<Marker>, duration: f64) -> Vec<Marker> {
+    markers.retain(|m| m.at.is_finite() && m.at >= 0.0 && (duration <= 0.0 || m.at <= duration));
+    markers.sort_by(|a, b| a.at.total_cmp(&b.at));
+    markers.dedup_by(|a, b| (a.at - b.at).abs() < 0.25);
+    for m in &mut markers {
+        m.name = m.name.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MARKER_NAME).collect();
+        m.icon = m.icon.chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect();
+    }
     markers
 }
 
@@ -782,8 +831,21 @@ mod tests {
 
     #[test]
     fn markers_are_kept_tidy() {
-        assert_eq!(tidy_markers(vec![5.0, -1.0, 2.0, 2.1, f64::NAN, 40.0], 30.0), vec![2.0, 5.0]);
-        assert_eq!(tidy_markers(vec![3.0], 0.0), vec![3.0], "a clip of unknown length keeps its markers");
+        let at = |list: &[f64]| list.iter().map(|s| Marker::at(*s)).collect::<Vec<_>>();
+        assert_eq!(tidy_markers(at(&[5.0, -1.0, 2.0, 2.1, f64::NAN, 40.0]), 30.0), at(&[2.0, 5.0]));
+        assert_eq!(tidy_markers(at(&[3.0]), 0.0), at(&[3.0]), "a clip of unknown length keeps its markers");
+        let named = Marker { at: 1.0, name: "  big 
+  play ".into(), icon: "star<>".into() };
+        let tidy = tidy_markers(vec![named], 10.0);
+        assert_eq!((tidy[0].name.as_str(), tidy[0].icon.as_str()), ("big play", "star"));
+    }
+
+    #[test]
+    fn markers_load_from_numbers_and_objects() {
+        let meta: Meta = serde_json::from_str(r#"{"markers":[2.5,{"at":4,"name":"Ace","icon":"star"}]}"#).unwrap();
+        assert_eq!(meta.markers, vec![Marker::at(2.5), Marker { at: 4.0, name: "Ace".into(), icon: "star".into() }]);
+        let back: Meta = serde_json::from_str(&serde_json::to_string(&meta).unwrap()).unwrap();
+        assert_eq!(back.markers, meta.markers);
     }
 
     /// An imported file is copied, not moved, gets a name of its own next to one already

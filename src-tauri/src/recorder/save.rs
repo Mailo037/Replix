@@ -1,5 +1,6 @@
 //! Turning part of the buffer into a clip or session in the library.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
@@ -10,7 +11,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
-use super::pipeline::{segment_name, BufferDir, Mask};
+use super::pipeline::{area_key, segment_name, BufferDir, Mask};
 use crate::audio::{self, Track, TrackKind};
 use crate::encoder::{self, Encoder};
 use crate::ffmpeg;
@@ -168,8 +169,20 @@ impl SaveJob {
         self.placeholder.finish(result.as_ref().ok().map(|(_, out)| out.as_path()));
         match result {
             Ok((meta, _)) => {
-                let what = if self.kind == Kind::Session { tr("Session saved") } else { tr("Clip saved") };
-                crate::toast(&self.app, &what, &format!("{} · {}", self.name, library::format_duration(meta.duration)));
+                let what = if self.kind == Kind::Session {
+                    tr("Session saved")
+                } else {
+                    tr("Clip saved")
+                };
+                crate::toast(
+                    &self.app,
+                    &what,
+                    &format!(
+                        "{} · {}",
+                        self.name,
+                        library::format_duration(meta.duration)
+                    ),
+                );
                 let _ = self.app.emit("library-changed", ());
                 drop(self.dir);
                 if self.limit_gb > 0 {
@@ -225,7 +238,13 @@ impl SaveJob {
                 height: info.height,
                 tracks: self.tracks.iter().map(|t| TrackMeta { name: t.name.clone(), kind: t.kind, exe: t.exe.clone() }).collect(),
                 unread,
-                markers: library::tidy_markers(self.markers.iter().map(|m| m - zero).collect(), length),
+                markers: library::tidy_markers(
+                    self.markers
+                        .iter()
+                        .map(|m| library::Marker::at(m - zero))
+                        .collect(),
+                    length,
+                ),
                 ..Default::default()
             };
             // The sidecar comes first: a library scan that finds the clip then never has to
@@ -326,13 +345,23 @@ fn relative_masks(masks: &[Mask], zero: f64, length: f64) -> Vec<Mask> {
         .collect()
 }
 
-/// A black box over each mask while it lasts, a little bigger than the window so no edge
-/// shows; the desktop's sound is silent while any is shown.
+/// One black box per distinct rectangle, enabled for each of its intervals without filling
+/// pauses. The box is a little bigger so no edge shows; desktop sound is silent during any mask.
 pub(super) fn black_out_graph(hide: &[Mask], desktop: Option<usize>, encoder: &Encoder) -> String {
     let between = |m: &Mask| format!("between(t,{:.3},{:.3})", m.start, m.end);
-    let mut graph = String::from("[0:v]");
+    // Repeated appearances need more intervals, not more filters over every video frame.
+    let mut by_area: BTreeMap<[u32; 4], Vec<&Mask>> = BTreeMap::new();
     for m in hide {
-        graph.push_str(&format!("{}:enable='{}',", black_box(&m.area), between(m)));
+        by_area.entry(area_key(&m.area)).or_default().push(m);
+    }
+    let mut graph = String::from("[0:v]");
+    for masks in by_area.values() {
+        let when = masks
+            .iter()
+            .map(|m| between(m))
+            .collect::<Vec<_>>()
+            .join("+");
+        graph.push_str(&format!("{}:enable='{when}',", black_box(&masks[0].area)));
     }
     graph.push_str(&format!("format={}[v]", encoder.export_pix_fmt));
     if let Some(d) = desktop {
@@ -514,7 +543,226 @@ mod tests {
         assert!(level(right, "1.2") > 200.0, "the rest of the screen stays");
         assert!(level(left, "3.0") > 200.0, "untouched after it");
         let info = ffmpeg::probe(&dir.join("out.mp4")).unwrap();
-        assert_eq!(info.audio_titles, vec![Some("Desktop".to_string()), Some("Microphone".to_string())]);
+        assert_eq!(
+            info.audio_titles,
+            vec![Some("Desktop".to_string()), Some("Microphone".to_string())]
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn identical_rectangles_share_a_filter_without_joining_time_gaps() {
+        let area = Area {
+            left: 0.1,
+            top: 0.1,
+            right: 0.4,
+            bottom: 0.4,
+        };
+        let other = Area {
+            left: 0.6,
+            top: 0.6,
+            right: 0.9,
+            bottom: 0.9,
+        };
+        let hide = [
+            Mask {
+                area,
+                start: 1.0,
+                end: 2.0,
+            },
+            Mask {
+                area: other,
+                start: 1.0,
+                end: 2.0,
+            },
+            Mask {
+                area,
+                start: 3.0,
+                end: 4.0,
+            },
+        ];
+        let graph = black_out_graph(&hide, Some(0), encoder::software());
+        assert_eq!(graph.matches("drawbox=").count(), 2);
+        assert!(graph.contains(&format!(
+            "{}:enable='between(t,1.000,2.000)+between(t,3.000,4.000)'",
+            black_box(&area)
+        )));
+        assert!(graph.contains(";[0:a:0]volume=0:enable='between(t,1.000,2.000)+between(t,1.000,2.000)+between(t,3.000,4.000)'[desk]"));
+    }
+
+    #[test]
+    fn graph_groups_only_bit_identical_rectangles() {
+        let area = Area {
+            left: 0.1,
+            top: 0.1,
+            right: 0.4,
+            bottom: 0.4,
+        };
+        let other = Area {
+            left: f32::from_bits(area.left.to_bits() + 1),
+            ..area
+        };
+        let hide = [
+            Mask {
+                area,
+                start: 1.0,
+                end: 2.0,
+            },
+            Mask {
+                area: other,
+                start: 1.0,
+                end: 2.0,
+            },
+        ];
+        let graph = black_out_graph(&hide, None, encoder::software());
+        assert_eq!(graph.matches("drawbox=").count(), 2);
+    }
+
+    #[test]
+    fn a_long_graph_keeps_every_interval_for_a_repeated_rectangle() {
+        let area = Area {
+            left: 0.1,
+            top: 0.1,
+            right: 0.4,
+            bottom: 0.4,
+        };
+        let hide: Vec<_> = (0..200)
+            .map(|i| Mask {
+                area,
+                start: i as f64 * 3.0,
+                end: i as f64 * 3.0 + 1.0,
+            })
+            .collect();
+        let graph = black_out_graph(&hide, None, encoder::software());
+        assert_eq!(graph.matches("drawbox=").count(), 1);
+        assert_eq!(graph.matches("between(t,").count(), hide.len());
+        for m in hide {
+            assert!(graph.contains(&format!("between(t,{:.3},{:.3})", m.start, m.end)));
+        }
+    }
+
+    #[test]
+    fn four_private_fragments_leave_the_foreground_opening_visible() {
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir =
+            std::env::temp_dir().join(format!("replix-private-opening-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        run(
+            &dir,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "color=c=white:size=320x180:rate=30",
+                "-t",
+                "5",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "in.mp4",
+            ],
+        );
+        let areas = [
+            Area {
+                left: 0.0,
+                top: 0.0,
+                right: 1.0,
+                bottom: 0.3,
+            },
+            Area {
+                left: 0.0,
+                top: 0.7,
+                right: 1.0,
+                bottom: 1.0,
+            },
+            Area {
+                left: 0.0,
+                top: 0.3,
+                right: 0.3,
+                bottom: 0.7,
+            },
+            Area {
+                left: 0.7,
+                top: 0.3,
+                right: 1.0,
+                bottom: 0.7,
+            },
+        ];
+        let hide: Vec<_> = areas
+            .iter()
+            .flat_map(|&area| {
+                [(0.5, 1.5), (2.5, 3.5)].map(|(start, end)| Mask { area, start, end })
+            })
+            .collect();
+        let graph = dir.join("graph.txt");
+        std::fs::write(&graph, black_out_graph(&hide, None, encoder::software())).unwrap();
+        let args = black_out_args(
+            &dir.join("in.mp4"),
+            &dir.join("out.mp4"),
+            &graph,
+            None,
+            &[],
+            encoder::software(),
+            2000,
+        );
+        let ok = Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error"])
+            .args(&args)
+            .status()
+            .unwrap();
+        assert!(ok.success());
+        let level = |crop: &str, at: &str| {
+            let out = Command::new("ffmpeg")
+                .args(["-hide_banner", "-loglevel", "error", "-ss", at, "-i"])
+                .arg(dir.join("out.mp4"))
+                .args([
+                    "-frames:v",
+                    "1",
+                    "-vf",
+                    crop,
+                    "-pix_fmt",
+                    "gray",
+                    "-f",
+                    "rawvideo",
+                    "-",
+                ])
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "decoding {crop} at {at}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(!out.stdout.is_empty(), "no frame for {crop} at {at}");
+            out.stdout.iter().map(|&v| v as f64).sum::<f64>() / out.stdout.len() as f64
+        };
+        let surround = [
+            "crop=40:20:140:10",
+            "crop=40:20:140:150",
+            "crop=40:20:10:80",
+            "crop=40:20:270:80",
+        ];
+        for at in ["0.8", "2.8"] {
+            assert!(
+                level("crop=40:20:140:80", at) > 200.0,
+                "the foreground opening stays visible"
+            );
+            for crop in surround {
+                assert!(
+                    level(crop, at) < 20.0,
+                    "the surrounding private fragments are black"
+                );
+            }
+        }
+        for at in ["0.1", "2.0", "4.0"] {
+            for crop in surround {
+                assert!(level(crop, at) > 200.0, "the time gaps stay unmasked");
+            }
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

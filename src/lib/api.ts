@@ -58,8 +58,8 @@ export interface Item {
   seen: boolean;
   /** Replix could not read the file yet; its length and size follow on a later scan. */
   unread: boolean;
-  /** Moments marked while recording or in the editor, in seconds. */
-  markers?: number[];
+  /** Moments marked while recording or in the editor. */
+  markers?: Marker[];
   /** Brought in from elsewhere; the space limit leaves it alone. */
   imported?: boolean;
 }
@@ -186,7 +186,16 @@ export interface EditorData {
   tracks: EditorTrack[];
   filmstrip: string | null;
   draft: Draft | null;
-  markers: number[];
+  markers: Marker[];
+}
+
+/** A marked moment; the name and icon are given in the editor. */
+export interface Marker {
+  /** Seconds of the clip. */
+  at: number;
+  name?: string;
+  /** One of the editor's marker icons; none is the plain flag. */
+  icon?: string;
 }
 
 export interface AppWindow {
@@ -260,7 +269,7 @@ export const api = {
   saveDraft: (id: string, title: string, draft: Draft) => inOrder(() => invoke<void>("save_draft", { id, title, draft })),
   renameItem: (id: string, title: string) => inOrder(() => invoke<void>("rename_item", { id, title })),
   setFavorite: (ids: string[], favorite: boolean) => inOrder(() => invoke<void>("set_favorite", { ids, favorite })),
-  setMarkers: (id: string, markers: number[]) => inOrder(() => invoke<void>("set_markers", { id, markers })),
+  setMarkers: (id: string, markers: Marker[]) => inOrder(() => invoke<void>("set_markers", { id, markers })),
   /** Copies videos and pictures (or the ones in a folder) into the library. */
   importFiles: (paths: string[]) => invoke<Imported>("import_files", { paths }),
   /** Says where the files were, for `restoreItems`. */

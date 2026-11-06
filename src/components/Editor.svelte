@@ -5,7 +5,7 @@
   const MAX_ROWS = 3;
   import { listen } from "@tauri-apps/api/event";
   import { onDestroy, onMount, untrack } from "svelte";
-  import { api, fileUrl, type Draft, type EditorData, type Preset, type TrackEdit } from "../lib/api";
+  import { api, fileUrl, type Draft, type EditorData, type Marker, type Preset, type TrackEdit } from "../lib/api";
   import { position, time } from "../lib/format";
   import { share } from "../lib/share";
   import { store } from "../lib/store.svelte";
@@ -43,8 +43,8 @@
   let cropScale = $state(1);
   /** All sound together, 0 to 2. */
   let masterVolume = $state(1);
-  /** Moments marked while recording or here, in seconds. Saved with the clip as they change. */
-  let markers = $state<number[]>([]);
+  /** Moments marked while recording or here. Saved with the clip as they change. */
+  let markers = $state<Marker[]>([]);
   /** The markers as last saved, so only a change is sent. */
   let savedMarkers = "";
   let markerTimer = 0;
@@ -120,6 +120,7 @@
       cropScale = d.draft?.cropScale ?? 1;
       masterVolume = d.draft?.masterVolume ?? 1;
       markers = d.markers ?? [];
+      markerMenu = null;
       savedMarkers = JSON.stringify(markers);
     } catch (e) {
       if (mine !== loads) return;
@@ -401,25 +402,57 @@
 
   /** Sets a marker at the playhead, or takes away the one there. */
   function toggleMarker() {
-    const at = markers.findIndex((m) => Math.abs(m - current) < NEAR);
-    if (at >= 0) markers = markers.filter((_, i) => i !== at);
-    else markers = [...markers, current].sort((a, b) => a - b);
+    const at = markers.findIndex((m) => Math.abs(m.at - current) < NEAR);
+    if (at >= 0) removeMarker(markers[at].at);
+    else markers = [...markers, { at: current }].sort((a, b) => a.at - b.at);
   }
 
-  function removeMarker(m: number) {
-    markers = markers.filter((x) => x !== m);
+  function removeMarker(at: number) {
+    markers = markers.filter((m) => m.at !== at);
+    if (markerMenu?.at === at) markerMenu = null;
   }
 
   /** Jumps to the next marker after the playhead, or the one before it. */
   function jumpMarker(direction: 1 | -1) {
     const target =
-      direction > 0 ? markers.find((m) => m > current + 0.05) : [...markers].reverse().find((m) => m < current - 0.05);
-    if (target !== undefined) seek(target);
+      direction > 0 ? markers.find((m) => m.at > current + 0.05) : [...markers].reverse().find((m) => m.at < current - 0.05);
+    if (target !== undefined) seek(target.at);
   }
 
-  const onMarker = $derived(markers.some((m) => Math.abs(m - current) < NEAR));
-  const hasNext = $derived(markers.some((m) => m > current + 0.05));
-  const hasPrev = $derived(markers.some((m) => m < current - 0.05));
+  const onMarker = $derived(markers.some((m) => Math.abs(m.at - current) < NEAR));
+  const hasNext = $derived(markers.some((m) => m.at > current + 0.05));
+  const hasPrev = $derived(markers.some((m) => m.at < current - 0.05));
+
+  /** The icons a marker can wear; the first is the plain one. */
+  const MARKER_ICONS = $derived([
+    { name: "flag", label: t("Flag") },
+    { name: "star", label: t("Star") },
+    { name: "heart", label: t("Heart") },
+    { name: "trophy", label: t("Trophy") },
+    { name: "skull", label: t("Skull") },
+    { name: "target", label: t("Crosshair") },
+    { name: "bolt", label: t("Lightning") },
+    { name: "smile", label: t("Funny") },
+    { name: "alert", label: t("Warning") },
+  ]);
+  const markerIcon = (m: Marker) => (m.icon && MARKER_ICONS.some((i) => i.name === m.icon) ? m.icon : "flag");
+
+  /** The marker being named, by its time, and where its panel opened. */
+  let markerMenu = $state<{ at: number; x: number; y: number } | null>(null);
+  const editedMarker = $derived(markerMenu ? markers.find((m) => m.at === markerMenu!.at) : undefined);
+
+  function openMarkerMenu(at: number, e: MouseEvent) {
+    e.preventDefault();
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    markerMenu = { at, x: Math.max(8, Math.min(r.left - 8, innerWidth - 268)), y: Math.min(r.bottom + 6, innerHeight - 190) };
+  }
+
+  /** Changes the open marker; its time stays, so the panel keeps pointing at it. */
+  function editMarker(change: Partial<Marker>) {
+    const at = markerMenu?.at;
+    if (at === undefined) return;
+    markers = markers.map((m) => (m.at === at ? { ...m, ...change } : m));
+  }
 
   function splitHere() {
     if (current <= trimStart + 0.2 || current >= trimEnd - 0.2) return;
@@ -564,7 +597,7 @@
   }
 
   function restore(json: string) {
-    const d = JSON.parse(json) as Draft & { markers?: number[] };
+    const d = JSON.parse(json) as Draft & { markers?: Marker[] };
     markers = d.markers ?? markers;
     trimStart = d.trimStart;
     trimEnd = d.trimEnd;
@@ -949,21 +982,23 @@
             {#each ticks as tick (tick)}
               <span class="tick" style:left="{pct(tick)}%"><span class="mono">{mark(tick)}</span></span>
             {/each}
-            {#each markers as m (m)}
+            {#each markers as m (m.at)}
               <button
                 type="button"
                 class="marker"
-                style:left="{pct(m)}%"
-                aria-label={t("Marker at {time}", { time: position(m) })}
-                use:tip={t("Jump here · right-click to remove")}
+                class:named={!!m.name}
+                style:left="{pct(m.at)}%"
+                aria-label={m.name
+                  ? t("Marker {name} at {time}", { name: m.name, time: position(m.at) })
+                  : t("Marker at {time}", { time: position(m.at) })}
+                aria-haspopup="dialog"
+                use:tip={m.name ? `${m.name} · ${t("Jump here · right-click to edit")}` : t("Jump here · right-click to edit")}
                 onpointerdown={(e) => e.stopPropagation()}
-                onclick={() => seek(m)}
-                oncontextmenu={(e) => {
-                  e.preventDefault();
-                  removeMarker(m);
-                }}
+                onclick={() => seek(m.at)}
+                oncontextmenu={(e) => openMarkerMenu(m.at, e)}
               >
-                <Icon name="flag" size={12} />
+                <Icon name={markerIcon(m)} size={12} />
+                {#if m.name}<span class="marker-name">{m.name}</span>{/if}
               </button>
             {/each}
           </div>
@@ -1093,6 +1128,48 @@
           </div>
         {/if}
 
+        {#if markerMenu && editedMarker}
+          {@const m = editedMarker}
+          <div
+            class="marker-menu"
+            role="dialog"
+            aria-label={t("Marker at {time}", { time: position(m.at) })}
+            style:left="{markerMenu.x}px"
+            style:top="{markerMenu.y}px"
+            use:outside={() => (markerMenu = null)}
+          >
+            <!-- svelte-ignore a11y_autofocus -->
+            <input
+              class="marker-input"
+              aria-label={t("Marker name")}
+              placeholder={t("Name this moment")}
+              maxlength="80"
+              spellcheck="false"
+              autofocus
+              value={m.name ?? ""}
+              oninput={(e) => editMarker({ name: e.currentTarget.value.trim() ? e.currentTarget.value : undefined })}
+              onkeydown={(e) => e.key === "Enter" && (markerMenu = null)}
+            />
+            <div class="marker-icons" role="radiogroup" aria-label={t("Icon")}>
+              {#each MARKER_ICONS as icon (icon.name)}
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={markerIcon(m) === icon.name}
+                  aria-label={icon.label}
+                  use:tip={icon.label}
+                  onclick={() => editMarker({ icon: icon.name === "flag" ? undefined : icon.name })}
+                >
+                  <Icon name={icon.name} size={16} />
+                </button>
+              {/each}
+            </div>
+            <button type="button" class="marker-remove" onclick={() => removeMarker(m.at)}>
+              <Icon name="trash" size={16} />{t("Remove marker")}
+            </button>
+          </div>
+        {/if}
+
         {#if trackMenu && data.tracks[trackMenu.i]}
           {@const m = trackMenu}
           <div
@@ -1117,10 +1194,10 @@
           {#each parts.filter((p) => p.removed) as p (p.start)}
             <span class="cut" style:left="{pct(p.start)}%" style:width="{pct(p.end) - pct(p.start)}%"></span>
           {/each}
-          {#each markers as m (m)}
-            <span class="marker-line" style:left="{pct(m)}%"></span>
+          {#each markers as m (m.at)}
+            <span class="marker-line" style:left="{pct(m.at)}%"></span>
           {/each}
-          <span class="playhead" style:left="{pct(current)}%"></span>
+          <span class="playhead" style:transform="translate3d({pct(current)}%, 0, 0)"></span>
         </div>
       </div>
       {#if !data.tracks.length}
@@ -1729,6 +1806,97 @@
     background: var(--surface);
     color: var(--ink);
   }
+  /* A named marker shows its name beside the icon, on a backing that hides the ticks below. */
+  .marker.named {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    width: auto;
+    max-width: 140px;
+    padding: 0 6px 0 4px;
+    margin-left: -8px;
+    background: var(--black);
+  }
+  .marker.named:hover,
+  .marker.named:focus-visible {
+    z-index: 4;
+    max-width: 320px;
+    background: var(--surface);
+  }
+  .marker-name {
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .marker-menu {
+    position: fixed;
+    z-index: 50;
+    width: 260px;
+    padding: 8px;
+    border-radius: 20px;
+    background: var(--raised);
+    box-shadow:
+      0 0 0 1px rgb(255 255 255 / 0.04),
+      0 14px 36px rgb(0 0 0 / 0.5);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .marker-input {
+    height: 34px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 14px;
+    background: var(--black);
+    color: var(--ink);
+    font: inherit;
+    font-weight: 600;
+  }
+  .marker-input:focus-visible {
+    outline: 2px solid var(--lavender);
+    outline-offset: -2px;
+  }
+  .marker-icons {
+    display: grid;
+    grid-template-columns: repeat(9, 1fr);
+    gap: 2px;
+  }
+  .marker-icons button {
+    height: 28px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+    border: 0;
+    border-radius: 10px;
+    background: transparent;
+    color: var(--muted);
+  }
+  .marker-icons button:hover {
+    background: var(--hover);
+    color: var(--ink);
+  }
+  .marker-icons button[aria-checked="true"] {
+    background: var(--surface);
+    color: var(--lavender);
+  }
+  .marker-remove {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    height: 34px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 14px;
+    background: transparent;
+    color: var(--red);
+    font-weight: 600;
+    text-align: left;
+  }
+  .marker-remove:hover {
+    background: var(--hover);
+  }
   .marker-line {
     position: absolute;
     top: 20px;
@@ -1737,20 +1905,31 @@
     border-left: 1px dashed var(--lavender);
     opacity: 0.7;
   }
+  /* Move a separate layer so the line and cap do not leave paint trails over the ruler. */
   .playhead {
     position: absolute;
     top: 0;
     bottom: -4px;
+    left: 0;
+    width: 100%;
+    will-change: transform;
+  }
+  .playhead::after {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -1px;
     width: 2px;
-    margin-left: -1px;
     background: #fff;
     box-shadow: 0 0 0 1px rgb(0 0 0 / 0.35);
   }
   .playhead::before {
     content: "";
     position: absolute;
+    z-index: 1;
     top: 0;
-    left: -4px;
+    left: -5px;
     width: 10px;
     height: 10px;
     border-radius: 3px 3px 50% 50%;

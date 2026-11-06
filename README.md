@@ -48,7 +48,7 @@ A short setup walks you through the clip length, what to record, the tracks and 
 
 Every game can have its own clip length, frame rate, quality and microphone setting, or be left out entirely. A space limit moves the oldest clips to the recycle bin (the Trash on Linux and macOS); favorites, drafts and imported videos stay.
 
-Under **Privacy**, keep programs like a password manager or a private chat out of every recording: they never count as a game, their sound gets no track, and on the whole screen only their windows turn black, while the rest of the screen is recorded as usual.
+Under **Privacy**, keep programs like a password manager or a private chat out of every recording: they never count as a game, their sound gets no track, and on the whole screen their visible areas turn black. Opaque windows in front stay visible instead of being blacked out with the private window behind them. Transparent overlays do not count as covers, since private content can show through them. Around window changes, short safety margins can hide a little more to keep private content out.
 
 Replix speaks English, Deutsch, Español, Français, Italiano, Português, Polski, Русский, Türkçe, 日本語, 한국어 and 简体中文, and follows the system's language unless you pick one.
 
@@ -83,6 +83,7 @@ Replix runs on all three systems. Windows has everything above; on the others a 
 | FFmpeg | downloaded by Replix | from your package manager: `sudo apt install ffmpeg` (or dnf, pacman) | from Homebrew: `brew install ffmpeg` |
 | Games, one app | yes | X11, and games under XWayland on Wayland (most games, Proton too) | yes, recorded as the display the game is on |
 | Whole screen | yes | X11 session | yes, after allowing *Screen Recording* |
+| Private windows | visible areas are blacked out; opaque windows in front stay visible | same, on X11 | same, including app captures recorded as a display |
 | A track per app | yes | yes, through PulseAudio or PipeWire (`pulseaudio-utils`) | no: the microphone, plus all system sound when a loopback device like [BlackHole](https://existential.audio/blackhole/) is installed |
 | Video encoder | NVIDIA, AMD, Intel, processor | NVIDIA, VA-API (AMD, Intel), processor | VideoToolbox, processor |
 | Copy a clip | yes | with `wl-clipboard` or `xclip` | yes |

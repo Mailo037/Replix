@@ -17,7 +17,10 @@ use x11rb::protocol::randr::ConnectionExt as _;
 use x11rb::protocol::xproto::{AtomEnum, ConnectionExt as _, Window};
 use x11rb::rust_connection::RustConnection;
 
-use super::{areas_of, exe_name, Area, Capture, Grab, MonitorInfo, ProcessEntry, Seen, WindowInfo, WindowMemo};
+use super::{
+    areas_of, exe_name, Area, Capture, Grab, MonitorInfo, ProcessEntry, Seen, WindowInfo,
+    WindowMemo,
+};
 
 struct Atoms {
     active: u32,
@@ -60,7 +63,9 @@ fn connect() -> anyhow::Result<X> {
     let (conn, screen) = x11rb::connect(None)?;
     let s = &conn.setup().roots[screen];
     let (root, root_size) = (s.root, (s.width_in_pixels, s.height_in_pixels));
-    let atom = |name: &str| -> anyhow::Result<u32> { Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom) };
+    let atom = |name: &str| -> anyhow::Result<u32> {
+        Ok(conn.intern_atom(false, name.as_bytes())?.reply()?.atom)
+    };
     let atoms = Atoms {
         active: atom("_NET_ACTIVE_WINDOW")?,
         clients: atom("_NET_CLIENT_LIST")?,
@@ -76,7 +81,12 @@ fn connect() -> anyhow::Result<X> {
         normal: atom("_NET_WM_WINDOW_TYPE_NORMAL")?,
         opacity: atom("_NET_WM_WINDOW_OPACITY")?,
     };
-    Ok(X { conn, root, root_size, atoms })
+    Ok(X {
+        conn,
+        root,
+        root_size,
+        atoms,
+    })
 }
 
 fn wayland() -> bool {
@@ -105,8 +115,17 @@ impl X {
     }
 
     fn text(&self, w: Window, atom: u32, kind: u32) -> Option<String> {
-        let reply = self.conn.get_property(false, w, atom, kind, 0, 1024).ok()?.reply().ok()?;
-        (!reply.value.is_empty()).then(|| String::from_utf8_lossy(&reply.value).trim_end_matches('\0').to_string())
+        let reply = self
+            .conn
+            .get_property(false, w, atom, kind, 0, 1024)
+            .ok()?
+            .reply()
+            .ok()?;
+        (!reply.value.is_empty()).then(|| {
+            String::from_utf8_lossy(&reply.value)
+                .trim_end_matches('\0')
+                .to_string()
+        })
     }
 
     fn title(&self, w: Window) -> String {
@@ -126,25 +145,45 @@ impl X {
     /// (left, top, right, bottom) on the root window.
     fn rect(&self, w: Window) -> Option<(i32, i32, i32, i32)> {
         let g = self.conn.get_geometry(w).ok()?.reply().ok()?;
-        let at = self.conn.translate_coordinates(w, self.root, 0, 0).ok()?.reply().ok()?;
+        let at = self
+            .conn
+            .translate_coordinates(w, self.root, 0, 0)
+            .ok()?
+            .reply()
+            .ok()?;
         let (l, t) = (i32::from(at.dst_x), i32::from(at.dst_y));
         Some((l, t, l + i32::from(g.width), t + i32::from(g.height)))
     }
 
     /// Every monitor as (left, top, right, bottom), and whether it is the main one.
     fn monitor_rects(&self) -> Vec<((i32, i32, i32, i32), bool)> {
-        let found = self.conn.randr_get_monitors(self.root, true).ok().and_then(|c| c.reply().ok());
+        let found = self
+            .conn
+            .randr_get_monitors(self.root, true)
+            .ok()
+            .and_then(|c| c.reply().ok());
         let mut out: Vec<_> = found
             .map(|r| r.monitors)
             .unwrap_or_default()
             .into_iter()
             .map(|m| {
                 let (l, t) = (i32::from(m.x), i32::from(m.y));
-                ((l, t, l + i32::from(m.width), t + i32::from(m.height)), m.primary)
+                (
+                    (l, t, l + i32::from(m.width), t + i32::from(m.height)),
+                    m.primary,
+                )
             })
             .collect();
         if out.is_empty() {
-            out.push(((0, 0, i32::from(self.root_size.0), i32::from(self.root_size.1)), true));
+            out.push((
+                (
+                    0,
+                    0,
+                    i32::from(self.root_size.0),
+                    i32::from(self.root_size.1),
+                ),
+                true,
+            ));
         }
         out
     }
@@ -158,21 +197,38 @@ impl X {
         let exe = exe_name(&exe_path).to_string();
         let fullscreen = self.has_state(w, self.atoms.fullscreen)
             || self.rect(w).is_some_and(|r| {
-                self.monitor_rects().iter().any(|(m, _)| r.0 <= m.0 && r.1 <= m.1 && r.2 >= m.2 && r.3 >= m.3)
+                self.monitor_rects()
+                    .iter()
+                    .any(|(m, _)| r.0 <= m.0 && r.1 <= m.1 && r.2 >= m.2 && r.3 >= m.3)
             });
-        Some(WindowInfo { hwnd: u64::from(w), title: self.title(w), exe, exe_path, pid, fullscreen })
+        Some(WindowInfo {
+            hwnd: u64::from(w),
+            title: self.title(w),
+            exe,
+            exe_path,
+            pid,
+            fullscreen,
+        })
     }
 }
 
 pub fn is_window(raw: u64) -> bool {
     let Some(x) = x() else { return false };
-    let Ok(w) = Window::try_from(raw) else { return false };
-    x.conn.get_window_attributes(w).ok().and_then(|c| c.reply().ok()).is_some()
+    let Ok(w) = Window::try_from(raw) else {
+        return false;
+    };
+    x.conn
+        .get_window_attributes(w)
+        .ok()
+        .and_then(|c| c.reply().ok())
+        .is_some()
 }
 
 /// Minimised windows send x11grab no new pictures.
 pub fn is_minimized(raw: u64) -> bool {
-    let (Some(x), Ok(w)) = (x(), Window::try_from(raw)) else { return false };
+    let (Some(x), Ok(w)) = (x(), Window::try_from(raw)) else {
+        return false;
+    };
     x.has_state(w, x.atoms.hidden)
 }
 
@@ -193,7 +249,9 @@ pub fn list_windows() -> Vec<WindowInfo> {
         .into_iter()
         .filter(|&w| {
             let kinds = x.prop32(w, x.atoms.kind);
-            (kinds.is_empty() || kinds.contains(&x.atoms.normal)) && !x.has_state(w, x.atoms.skip_taskbar) && !x.title(w).is_empty()
+            (kinds.is_empty() || kinds.contains(&x.atoms.normal))
+                && !x.has_state(w, x.atoms.skip_taskbar)
+                && !x.title(w).is_empty()
         })
         .filter_map(|w| x.describe(w))
         .filter(|w| w.pid != own && !w.exe.is_empty())
@@ -201,8 +259,8 @@ pub fn list_windows() -> Vec<WindowInfo> {
 }
 
 /// Where the windows of programs from `exes` (lower-case executable names) show on the
-/// monitor with this index, by window. Minimised windows and those entirely behind one
-/// solid window are left out.
+/// monitor with this index, by window. Minimised windows are left out; solid windows in
+/// front keep their own picture.
 pub fn excluded_areas(index: u32, exes: &[String], memo: &mut WindowMemo) -> Vec<(u64, Area)> {
     if exes.is_empty() {
         memo.windows.clear();
@@ -210,14 +268,29 @@ pub fn excluded_areas(index: u32, exes: &[String], memo: &mut WindowMemo) -> Vec
     }
     let Some(x) = x() else { return Vec::new() };
     let monitors = x.monitor_rects();
-    let Some(&(monitor, _)) = monitors.get(index as usize).or(monitors.first()) else { return Vec::new() };
+    let Some(&(monitor, _)) = monitors.get(index as usize).or(monitors.first()) else {
+        return Vec::new();
+    };
     // Bottom to top in the list; the check wants the topmost first.
     let stacking = x.prop32(x.root, x.atoms.stacking);
-    let seen = stacking.into_iter().rev().filter(|&w| !x.has_state(w, x.atoms.hidden)).filter_map(|w| {
-        let rect = x.rect(w)?;
-        let opacity = x.prop32(w, x.atoms.opacity).first().copied().unwrap_or(u32::MAX);
-        Some(Seen { id: u64::from(w), pid: x.pid(w), rect, solid: opacity == u32::MAX })
-    });
+    let seen = stacking
+        .into_iter()
+        .rev()
+        .filter(|&w| !x.has_state(w, x.atoms.hidden))
+        .filter_map(|w| {
+            let rect = x.rect(w)?;
+            let opacity = x
+                .prop32(w, x.atoms.opacity)
+                .first()
+                .copied()
+                .unwrap_or(u32::MAX);
+            Some(Seen {
+                id: u64::from(w),
+                pid: x.pid(w),
+                rect,
+                solid: opacity == u32::MAX,
+            })
+        });
     areas_of(seen, monitor, exes, memo)
 }
 
@@ -226,7 +299,12 @@ pub fn monitors() -> Vec<MonitorInfo> {
     x.monitor_rects()
         .into_iter()
         .enumerate()
-        .map(|(i, ((l, t, r, b), primary))| MonitorInfo { index: i as u32, width: r - l, height: b - t, primary })
+        .map(|(i, ((l, t, r, b), primary))| MonitorInfo {
+            index: i as u32,
+            width: r - l,
+            height: b - t,
+            primary,
+        })
         .collect()
 }
 
@@ -243,46 +321,83 @@ pub fn screen_of_window(_raw: u64) -> Option<u32> {
 /// The videos folder as the desktop names it ("Vidéos", "Видео"), from user-dirs.dirs,
 /// else ~/Videos.
 pub fn videos_dir() -> PathBuf {
-    let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(|| ".".into());
+    let home = std::env::var_os("HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| ".".into());
     xdg_videos_dir(&home).unwrap_or_else(|| home.join("Videos"))
 }
 
 fn xdg_videos_dir(home: &Path) -> Option<PathBuf> {
-    let config = std::env::var_os("XDG_CONFIG_HOME").map(PathBuf::from).unwrap_or_else(|| home.join(".config"));
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"));
     let text = std::fs::read_to_string(config.join("user-dirs.dirs")).ok()?;
-    let line = text.lines().find_map(|l| l.trim().strip_prefix("XDG_VIDEOS_DIR="))?;
-    let value = line.trim_matches('"').replace("$HOME", &home.to_string_lossy());
+    let line = text
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("XDG_VIDEOS_DIR="))?;
+    let value = line
+        .trim_matches('"')
+        .replace("$HOME", &home.to_string_lossy());
     // A videos folder that is the home folder itself means the user turned it off.
     let path = PathBuf::from(value);
     (path.is_absolute() && path != home).then_some(path)
 }
 
 fn display() -> String {
-    std::env::var("DISPLAY").ok().filter(|d| !d.is_empty()).unwrap_or_else(|| ":0".into())
+    std::env::var("DISPLAY")
+        .ok()
+        .filter(|d| !d.is_empty())
+        .unwrap_or_else(|| ":0".into())
 }
 
 /// The FFmpeg input for a window or monitor; `chain` is added to its filters.
 pub fn capture(grab: Grab, fps: u32, cursor: bool, chain: &str) -> Capture {
-    let mut input: Vec<String> = ["-thread_queue_size", "512", "-f", "x11grab"].map(String::from).to_vec();
-    input.extend(["-framerate".into(), fps.to_string(), "-draw_mouse".into(), u8::from(cursor).to_string()]);
+    let mut input: Vec<String> = ["-thread_queue_size", "512", "-f", "x11grab"]
+        .map(String::from)
+        .to_vec();
+    input.extend([
+        "-framerate".into(),
+        fps.to_string(),
+        "-draw_mouse".into(),
+        u8::from(cursor).to_string(),
+    ]);
     match grab {
         Grab::Window(id) => {
-            input.extend(["-window_id".into(), format!("0x{id:x}"), "-i".into(), display()]);
+            input.extend([
+                "-window_id".into(),
+                format!("0x{id:x}"),
+                "-i".into(),
+                display(),
+            ]);
         }
         Grab::Monitor(index) => {
             let rects = x().map(X::monitor_rects).unwrap_or_default();
-            let ((l, t, r, b), _) = rects.get(index as usize).or(rects.first()).copied().unwrap_or(((0, 0, 1920, 1080), true));
-            input.extend(["-video_size".into(), format!("{}x{}", r - l, b - t), "-i".into(), format!("{}+{l},{t}", display())]);
+            let ((l, t, r, b), _) = rects
+                .get(index as usize)
+                .or(rects.first())
+                .copied()
+                .unwrap_or(((0, 0, 1920, 1080), true));
+            input.extend([
+                "-video_size".into(),
+                format!("{}x{}", r - l, b - t),
+                "-i".into(),
+                format!("{}+{l},{t}", display()),
+            ]);
         }
     }
     // Even sizes: several encoders reject odd widths.
-    Capture { input, filter: Some(format!("scale=trunc(iw/2)*2:trunc(ih/2)*2{chain}")) }
+    Capture {
+        input,
+        filter: Some(format!("scale=trunc(iw/2)*2:trunc(ih/2)*2{chain}")),
+    }
 }
 
 /// A test picture as an encoder gets it while recording, for trying encoders.
 pub fn test_capture(chain: &str) -> Capture {
     Capture {
-        input: ["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30"].map(String::from).to_vec(),
+        input: ["-f", "lavfi", "-i", "testsrc2=size=1280x720:rate=30"]
+            .map(String::from)
+            .to_vec(),
         filter: Some(format!("null{chain}")),
     }
 }
@@ -298,7 +413,11 @@ pub fn process_path(pid: u32) -> Option<String> {
         }
     }
     let link = std::fs::read_link(format!("/proc/{pid}/exe")).ok()?;
-    Some(link.to_string_lossy().trim_end_matches(" (deleted)").to_string())
+    Some(
+        link.to_string_lossy()
+            .trim_end_matches(" (deleted)")
+            .to_string(),
+    )
 }
 
 /// pid, parent pid and short name from /proc/<pid>/stat.
@@ -307,7 +426,10 @@ fn stat(pid: u32) -> Option<(u32, String, Vec<String>)> {
     // The name sits in brackets and may itself hold spaces and brackets.
     let (open, close) = (text.find('(')?, text.rfind(')')?);
     let comm = text[open + 1..close].to_string();
-    let rest: Vec<String> = text[close + 1..].split_whitespace().map(String::from).collect();
+    let rest: Vec<String> = text[close + 1..]
+        .split_whitespace()
+        .map(String::from)
+        .collect();
     let parent = rest.get(1)?.parse().ok()?;
     Some((parent, comm, rest))
 }
@@ -315,12 +437,33 @@ fn stat(pid: u32) -> Option<(u32, String, Vec<String>)> {
 /// Every running process by pid.
 pub fn processes() -> HashMap<u32, ProcessEntry> {
     let mut out = HashMap::new();
-    let Ok(entries) = std::fs::read_dir("/proc") else { return out };
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return out;
+    };
     for entry in entries.flatten() {
-        let Some(pid) = entry.file_name().to_str().and_then(|n| n.parse::<u32>().ok()) else { continue };
-        let Some((parent, comm, _)) = stat(pid) else { continue };
-        let exe = process_path(pid).map(|p| exe_name(&p).to_string()).filter(|e| !e.is_empty()).unwrap_or(comm);
-        out.insert(pid, ProcessEntry { pid, parent, exe_lower: exe.to_lowercase(), exe });
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|n| n.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let Some((parent, comm, _)) = stat(pid) else {
+            continue;
+        };
+        let exe = process_path(pid)
+            .map(|p| exe_name(&p).to_string())
+            .filter(|e| !e.is_empty())
+            .unwrap_or(comm);
+        out.insert(
+            pid,
+            ProcessEntry {
+                pid,
+                parent,
+                exe_lower: exe.to_lowercase(),
+                exe,
+            },
+        );
     }
     out
 }
@@ -333,10 +476,17 @@ pub(super) fn file_description(_path: &str) -> Option<String> {
 /// Each graphics card with its driver, to notice new hardware or drivers.
 pub fn gpu_signature() -> Vec<String> {
     let mut out = Vec::new();
-    let read = |p: String| std::fs::read_to_string(p).map(|s| s.trim().to_string()).unwrap_or_default();
+    let read = |p: String| {
+        std::fs::read_to_string(p)
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default()
+    };
     if let Ok(cards) = std::fs::read_dir("/sys/class/drm") {
-        let mut names: Vec<String> =
-            cards.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.starts_with("card") && !n.contains('-')).collect();
+        let mut names: Vec<String> = cards
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.starts_with("card") && !n.contains('-'))
+            .collect();
         names.sort();
         for card in names {
             let dev = format!("/sys/class/drm/{card}/device");
@@ -344,11 +494,22 @@ pub fn gpu_signature() -> Vec<String> {
                 .ok()
                 .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
                 .unwrap_or_default();
-            out.push(format!("{} {}:{} {driver}", card, read(format!("{dev}/vendor")), read(format!("{dev}/device"))));
+            out.push(format!(
+                "{} {}:{} {driver}",
+                card,
+                read(format!("{dev}/vendor")),
+                read(format!("{dev}/device"))
+            ));
         }
     }
-    out.push(format!("nvidia {}", read("/sys/module/nvidia/version".into())));
-    out.push(format!("kernel {}", read("/proc/sys/kernel/osrelease".into())));
+    out.push(format!(
+        "nvidia {}",
+        read("/sys/module/nvidia/version".into())
+    ));
+    out.push(format!(
+        "kernel {}",
+        read("/proc/sys/kernel/osrelease".into())
+    ));
     out
 }
 
@@ -402,8 +563,17 @@ pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
     let home = std::env::var("HOME").unwrap_or_default();
     let mut sizes = [16u32, 24, 32, 48, 64, 128, 256].to_vec();
     // The closest size at or above the one asked for first.
-    sizes.sort_by_key(|s| if *s >= size { s - size } else { 1000 + size - s });
-    let roots = [format!("{home}/.local/share/icons/hicolor"), "/usr/share/icons/hicolor".into()];
+    sizes.sort_by_key(|s| {
+        if *s >= size {
+            s - size
+        } else {
+            1000 + size - s
+        }
+    });
+    let roots = [
+        format!("{home}/.local/share/icons/hicolor"),
+        "/usr/share/icons/hicolor".into(),
+    ];
     let mut candidates: Vec<String> = Vec::new();
     for s in &sizes {
         for root in &roots {
