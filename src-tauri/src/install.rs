@@ -31,6 +31,8 @@ use tauri::{AppHandle, Emitter};
 #[cfg(windows)]
 use tauri::Manager;
 
+#[cfg(unix)]
+use crate::ffmpeg::parse_version;
 #[cfg(windows)]
 use crate::ffmpeg::SpawnTied;
 
@@ -196,14 +198,6 @@ fn check_system(dir: &Path) -> Result<()> {
         bail!(crate::i18n::trf("This FFmpeg can't record the screen: it was built without {grabber}.", &[("grabber", &GRABBER)]));
     }
     Ok(())
-}
-
-/// "6.1.1" from "ffmpeg version 6.1.1-3ubuntu5 Copyright …", or "7.1" from "ffmpeg version n7.1".
-#[cfg(unix)]
-fn parse_version(text: &str) -> Option<String> {
-    let word = text.lines().next()?.strip_prefix("ffmpeg version ")?.split_whitespace().next()?;
-    let word = word.strip_prefix('n').filter(|w| w.starts_with(|c: char| c.is_ascii_digit())).unwrap_or(word);
-    Some(word.split(['-', '+', '~']).next().unwrap_or(word).to_string())
 }
 
 #[cfg(windows)]

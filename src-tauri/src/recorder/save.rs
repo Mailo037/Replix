@@ -363,7 +363,7 @@ fn black_out_args(
     kbps: u32,
 ) -> Vec<String> {
     let mut args: Vec<String> =
-        vec!["-y".into(), "-i".into(), ffmpeg::path_arg(source), "-/filter_complex".into(), ffmpeg::path_arg(graph)];
+        vec!["-y".into(), "-i".into(), ffmpeg::path_arg(source), ffmpeg::graph_file_option().into(), ffmpeg::path_arg(graph)];
     args.extend(["-map".into(), "[v]".into()]);
     for (k, name) in names.iter().enumerate() {
         args.push("-map".into());

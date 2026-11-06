@@ -110,6 +110,40 @@ fn run_checked(mut cmd: Command, args: &[String], timeout: Duration, keep_going:
     }
 }
 
+/// "6.1.1" from "ffmpeg version 6.1.1-3ubuntu5 Copyright …", or "7.1" from "ffmpeg version n7.1".
+/// Builds from Git name a date or commit instead ("N-118000-g…" gives "N").
+pub fn parse_version(text: &str) -> Option<String> {
+    let word = text.lines().next()?.strip_prefix("ffmpeg version ")?.split_whitespace().next()?;
+    let word = word.strip_prefix('n').filter(|w| w.starts_with(|c: char| c.is_ascii_digit())).unwrap_or(word);
+    Some(word.split(['-', '+', '~']).next().unwrap_or(word).to_string())
+}
+
+/// The major version of the FFmpeg Replix runs. A build from Git counts as the newest.
+fn major_version() -> u32 {
+    static MAJOR: std::sync::OnceLock<u32> = std::sync::OnceLock::new();
+    *MAJOR.get_or_init(|| {
+        let mut cmd = Command::new(exe());
+        crate::platform::background(&mut cmd, false);
+        let text = cmd.arg("-version").stdin(Stdio::null()).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+        let number = text.ok().as_deref().and_then(parse_version).unwrap_or_default();
+        match number.split('.').next().and_then(|m| m.parse().ok()) {
+            Some(major) => major,
+            None if !number.is_empty() => u32::MAX,
+            None => 0,
+        }
+    })
+}
+
+/// The option that reads a filter graph from a file. FFmpeg 7 replaced `-filter_complex_script`
+/// with `-/filter_complex`; Linux and macOS may still have FFmpeg 6.
+pub fn graph_file_option() -> &'static str {
+    if major_version() >= 7 {
+        "-/filter_complex"
+    } else {
+        "-filter_complex_script"
+    }
+}
+
 pub fn last_lines(text: &str, n: usize) -> String {
     let lines: Vec<&str> = text.lines().filter(|l| !l.trim().is_empty()).collect();
     lines[lines.len().saturating_sub(n)..].join("\n")

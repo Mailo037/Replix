@@ -864,9 +864,18 @@ mod tests {
     #[test]
     fn a_stuck_export_is_ended_after_its_output_closes() {
         let start = |script: &str| {
+            let mut shell = if cfg!(windows) {
+                let mut c = std::process::Command::new("powershell");
+                c.args(["-NoProfile", "-Command"]);
+                c
+            } else {
+                let mut c = std::process::Command::new("sh");
+                c.arg("-c");
+                c
+            };
             Reaped(
-                std::process::Command::new("powershell")
-                    .args(["-NoProfile", "-Command", script])
+                shell
+                    .arg(script)
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null())
@@ -878,7 +887,7 @@ mod tests {
         // Its progress already ended (the sender is gone), the process lives on, idle.
         let (_, moved) = std::sync::mpsc::channel::<f64>();
         let begun = std::time::Instant::now();
-        let hung = watch_export(start("Start-Sleep 60"), &moved, quick(begun), &|| false, |_| {});
+        let hung = watch_export(start(if cfg!(windows) { "Start-Sleep 60" } else { "sleep 60" }), &moved, quick(begun), &|| false, |_| {});
         assert!(hung.is_err());
         let took = begun.elapsed();
         assert!(took >= std::time::Duration::from_secs(2) && took < std::time::Duration::from_secs(20), "{took:?}");
@@ -890,7 +899,7 @@ mod tests {
         // Cancelled: ended at once, even while busy.
         let (_, moved) = std::sync::mpsc::channel::<f64>();
         let begun = std::time::Instant::now();
-        let busy = start("while ($true) {}");
+        let busy = start(if cfg!(windows) { "while ($true) {}" } else { "while :; do :; done" });
         let stop = watch_export(busy, &moved, Watch::new(60.0, begun), &|| begun.elapsed() > std::time::Duration::from_secs(1), |_| {});
         assert_eq!(stop.unwrap_err().to_string(), CANCELLED);
         assert!(begun.elapsed() < std::time::Duration::from_secs(10));
