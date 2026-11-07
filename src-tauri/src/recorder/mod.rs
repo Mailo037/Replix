@@ -28,6 +28,21 @@ use health::Health;
 use pipeline::{private_masks, segment_name, Pipeline, Segment, Session, Target, SEGMENT_SECONDS};
 use save::{Placeholder, SaveJob};
 
+/// A locked screen or a sleeping graphics adapter can make every encoder test fail.
+const ENCODER_RETRY: Duration = Duration::from_secs(60);
+
+type EncoderResult = (Vec<&'static Encoder>, bool);
+type EncoderProbe = std::thread::JoinHandle<EncoderResult>;
+
+/// Slow graphics tests never hold up a pause or a change of source.
+fn finish_encoder_probe(probe: &mut Option<EncoderProbe>) -> Option<EncoderResult> {
+    let probe = probe.take_if(|probe| probe.is_finished())?;
+    Some(probe.join().unwrap_or_else(|_| {
+        log::error!("encoder test thread failed");
+        (Vec::new(), false)
+    }))
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum RecState {
@@ -48,6 +63,26 @@ pub struct Status {
     pub error: Option<String>,
     /// Clip length for what is being recorded; a game's own setting can differ from the general one.
     pub clip_seconds: Option<u32>,
+}
+
+/// Waiting means there is no target, not that the recorder cannot encode it.
+fn idle_status(
+    enabled: bool,
+    has_encoder: bool,
+    retry_error: Option<String>,
+) -> (RecState, Option<String>) {
+    if !enabled {
+        (RecState::Off, None)
+    } else if !has_encoder {
+        (
+            RecState::Error,
+            Some(tr("No video encoder works on this PC.")),
+        )
+    } else if let Some(error) = retry_error {
+        (RecState::Error, Some(error))
+    } else {
+        (RecState::Waiting, None)
+    }
 }
 
 pub enum Command {
@@ -91,6 +126,7 @@ impl Recorder {
             status: status.clone(),
             encoders: encoders.clone(),
             encoders_cached: false,
+            encoder_probe: None,
             pipeline: None,
             retry_at: None,
             health: Health::default(),
@@ -111,6 +147,7 @@ struct Worker {
     encoders: Arc<Mutex<Vec<&'static Encoder>>>,
     /// The encoder list came from an earlier test and may be out of date.
     encoders_cached: bool,
+    encoder_probe: Option<EncoderProbe>,
     pipeline: Option<Pipeline>,
     retry_at: Option<Instant>,
     health: Health,
@@ -125,6 +162,7 @@ impl Worker {
         *self.encoders.lock() = found;
         self.encoders_cached = cached;
         if self.encoders.lock().is_empty() {
+            self.retry_at = Some(Instant::now() + ENCODER_RETRY);
             self.set_status(RecState::Error, None, Some(tr("No video encoder works on this PC.")));
         }
         let buffer_root = self.buffer_root();
@@ -134,6 +172,11 @@ impl Worker {
                 Ok(command) => self.handle(command),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
+            }
+            // Tests can finish between commands; apply all settings already handed over
+            // before a recovered encoder starts recording again.
+            for command in rx.try_iter() {
+                self.handle(command);
             }
             self.tick();
         }
@@ -242,10 +285,22 @@ impl Worker {
         }
     }
 
-    fn tick(&mut self) {
-        if matches!(self.status.lock().state, RecState::Starting) && self.encoders.lock().is_empty() {
-            return;
+    fn refresh_encoders(&mut self) {
+        if let Some((found, cached)) = finish_encoder_probe(&mut self.encoder_probe) {
+            let empty = found.is_empty();
+            *self.encoders.lock() = found;
+            self.encoders_cached = cached;
+            self.retry_at = empty.then(|| Instant::now() + ENCODER_RETRY);
         }
+        if self.settings.enabled && self.encoders.lock().is_empty()
+            && self.encoder_probe.is_none() && self.retry_at.is_none_or(|t| Instant::now() >= t)
+        {
+            let cache = self.encoder_cache();
+            self.encoder_probe = Some(std::thread::spawn(move || encoder::detect_cached(&cache)));
+        }
+    }
+
+    fn tick(&mut self) {
         // Nothing can be recorded at all here, e.g. a Linux session without X11.
         if self.settings.enabled {
             if let Some(problem) = platform::capture_unavailable(matches!(self.settings.source, CaptureSource::Screen)) {
@@ -256,6 +311,11 @@ impl Worker {
                 self.set_status(RecState::Error, None, Some(problem));
                 return;
             }
+        }
+        self.refresh_encoders();
+        if self.settings.enabled && self.encoder_probe.is_some() {
+            self.set_status(RecState::Starting, None, None);
+            return;
         }
         let desired = self.desired_target();
         let running = self.pipeline.as_ref().map(|p| p.target.clone());
@@ -305,8 +365,7 @@ impl Worker {
             if self.encoders_cached {
                 self.encoders_cached = false;
                 let _ = std::fs::remove_file(self.encoder_cache());
-                let (found, _) = encoder::detect_cached(&self.encoder_cache());
-                *self.encoders.lock() = found;
+                self.encoders.lock().clear();
             }
             self.retry_at = Some(Instant::now() + self.health.wait());
             let message = if error.is_empty() { tr("The capture stopped unexpectedly.") } else { error };
@@ -320,9 +379,21 @@ impl Worker {
                 let label = p.target.label();
                 self.set_status_full(RecState::Recording, Some(label), since, None);
             }
-            None if !self.settings.enabled => self.set_status(RecState::Off, None, None),
-            None if self.status.lock().state == RecState::Error && self.retry_at.is_some_and(|t| Instant::now() < t) => {}
-            None => self.set_status(RecState::Waiting, None, None),
+            None => {
+                let current = self.status.lock().clone();
+                let retry_error = self
+                    .retry_at
+                    .filter(|t| Instant::now() < *t)
+                    .and(current.error);
+                let (state, error) =
+                    idle_status(self.settings.enabled, self.encoder().is_some(), retry_error);
+                let target = if state == RecState::Error {
+                    current.target
+                } else {
+                    None
+                };
+                self.set_status(state, target, error);
+            }
         }
     }
 
@@ -575,5 +646,72 @@ impl Worker {
                 }
             }
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_unfinished_encoder_probe_leaves_the_recorder_free() {
+        let (done, wait) = std::sync::mpsc::channel();
+        let mut probe = Some(std::thread::spawn(move || {
+            wait.recv().unwrap();
+            (vec![encoder::software()], false)
+        }));
+        let result = finish_encoder_probe(&mut probe);
+        // Release the test thread even if a later assertion fails.
+        done.send(()).unwrap();
+        assert!(result.is_none());
+        assert!(probe.is_some(), "a running test stays available for the next tick");
+        probe.take().unwrap().join().unwrap();
+    }
+
+    #[test]
+    fn a_finished_encoder_probe_is_collected_once() {
+        let mut probe = Some(std::thread::spawn(|| (vec![encoder::software()], false)));
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while !probe.as_ref().unwrap().is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let (found, cached) = finish_encoder_probe(&mut probe).expect("test completed");
+        assert_eq!(found, vec![encoder::software()]);
+        assert!(!cached);
+        assert!(probe.is_none());
+        assert!(finish_encoder_probe(&mut probe).is_none());
+    }
+
+    #[test]
+    fn missing_encoders_are_never_reported_as_waiting_for_a_target() {
+        for retry_error in [None, Some("capture failed".to_string())] {
+            let (state, error) = idle_status(true, false, retry_error);
+            assert_eq!(state, RecState::Error);
+            assert!(error.is_some_and(|e| !e.is_empty()));
+        }
+    }
+
+    #[test]
+    fn pausing_clears_encoder_and_capture_errors() {
+        for has_encoder in [false, true] {
+            assert_eq!(
+                idle_status(false, has_encoder, Some("capture failed".into())),
+                (RecState::Off, None)
+            );
+        }
+    }
+
+    #[test]
+    fn capture_errors_stay_visible_until_the_next_attempt() {
+        let error = "capture failed".to_string();
+        assert_eq!(
+            idle_status(true, true, Some(error.clone())),
+            (RecState::Error, Some(error))
+        );
+    }
+
+    #[test]
+    fn working_encoders_without_a_target_wait_normally() {
+        assert_eq!(idle_status(true, true, None), (RecState::Waiting, None));
     }
 }

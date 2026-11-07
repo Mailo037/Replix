@@ -108,17 +108,19 @@ pub fn args(encoder: &Encoder, kbps: u32) -> Vec<String> {
     a
 }
 
-fn works(encoder: &Encoder) -> bool {
+fn works(encoder: &Encoder) -> anyhow::Result<()> {
     let capture = platform::test_capture(encoder.filters);
     let mut args: Vec<String> = encoder.device.iter().map(|a| a.to_string()).collect();
     args.extend(capture.input);
     if let Some(filter) = capture.filter {
         args.extend(["-filter:v".into(), filter]);
     }
-    args.extend(["-frames:v".into(), "15".into()]);
+    // One frame initializes and flushes the encoder. Graphics Capture may not supply
+    // another until the desktop changes, so asking for more can reject working encoders.
+    args.extend(["-frames:v".into(), "1".into()]);
     args.extend(self::args(encoder, 4_000));
     args.extend(["-f".into(), "null".into(), "-".into()]);
-    ffmpeg::run_with_timeout(&args, Duration::from_secs(10)).is_ok()
+    ffmpeg::run_with_timeout(&args, Duration::from_secs(10))
 }
 
 #[derive(Serialize, Deserialize)]
@@ -164,11 +166,12 @@ pub fn detect() -> Vec<&'static Encoder> {
         if candidate.id.ends_with("-copy") && found.iter().any(|e: &&Encoder| e.codec == candidate.codec) {
             continue;
         }
-        if works(candidate) {
-            log::info!("encoder works: {}", candidate.id);
-            found.push(candidate);
-        } else {
-            log::info!("encoder unavailable: {}", candidate.id);
+        match works(candidate) {
+            Ok(()) => {
+                log::info!("encoder works: {}", candidate.id);
+                found.push(candidate);
+            }
+            Err(e) => log::info!("encoder unavailable: {}: {e:#}", candidate.id),
         }
     }
     found

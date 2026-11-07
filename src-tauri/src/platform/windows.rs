@@ -614,12 +614,9 @@ fn lavfi(source: String) -> Vec<String> {
     vec!["-f".into(), "lavfi".into(), "-i".into(), source]
 }
 
-/// A test picture as an encoder gets it while recording, for trying encoders.
+/// Uses the recording path so a still desktop does not make working encoders time out.
 pub fn test_capture(chain: &str) -> Capture {
-    Capture {
-        input: lavfi(format!("gfxcapture=monitor_idx=0:max_framerate=30{chain}")),
-        filter: None,
-    }
+    capture(Grab::Monitor(0), 30, false, chain)
 }
 
 /// Why recording cannot work here, when it cannot: Windows always has a way.
@@ -783,6 +780,15 @@ pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encoder_probe_uses_the_screen_recording_path() {
+        let chain = ",hwdownload,format=bgra,format=yuv420p";
+        assert_eq!(
+            test_capture(chain),
+            capture(Grab::Monitor(0), 30, false, chain)
+        );
+    }
 
     /// A tied helper sits in the job whose closing ends it along with Replix.
     #[test]
