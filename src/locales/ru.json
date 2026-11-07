@@ -1,4 +1,6 @@
 {
+  "Audio was unavailable. This recording was saved without sound.": "Звук был недоступен. Эта запись сохранена без звука.",
+  "Some audio tracks were unavailable and could not be saved.": "Некоторые звуковые дорожки были недоступны и не были сохранены.",
   " · {n} of {total}": " · {n} из {total}",
   "[ clean voice ]": "[ чистый голос ]",
   "[ everything ]": "[ всё ]",

@@ -1,4 +1,6 @@
 {
+  "Audio was unavailable. This recording was saved without sound.": "El audio no estaba disponible. Esta grabación se ha guardado sin sonido.",
+  "Some audio tracks were unavailable and could not be saved.": "Algunas pistas de audio no estaban disponibles y no se han podido guardar.",
   " · {n} of {total}": " · {n} de {total}",
   "[ clean voice ]": "[ voz limpia ]",
   "[ everything ]": "[ todo ]",

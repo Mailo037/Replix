@@ -175,7 +175,8 @@ impl Pipeline {
             Target::Window { .. } => settings.source == crate::settings::CaptureSource::Game,
         };
         let capture = target.capture(settings.fps, settings.capture_cursor, &format!(",fps={}{}", settings.fps, encoder.filters));
-        let mut args: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "warning".into()];
+        // A failed audio input must end the capture too, so the worker can restart it.
+        let mut args: Vec<String> = vec!["-hide_banner".into(), "-loglevel".into(), "warning".into(), "-xerror".into()];
         args.extend(encoder.device.iter().map(|a| a.to_string()));
         args.extend(capture.input);
         for pipe in &pipes {
@@ -260,7 +261,7 @@ impl Pipeline {
     }
 
     pub fn alive(&mut self) -> bool {
-        matches!(self.child.try_wait(), Ok(None))
+        matches!(self.child.try_wait(), Ok(None)) && self.router.alive()
     }
 
     /// Stream time now, in seconds.
@@ -275,6 +276,7 @@ impl Pipeline {
     }
 
     pub fn stop(&mut self) {
+        self.router.prepare_stop();
         if let Some(mut stdin) = self.stdin.take() {
             let _ = stdin.write_all(b"q");
         }

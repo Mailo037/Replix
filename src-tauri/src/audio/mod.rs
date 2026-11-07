@@ -235,7 +235,13 @@ fn spawn_writer(pipe: PipeServer, ring: Arc<Ring>, stop: Arc<AtomicBool>) -> Joi
     std::thread::Builder::new()
         .name("audio-pipe".into())
         .spawn(move || {
-            if pipe.connect().is_err() || stop.load(Ordering::Relaxed) {
+            if let Err(e) = pipe.connect() {
+                if !stop.load(Ordering::Relaxed) {
+                    log::warn!("could not connect audio pipe {}: {e:#}", pipe.path);
+                }
+                return;
+            }
+            if stop.load(Ordering::Relaxed) {
                 return;
             }
             ring.clear();
@@ -255,7 +261,10 @@ fn spawn_writer(pipe: PipeServer, ring: Arc<Ring>, stop: Arc<AtomicBool>) -> Joi
                 ring.take(frames * CHANNELS, &mut samples);
                 bytes.clear();
                 bytes.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
-                if pipe.write_all(&bytes).is_err() {
+                if let Err(e) = pipe.write_all(&bytes) {
+                    if !stop.load(Ordering::Relaxed) {
+                        log::warn!("audio pipe {} stopped: {e:#}", pipe.path);
+                    }
                     break;
                 }
                 sent = due;
@@ -446,11 +455,22 @@ impl Router {
         out
     }
 
+    /// A lost pipe cannot be reconnected after FFmpeg has ended its input. Restart the
+    /// whole capture instead of silently continuing with picture-only segments.
+    pub fn alive(&self) -> bool {
+        self.writers.iter().all(|(_, handle)| !handle.is_finished())
+    }
+
+    /// Stop feeding before FFmpeg is asked to quit, so an expected pipe close is not an error.
+    pub fn prepare_stop(&self) {
+        self.writer_stop.store(true, Ordering::Relaxed);
+    }
+
     pub fn stop(&mut self) {
+        self.prepare_stop();
         for slot in &mut self.slots {
             slot.release();
         }
-        self.writer_stop.store(true, Ordering::Relaxed);
         for (path, _) in &self.writers {
             PipeServer::unblock(path);
         }
@@ -463,5 +483,54 @@ impl Router {
 impl Drop for Router {
     fn drop(&mut self) {
         self.stop();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_failed_writer_makes_the_router_unhealthy() {
+        let (finish, waiting) = std::sync::mpsc::channel::<()>();
+        let (keep_running, other) = std::sync::mpsc::channel::<()>();
+        let mut router = Router {
+            slots: Vec::new(),
+            mic: None,
+            mic_device: None,
+            writers: vec![
+                (
+                    String::new(),
+                    std::thread::spawn(move || {
+                        let _ = waiting.recv();
+                    }),
+                ),
+                (
+                    String::new(),
+                    std::thread::spawn(move || {
+                        let _ = other.recv();
+                    }),
+                ),
+            ],
+            writer_stop: Arc::new(AtomicBool::new(false)),
+            game_key: None,
+            keep_for: Duration::ZERO,
+            hold: false,
+        };
+        assert!(router.alive());
+        finish.send(()).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !router.writers[0].1.is_finished() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let alive = router.alive();
+        let other_alive = !router.writers[1].1.is_finished();
+        keep_running.send(()).unwrap();
+        // These test threads have no pipes to unblock during Router::drop.
+        for (_, handle) in router.writers.drain(..) {
+            handle.join().unwrap();
+        }
+        assert!(!alive, "one failed audio input must restart the capture");
+        assert!(other_alive, "the other input was still healthy");
     }
 }

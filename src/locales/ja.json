@@ -1,4 +1,6 @@
 {
+  "Audio was unavailable. This recording was saved without sound.": "音声を取得できなかったため、この録画は音声なしで保存されました。",
+  "Some audio tracks were unavailable and could not be saved.": "一部の音声トラックを取得できなかったため、保存できませんでした。",
   " · {n} of {total}": " · {n} / {total}",
   "[ clean voice ]": "[ クリーンな音声 ]",
   "[ everything ]": "[ すべて ]",

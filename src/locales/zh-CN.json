@@ -1,4 +1,6 @@
 {
+  "Audio was unavailable. This recording was saved without sound.": "音频不可用，此录制已保存为无声视频。",
+  "Some audio tracks were unavailable and could not be saved.": "部分音轨不可用，未能保存。",
   " · {n} of {total}": " · {n}/{total}",
   "[ clean voice ]": "[ 纯净人声 ]",
   "[ everything ]": "[ 全部 ]",

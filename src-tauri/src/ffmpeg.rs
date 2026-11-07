@@ -45,7 +45,7 @@ pub fn command() -> Command {
     cmd
 }
 
-/// Runs FFmpeg to completion and turns a failure into its last error lines.
+/// Runs FFmpeg to completion, retaining stderr so callers can identify the actual failure.
 pub fn run(args: &[String]) -> Result<()> {
     run_with_timeout(args, Duration::from_secs(600))
 }
@@ -106,7 +106,7 @@ fn run_checked(mut cmd: Command, args: &[String], timeout: Duration, keep_going:
     if status.success() {
         Ok(())
     } else {
-        Err(anyhow!(last_lines(&text, 4)))
+        Err(anyhow!(text.trim().to_owned()))
     }
 }
 
@@ -164,11 +164,14 @@ struct ProbeOut {
     #[serde(default)]
     streams: Vec<ProbeStream>,
     format: Option<ProbeFormat>,
+    error: Option<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
 struct ProbeStream {
     codec_type: Option<String>,
+    codec_name: Option<String>,
+    nb_read_packets: Option<String>,
     width: Option<u32>,
     height: Option<u32>,
     channels: Option<u32>,
@@ -192,10 +195,93 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
 /// Like `probe`, stopped as soon as `keep_going` says no.
 pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Result<MediaInfo> {
     let mut cmd = Command::new(tool("ffprobe"));
+    cmd.args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,channels:stream_tags=title,name,handler_name", "-of", "json"])
+        .arg(path);
+    let out = probe_output(cmd, PROBE_LIMIT, keep_going)?;
+    let parsed: ProbeOut = serde_json::from_slice(&out)?;
+    let mut info = MediaInfo {
+        duration: parsed
+            .format
+            .and_then(|f| f.duration)
+            .and_then(|d| d.parse().ok())
+            .unwrap_or(0.0),
+        ..Default::default()
+    };
+    for stream in parsed.streams {
+        match stream.codec_type.as_deref() {
+            Some("video") if info.width == 0 => {
+                info.width = stream.width.unwrap_or(0);
+                info.height = stream.height.unwrap_or(0);
+            }
+            Some("audio") => {
+                info.audio_titles.push(track_title(&stream.tags));
+                info.audio_channels.push(stream.channels.unwrap_or(2));
+            }
+            _ => {}
+        }
+    }
+    Ok(info)
+}
+
+/// Counts packets through the entire MPEG-TS selection, not just the initial probe window.
+/// An AAC entry in the PMT without any packets cannot supply MP4's audio parameters.
+/// Streams that do carry packets are kept even if probing their header found no parameters.
+/// A timeout or read error is not evidence that a track is empty.
+pub fn empty_aac_slots(dir: &Path, list: &Path) -> Result<Vec<usize>> {
+    let mut cmd = Command::new(tool("ffprobe"));
+    cmd.current_dir(dir)
+        .args([
+            "-v",
+            "error",
+            "-f",
+            "mpegts",
+            "-probesize",
+            "32",
+            "-analyzeduration",
+            "0",
+            "-count_packets",
+            "-show_error",
+            "-show_entries",
+            "stream=codec_type,codec_name,nb_read_packets:error=code,string",
+            "-of",
+            "json",
+        ])
+        .arg(format!("concatf:{}", path_arg(list)));
+    // Unlike a header probe, this reads the whole clip and may take as long as a remux.
+    let out = probe_output(cmd, Duration::from_secs(600), &|| true)?;
+    let parsed: ProbeOut = serde_json::from_slice(&out)?;
+    if let Some(error) = parsed.error {
+        bail!("could not scan all recording segments: {error}");
+    }
+    if parsed.streams.is_empty() {
+        bail!("ffprobe found no streams in the recording segments");
+    }
+    let mut empty = Vec::new();
+    for (slot, stream) in parsed
+        .streams
+        .into_iter()
+        .filter(|s| s.codec_type.as_deref() == Some("audio"))
+        .enumerate()
+    {
+        let packets = stream
+            .nb_read_packets
+            .as_deref()
+            .map(str::parse::<u64>)
+            .transpose()?;
+        if stream.codec_name.as_deref() == Some("aac") && packets.unwrap_or(0) == 0 {
+            empty.push(slot);
+        }
+    }
+    Ok(empty)
+}
+
+fn probe_output(
+    mut cmd: Command,
+    timeout: Duration,
+    keep_going: &(dyn Fn() -> bool + Sync),
+) -> Result<Vec<u8>> {
     crate::platform::background(&mut cmd, true);
     let mut child = cmd
-        .args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,channels:stream_tags=title,name,handler_name", "-of", "json"])
-        .arg(path)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -217,7 +303,7 @@ pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Resul
         if let Some(status) = child.try_wait()? {
             break status;
         }
-        if started.elapsed() > PROBE_LIMIT {
+        if started.elapsed() > timeout {
             let _ = child.kill();
             let _ = child.wait();
             bail!("ffprobe took too long");
@@ -237,25 +323,7 @@ pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Resul
     if !out.status.success() {
         bail!("{}", last_lines(&String::from_utf8_lossy(&out.stderr), 3));
     }
-    let parsed: ProbeOut = serde_json::from_slice(&out.stdout)?;
-    let mut info = MediaInfo {
-        duration: parsed.format.and_then(|f| f.duration).and_then(|d| d.parse().ok()).unwrap_or(0.0),
-        ..Default::default()
-    };
-    for stream in parsed.streams {
-        match stream.codec_type.as_deref() {
-            Some("video") if info.width == 0 => {
-                info.width = stream.width.unwrap_or(0);
-                info.height = stream.height.unwrap_or(0);
-            }
-            Some("audio") => {
-                info.audio_titles.push(track_title(&stream.tags));
-                info.audio_channels.push(stream.channels.unwrap_or(2));
-            }
-            _ => {}
-        }
-    }
-    Ok(info)
+    Ok(out.stdout)
 }
 
 /// Options naming audio track `k` of the output. MP4 keeps the title in its "name" box,

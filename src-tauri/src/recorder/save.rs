@@ -23,6 +23,13 @@ static SAVE_ID: AtomicU64 = AtomicU64::new(0);
 static PUBLISH_LOCK: Mutex<()> = parking_lot::const_mutex(());
 static STORAGE_LIMIT_LOCK: Mutex<()> = parking_lot::const_mutex(());
 
+struct Rendered<'a> {
+    source: &'a Path,
+    length: f64,
+    skipped: f64,
+    tracks: Vec<Track>,
+}
+
 /// A save on its way to the library. The library shows a tile for it at once, with a
 /// picture from the buffer, and swaps in the real clip once it is written.
 #[derive(Clone, Serialize)]
@@ -166,7 +173,8 @@ impl SaveJob {
     fn run(self) {
         let result = self.write();
         drop(self._pin);
-        self.placeholder.finish(result.as_ref().ok().map(|(_, out)| out.as_path()));
+        self.placeholder
+            .finish(result.as_ref().ok().map(|(_, out)| out.as_path()));
         match result {
             Ok((meta, _)) => {
                 let what = if self.kind == Kind::Session {
@@ -174,20 +182,28 @@ impl SaveJob {
                 } else {
                     tr("Clip saved")
                 };
-                crate::toast(
-                    &self.app,
-                    &what,
-                    &format!(
-                        "{} · {}",
-                        self.name,
-                        library::format_duration(meta.duration)
-                    ),
+                let mut detail = format!(
+                    "{} · {}",
+                    self.name,
+                    library::format_duration(meta.duration)
                 );
+                if meta.tracks.len() < self.tracks.len() {
+                    let warning = if meta.tracks.is_empty() {
+                        tr("Audio was unavailable. This recording was saved without sound.")
+                    } else {
+                        tr("Some audio tracks were unavailable and could not be saved.")
+                    };
+                    detail.push_str(&format!("\n{warning}"));
+                }
+                crate::toast(&self.app, &what, &detail);
                 let _ = self.app.emit("library-changed", ());
                 drop(self.dir);
                 if self.limit_gb > 0 {
                     let _cleanup = STORAGE_LIMIT_LOCK.lock();
-                    if library::enforce_limit(&self.clips_dir, self.limit_gb as u64 * 1024 * 1024 * 1024) {
+                    if library::enforce_limit(
+                        &self.clips_dir,
+                        self.limit_gb as u64 * 1024 * 1024 * 1024,
+                    ) {
                         let _ = self.app.emit("library-changed", ());
                     }
                 }
@@ -203,19 +219,28 @@ impl SaveJob {
         let id = SAVE_ID.fetch_add(1, Ordering::Relaxed);
         let stamp = format!("{}-{}-{id}", audio::now_ms(), std::process::id());
         let list = self.dir.0.join(format!("save-{stamp}.txt"));
-        let label = if self.kind == Kind::Session { Some("Session") } else { None };
+        let label = if self.kind == Kind::Session {
+            Some("Session")
+        } else {
+            None
+        };
         let folder = library::new_path(&self.clips_dir, &self.name, "mp4", label);
         let joined = folder.with_file_name(format!(".replix-{stamp}.part"));
         let trimmed = folder.with_file_name(format!(".replix-{stamp}-trimmed.part"));
         let hidden = folder.with_file_name(format!(".replix-{stamp}-hidden.part"));
         let graph = self.dir.0.join(format!("hide-{stamp}.txt"));
         let result = (|| {
-            let (mut source, length, skipped) = self.render(&list, &joined, &trimmed)?;
+            let Rendered {
+                mut source,
+                length,
+                skipped,
+                tracks,
+            } = self.render(&list, &joined, &trimmed)?;
             // Markers and private stretches move with the clip's own start.
             let zero = self.origin + skipped;
             let hide = relative_masks(&self.private, zero, length);
             if !hide.is_empty() {
-                self.black_out(source, &hidden, &graph, &hide, length).context(tr("Could not hide a program kept out of recordings, so the clip was not saved"))?;
+                self.black_out(source, &hidden, &graph, &hide, length, &tracks).context(tr("Could not hide a program kept out of recordings, so the clip was not saved"))?;
                 source = &hidden;
             }
             // The recording is finished; a probe that fails (a busy drive) only costs the
@@ -224,7 +249,10 @@ impl SaveJob {
             let unread = probed.is_err();
             let info = probed.unwrap_or_else(|e| {
                 log::warn!("could not read the saved recording back: {e:#}");
-                ffmpeg::MediaInfo { duration: length, ..Default::default() }
+                ffmpeg::MediaInfo {
+                    duration: length,
+                    ..Default::default()
+                }
             });
             let _publish = PUBLISH_LOCK.lock();
             let out = library::new_path(&self.clips_dir, &self.name, "mp4", label);
@@ -236,7 +264,14 @@ impl SaveJob {
                 duration: info.duration,
                 width: info.width,
                 height: info.height,
-                tracks: self.tracks.iter().map(|t| TrackMeta { name: t.name.clone(), kind: t.kind, exe: t.exe.clone() }).collect(),
+                tracks: tracks
+                    .iter()
+                    .map(|t| TrackMeta {
+                        name: t.name.clone(),
+                        kind: t.kind,
+                        exe: t.exe.clone(),
+                    })
+                    .collect(),
                 unread,
                 markers: library::tidy_markers(
                     self.markers
@@ -267,17 +302,42 @@ impl SaveJob {
 
     /// The finished file, its length, and how much of the joined segments it skips: trimmed
     /// if that worked, whole if not.
-    fn render<'a>(&self, list: &Path, joined: &'a Path, trimmed: &'a Path) -> Result<(&'a Path, f64, f64)> {
+    fn render<'a>(&self, list: &Path, joined: &'a Path, trimmed: &'a Path) -> Result<Rendered<'a>> {
         // The segments share one timeline, so they are read back to back as a single stream.
         // That skips opening and probing every segment on its own. Names in the list are
         // relative to the buffer folder, which FFmpeg runs in.
-        let text: String = self.segments.iter().map(|i| segment_name(*i) + "\n").collect();
+        let text: String = self
+            .segments
+            .iter()
+            .map(|i| segment_name(*i) + "\n")
+            .collect();
         std::fs::write(list, text)?;
-        let tracks: Vec<(usize, &str)> = self.tracks.iter().map(|t| (t.slot, t.name.as_str())).collect();
-        let input = |trim| joined_input(list, &tracks, trim);
+        let tracks: Vec<(usize, &str)> = self
+            .tracks
+            .iter()
+            .map(|t| (t.slot, t.name.as_str()))
+            .collect();
+        let remux = |out, trim| {
+            remux_segments(
+                &self.dir.0,
+                list,
+                &tracks,
+                trim,
+                out,
+                self.duration,
+                self.fps,
+            )
+        };
         if let Some(trim) = self.trim_to {
-            match self.write_mp4(&input(Some(trim)), trimmed, trim.1) {
-                Ok(()) => return Ok((trimmed, trim.1, trim.0)),
+            match remux(trimmed, Some(trim)) {
+                Ok(slots) => {
+                    return Ok(Rendered {
+                        source: trimmed,
+                        length: trim.1,
+                        skipped: trim.0,
+                        tracks: retained_tracks(&self.tracks, &slots),
+                    })
+                }
                 Err(e) => {
                     log::warn!("trimming the clip failed, keeping it whole: {e:#}");
                     // Whatever the failed pass wrote is no clip; it must not take up room.
@@ -285,36 +345,29 @@ impl SaveJob {
                 }
             }
         }
-        self.write_mp4(&input(None), joined, self.duration)?;
-        Ok((joined, self.duration, 0.0))
-    }
-
-    /// Writes an MP4 with its index at the front, so it plays before it has fully loaded,
-    /// e.g. after an upload. Room for the index is reserved up front: `+faststart` would
-    /// move it there afterwards by writing the whole file a second time.
-    fn write_mp4(&self, input: &[String], out: &Path, seconds: f64) -> Result<()> {
-        let room = moov_room(seconds, self.fps, self.tracks.len());
-        let mut args = input.to_vec();
-        args.extend(["-c".into(), "copy".into(), "-moov_size".into(), room.to_string()]);
-        args.extend(["-f", "mp4", "-y"].map(String::from));
-        args.push(ffmpeg::path_arg(out));
-        if ffmpeg::run_in(&self.dir.0, &args).is_ok() {
-            return Ok(());
-        }
-        log::warn!("the reserved MP4 index room was too small, writing it again");
-        let mut args = input.to_vec();
-        args.extend(["-c", "copy", "-movflags", "+faststart", "-f", "mp4", "-y"].map(String::from));
-        args.push(ffmpeg::path_arg(out));
-        ffmpeg::run_in(&self.dir.0, &args)
+        let slots = remux(joined, None)?;
+        Ok(Rendered {
+            source: joined,
+            length: self.duration,
+            skipped: 0.0,
+            tracks: retained_tracks(&self.tracks, &slots),
+        })
     }
 
     /// Writes `source` again with the windows of kept-out programs black, and the desktop's
     /// sound silent while one was on screen. With the capture's encoder first; software if
     /// that one refuses frames from a file. The filter graph goes into the file `graph`: with
     /// many boxes it would not fit on a command line.
-    fn black_out(&self, source: &Path, out: &Path, graph: &Path, hide: &[Mask], length: f64) -> Result<()> {
-        let desktop = self.tracks.iter().position(|t| t.kind == TrackKind::Desktop);
-        let names: Vec<&str> = self.tracks.iter().map(|t| t.name.as_str()).collect();
+    fn black_out(
+        &self,
+        source: &Path,
+        out: &Path,
+        graph: &Path,
+        hide: &[Mask],
+        length: f64,
+        tracks: &[Track],
+    ) -> Result<()> {
+        let (desktop, names) = audio_layout(tracks);
         let timeout = Duration::from_secs_f64(120.0 + length * 3.0);
         let mut last = None;
         for encoder in [self.encoder.for_export(), encoder::software()] {
@@ -334,6 +387,100 @@ impl SaveJob {
         }
         Err(last.unwrap_or_else(|| anyhow::anyhow!("no encoder")))
     }
+}
+
+fn retained_tracks(tracks: &[Track], slots: &[usize]) -> Vec<Track> {
+    tracks
+        .iter()
+        .filter(|t| slots.contains(&t.slot))
+        .cloned()
+        .collect()
+}
+
+fn audio_layout(tracks: &[Track]) -> (Option<usize>, Vec<&str>) {
+    (
+        tracks.iter().position(|t| t.kind == TrackKind::Desktop),
+        tracks.iter().map(|t| t.name.as_str()).collect(),
+    )
+}
+
+/// Remuxes without decoding audio. Recovery is only for MP4's missing sample-rate error;
+/// only AAC slots proven empty across the whole selection may be removed.
+fn remux_segments(
+    dir: &Path,
+    list: &Path,
+    tracks: &[(usize, &str)],
+    trim: Option<(f64, f64)>,
+    out: &Path,
+    seconds: f64,
+    fps: u32,
+) -> Result<Vec<usize>> {
+    let length = trim.map_or(seconds, |t| t.1);
+    let input = joined_input(list, tracks, trim);
+    match write_mp4(dir, &input, out, moov_room(length, fps, tracks.len())) {
+        Ok(()) => return Ok(tracks.iter().map(|t| t.0).collect()),
+        Err(e) if e.to_string().contains("sample rate not set") => {
+            log::warn!(
+                "audio parameters missing while saving; checking the entire selection: {e:#}"
+            );
+        }
+        Err(e) => return Err(e),
+    }
+    let empty = ffmpeg::empty_aac_slots(dir, list)?;
+    let kept: Vec<_> = tracks
+        .iter()
+        .copied()
+        .filter(|t| !empty.contains(&t.0))
+        .collect();
+    let removed: Vec<_> = tracks.iter().filter(|t| empty.contains(&t.0)).collect();
+    log::warn!("saving without packetless AAC tracks: {removed:?}");
+    // A retained track may first play beyond FFmpeg's normal five-second/5 MB probe.
+    // Let this exceptional retry find its header anywhere in the selection too.
+    let list_path = if list.is_absolute() {
+        list.to_path_buf()
+    } else {
+        dir.join(list)
+    };
+    let bytes = std::fs::read_to_string(list_path)?
+        .lines()
+        .try_fold(0u64, |total, name| {
+            std::fs::metadata(dir.join(name)).map(|m| total.saturating_add(m.len()))
+        })?;
+    let mut input: Vec<String> = [
+        "-probesize".into(),
+        bytes.max(32).to_string(),
+        "-analyzeduration".into(),
+        i64::MAX.to_string(),
+    ]
+    .into();
+    input.extend(joined_input(list, &kept, trim));
+    write_mp4(dir, &input, out, moov_room(length, fps, kept.len()))?;
+    Ok(kept.iter().map(|t| t.0).collect())
+}
+
+/// Reserves room for the MP4 index at the front, avoiding a second complete write.
+/// Only an actual undersized index reservation warrants the +faststart fallback.
+fn write_mp4(dir: &Path, input: &[String], out: &Path, room: u64) -> Result<()> {
+    let mut args = input.to_vec();
+    args.extend([
+        "-c".into(),
+        "copy".into(),
+        "-moov_size".into(),
+        room.to_string(),
+    ]);
+    args.extend(["-f", "mp4", "-y"].map(String::from));
+    args.push(ffmpeg::path_arg(out));
+    match ffmpeg::run_in(dir, &args) {
+        Ok(()) => return Ok(()),
+        Err(e) if e.to_string().contains("reserved_moov_size is too small") => {
+            log::warn!("the reserved MP4 index room was too small, writing it again: {e:#}");
+        }
+        Err(e) => return Err(e),
+    }
+    let mut args = input.to_vec();
+    args.extend(["-c", "copy", "-movflags", "+faststart", "-f", "mp4", "-y"].map(String::from));
+    args.push(ffmpeg::path_arg(out));
+    ffmpeg::run_in(dir, &args)
 }
 
 /// Masks in stream time as seconds of a clip that starts at `zero` and runs `length`.
@@ -477,13 +624,53 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         // Like the recorder: keyframes every two seconds, two-second MPEG-TS segments,
         // several audio streams. B-frames on, as hardware encoders may use them.
-        run(&dir, &[
-            "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=60", "-f", "lavfi", "-i", "sine=f=440:r=48000",
-            "-f", "lavfi", "-i", "sine=f=880:r=48000", "-t", "10", "-map", "0:v", "-map", "1:a", "-map", "2:a",
-            "-c:v", "libx264", "-preset", "ultrafast", "-bf", "2", "-force_key_frames", "expr:gte(t,n_forced*2)",
-            "-c:a", "aac", "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", "seg%06d.ts",
-        ]);
-        std::fs::write(dir.join("list.txt"), "seg000001.ts\nseg000002.ts\nseg000003.ts\n").unwrap();
+        run(
+            &dir,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=320x180:rate=60",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=440:r=48000",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=880:r=48000",
+                "-t",
+                "10",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-map",
+                "2:a",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-bf",
+                "2",
+                "-force_key_frames",
+                "expr:gte(t,n_forced*2)",
+                "-c:a",
+                "aac",
+                "-f",
+                "segment",
+                "-segment_time",
+                "2",
+                "-segment_format",
+                "mpegts",
+                "seg%06d.ts",
+            ],
+        );
+        std::fs::write(
+            dir.join("list.txt"),
+            "seg000001.ts\nseg000002.ts\nseg000003.ts\n",
+        )
+        .unwrap();
         let tracks = [(0, "Game"), (1, "Microphone")];
         let list = Path::new("list.txt");
         // Skips near the start, in the middle and just before the next keyframe.
@@ -493,16 +680,347 @@ mod tests {
             old.extend(["-c", "copy", "-f", "mp4", "joined.mp4"].map(String::from));
             run(&dir, &old.iter().map(String::as_str).collect::<Vec<_>>());
             let (ss, t) = (format!("{skip:.3}"), format!("{length:.3}"));
-            run(&dir, &["-ss", &ss, "-t", &t, "-i", "joined.mp4", "-map", "0", "-c", "copy", "-f", "mp4", "old.mp4"]);
+            run(
+                &dir,
+                &[
+                    "-ss",
+                    &ss,
+                    "-t",
+                    &t,
+                    "-i",
+                    "joined.mp4",
+                    "-map",
+                    "0",
+                    "-c",
+                    "copy",
+                    "-f",
+                    "mp4",
+                    "old.mp4",
+                ],
+            );
             // What the recorder runs now.
-            let mut new = joined_input(list, &tracks, Some((skip, length)));
-            new.extend(["-c", "copy", "-moov_size", "200000", "-f", "mp4", "new.mp4"].map(String::from));
-            run(&dir, &new.iter().map(String::as_str).collect::<Vec<_>>());
+            let slots = remux_segments(
+                &dir,
+                list,
+                &tracks,
+                Some((skip, length)),
+                Path::new("new.mp4"),
+                6.0,
+                60,
+            )
+            .unwrap();
+            assert_eq!(slots, vec![0, 1]);
             let (a, b) = (frames(&dir, "old.mp4"), frames(&dir, "new.mp4"));
             assert!(!a.is_empty());
             assert_eq!(a, b, "skip {skip}");
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn audio_fixture(label: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("replix-recovery-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        run(
+            &dir,
+            &[
+                "-f",
+                "lavfi",
+                "-i",
+                "testsrc2=size=160x90:rate=30",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=440:r=48000",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=660:r=48000",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=880:r=48000",
+                "-f",
+                "lavfi",
+                "-i",
+                "sine=f=1100:r=48000",
+                "-t",
+                "12",
+                "-map",
+                "0:v",
+                "-map",
+                "1:a",
+                "-map",
+                "2:a",
+                "-map",
+                "3:a",
+                "-map",
+                "4:a",
+                "-c:v",
+                "libx264",
+                "-preset",
+                "ultrafast",
+                "-threads:v",
+                "1",
+                "-bf",
+                "0",
+                "-g",
+                "60",
+                "-keyint_min",
+                "60",
+                "-sc_threshold",
+                "0",
+                "-c:a",
+                "aac",
+                "-f",
+                "segment",
+                "-segment_time",
+                "2",
+                "-segment_format",
+                "mpegts",
+                "seg%06d.ts",
+            ],
+        );
+        dir
+    }
+
+    /// Leaves PAT/PMT declarations intact, like a capture whose audio inputs ended early.
+    fn remove_audio_packets(dir: &Path, segment: usize, slots: &[usize]) {
+        let path = dir.join(segment_name(segment as u64));
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(bytes.len() % 188, 0);
+        let kept: Vec<u8> = bytes
+            .as_chunks::<188>()
+            .0
+            .iter()
+            .filter(|packet| {
+                assert_eq!(packet[0], 0x47);
+                let pid = ((packet[1] as usize & 31) << 8) | packet[2] as usize;
+                !slots.iter().any(|slot| pid == 0x101 + slot)
+            })
+            .flatten()
+            .copied()
+            .collect();
+        std::fs::write(path, kept).unwrap();
+    }
+
+    #[test]
+    fn packetless_aac_recovers_video_and_its_trim() {
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir = audio_fixture("empty");
+        for segment in 2..6 {
+            remove_audio_packets(&dir, segment, &[0, 1, 2, 3]);
+        }
+        std::fs::write(
+            dir.join("list.txt"),
+            "seg000002.ts\nseg000003.ts\nseg000004.ts\nseg000005.ts\n",
+        )
+        .unwrap();
+        let list = Path::new("list.txt");
+        let tracks = [(0, "Desktop"), (1, "Game"), (2, "App"), (3, "Microphone")];
+        let err = write_mp4(
+            &dir,
+            &joined_input(list, &tracks, None),
+            Path::new("broken.mp4"),
+            200000,
+        )
+        .unwrap_err();
+        assert!(err.to_string().contains("sample rate not set"), "{err:#}");
+        assert_eq!(
+            ffmpeg::empty_aac_slots(&dir, list).unwrap(),
+            vec![0, 1, 2, 3]
+        );
+        for (name, trim) in [("whole.mp4", None), ("trim.mp4", Some((0.979, 5.0)))] {
+            let slots =
+                remux_segments(&dir, list, &tracks, trim, Path::new(name), 8.0, 30).unwrap();
+            assert!(slots.is_empty());
+            write_mp4(
+                &dir,
+                &joined_input(list, &[], trim),
+                Path::new("expected.mp4"),
+                200000,
+            )
+            .unwrap();
+            assert_eq!(frames(&dir, name), frames(&dir, "expected.mp4"));
+            assert!(ffmpeg::probe(&dir.join(name))
+                .unwrap()
+                .audio_titles
+                .is_empty());
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn recovery_keeps_late_audio_and_remaps_desktop_privacy() {
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir = audio_fixture("partial");
+        for segment in 0..6 {
+            remove_audio_packets(
+                &dir,
+                segment,
+                if segment < 4 { &[0, 2, 3] } else { &[0, 2] },
+            );
+        }
+        std::fs::write(
+            dir.join("list.txt"),
+            (0..6).map(|i| segment_name(i) + "\n").collect::<String>(),
+        )
+        .unwrap();
+        std::fs::write(dir.join("early.txt"), "seg000000.ts\n").unwrap();
+        assert_eq!(
+            ffmpeg::empty_aac_slots(&dir, Path::new("early.txt")).unwrap(),
+            vec![0, 2, 3]
+        );
+        let tracks = vec![
+            Track {
+                slot: 0,
+                name: "Game".into(),
+                exe: Some("game".into()),
+                kind: TrackKind::Game,
+            },
+            Track {
+                slot: 1,
+                name: "Desktop".into(),
+                exe: None,
+                kind: TrackKind::Desktop,
+            },
+            Track {
+                slot: 2,
+                name: "App".into(),
+                exe: Some("app".into()),
+                kind: TrackKind::App,
+            },
+            Track {
+                slot: 3,
+                name: "Microphone".into(),
+                exe: None,
+                kind: TrackKind::Mic,
+            },
+        ];
+        let names: Vec<_> = tracks.iter().map(|t| (t.slot, t.name.as_str())).collect();
+        let slots = remux_segments(
+            &dir,
+            Path::new("list.txt"),
+            &names,
+            None,
+            Path::new("saved.mp4"),
+            12.0,
+            30,
+        )
+        .unwrap();
+        assert_eq!(slots, vec![1, 3]);
+        let kept = retained_tracks(&tracks, &slots);
+        assert_eq!(
+            kept.iter()
+                .map(|t| (t.slot, t.kind, t.exe.as_deref()))
+                .collect::<Vec<_>>(),
+            vec![(1, TrackKind::Desktop, None), (3, TrackKind::Mic, None)]
+        );
+        let expected = vec![Some("Desktop".into()), Some("Microphone".into())];
+        assert_eq!(
+            ffmpeg::probe(&dir.join("saved.mp4")).unwrap().audio_titles,
+            expected
+        );
+        let (desktop, names) = audio_layout(&kept);
+        assert_eq!(desktop, Some(0));
+        let masks = [Mask {
+            area: Area {
+                left: 0.0,
+                top: 0.0,
+                right: 0.5,
+                bottom: 1.0,
+            },
+            start: 1.0,
+            end: 2.0,
+        }];
+        let graph = dir.join("graph.txt");
+        std::fs::write(
+            &graph,
+            black_out_graph(&masks, desktop, encoder::software()),
+        )
+        .unwrap();
+        let args = black_out_args(
+            &dir.join("saved.mp4"),
+            &dir.join("hidden.mp4"),
+            &graph,
+            desktop,
+            &names,
+            encoder::software(),
+            1000,
+        );
+        ffmpeg::run(&args).unwrap();
+        assert_eq!(
+            ffmpeg::probe(&dir.join("hidden.mp4")).unwrap().audio_titles,
+            expected
+        );
+        let samples = Command::new("ffmpeg")
+            .current_dir(&dir)
+            .args([
+                "-v",
+                "error",
+                "-ss",
+                "1.3",
+                "-i",
+                "hidden.mp4",
+                "-t",
+                "0.2",
+                "-map",
+                "0:a:0",
+                "-f",
+                "f32le",
+                "-",
+            ])
+            .output()
+            .unwrap();
+        assert!(samples.status.success() && !samples.stdout.is_empty());
+        assert!(samples
+            .stdout
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|s| f32::from_le_bytes(*s).abs() < 0.001));
+        // Losing the desktop must never mute the microphone that took its output index.
+        let mic = retained_tracks(&tracks, &[3]);
+        assert_eq!(audio_layout(&mic), (None, vec!["Microphone"]));
+        assert!(!black_out_graph(&masks, None, encoder::software()).contains("[desk]"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_small_moov_reservation_retries_without_losing_tracks() {
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir = audio_fixture("moov");
+        std::fs::write(dir.join("list.txt"), "seg000000.ts\nseg000001.ts\n").unwrap();
+        let input = joined_input(
+            Path::new("list.txt"),
+            &[(1, "Desktop"), (3, "Microphone")],
+            None,
+        );
+        write_mp4(&dir, &input, Path::new("saved.mp4"), 8).unwrap();
+        let info = ffmpeg::probe(&dir.join("saved.mp4")).unwrap();
+        assert_eq!(
+            info.audio_titles,
+            vec![Some("Desktop".into()), Some("Microphone".into())]
+        );
+        let error = write_mp4(
+            &dir,
+            &input,
+            &Path::new("missing").join("saved.mp4"),
+            200000,
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("No such file or directory"),
+            "{error:#}"
+        );
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Blacking out turns only the window's part of the picture black, only while it is

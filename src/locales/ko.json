@@ -1,4 +1,6 @@
 {
+  "Audio was unavailable. This recording was saved without sound.": "오디오를 사용할 수 없어 이 녹화는 소리 없이 저장되었습니다.",
+  "Some audio tracks were unavailable and could not be saved.": "일부 오디오 트랙을 사용할 수 없어 저장하지 못했습니다.",
   " · {n} of {total}": " · {total} 중 {n}",
   "[ clean voice ]": "[ 깨끗한 음성 ]",
   "[ everything ]": "[ 전체 ]",

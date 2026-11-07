@@ -404,6 +404,8 @@
   "Saved as GIF.": "Als GIF gespeichert.",
   "Saved as MKV with every track on its own.": "Als MKV mit jeder Spur einzeln gespeichert.",
   "Saved as MP4.": "Als MP4 gespeichert.",
+  "Audio was unavailable. This recording was saved without sound.": "Es war kein Ton verfügbar. Diese Aufnahme wurde ohne Ton gespeichert.",
+  "Some audio tracks were unavailable and could not be saved.": "Einige Tonspuren waren nicht verfügbar und konnten nicht gespeichert werden.",
   "saves": "speichert",
   "saves an NVIDIA instant replay": "speichert eine NVIDIA-Instant-Wiedergabe",
   "Saves what's on screen now": "Speichert, was gerade auf dem Bildschirm ist",

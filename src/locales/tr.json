@@ -1,4 +1,6 @@
 {
+  "Audio was unavailable. This recording was saved without sound.": "Ses kullanılamıyordu. Bu kayıt sessiz olarak kaydedildi.",
+  "Some audio tracks were unavailable and could not be saved.": "Bazı ses parçaları kullanılamıyordu ve kaydedilemedi.",
   " · {n} of {total}": " · {n} / {total}",
   "[ clean voice ]": "[ temiz ses ]",
   "[ everything ]": "[ her şey ]",
