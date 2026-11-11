@@ -544,5 +544,20 @@
   "Session recovered": "セッションを復元しました",
   "{title}, recording": "{title}、録画中",
   "Stop": "停止",
-  "rec": "録画中"
+  "rec": "録画中",
+  "{name} starts at {volume}% in clips you open from now on.": "今後開くクリップでは {name} が {volume}% で始まります。",
+  "{name} starts muted in clips you open from now on.": "今後開くクリップでは {name} がミュートで始まります。",
+  "Apps": "アプリ",
+  "Default saved": "既定値を保存しました",
+  "Drag to make the timeline taller or shorter · double-click to reset": "ドラッグでタイムラインの高さを変更 · ダブルクリックで元に戻す",
+  "Everything else you hear": "それ以外に聞こえるすべての音",
+  "Forget the default for {name}": "{name} の既定値を削除",
+  "How loud each track starts when you open a clip in the editor. A saved draft keeps its own.": "エディターでクリップを開いたときの各トラックの音量です。保存した下書きは独自の値を保ちます。",
+  "Programs with a track of their own": "専用トラックを持つプログラム",
+  "Right-click a track in the editor to give one program its own default.": "エディターでトラックを右クリックすると、プログラムごとの既定値を設定できます。",
+  "The game's own sound": "ゲーム自体の音",
+  "Timeline height": "タイムラインの高さ",
+  "Track volume": "トラック音量",
+  "Use as default for new clips": "新しいクリップの既定値にする",
+  "Your voice": "あなたの声"
 }

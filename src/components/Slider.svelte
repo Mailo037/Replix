@@ -8,6 +8,7 @@
     label,
     valuetext,
     disabled = false,
+    wheel = true,
     oninput,
   }: {
     value: number;
@@ -17,6 +18,8 @@
     label: string;
     valuetext?: string;
     disabled?: boolean;
+    /** Whether the mouse wheel nudges it; off where the wheel should scroll the list around it. */
+    wheel?: boolean;
     oninput: (v: number) => void;
   } = $props();
 
@@ -28,7 +31,7 @@
   // listener is added by hand to be able to stop the page from scrolling.
   $effect(() => {
     const onWheel = (e: WheelEvent) => {
-      if (disabled || e.deltaY === 0) return;
+      if (!wheel || disabled || e.deltaY === 0) return;
       e.preventDefault();
       e.stopPropagation();
       const dir = e.deltaY < 0 ? 1 : -1;

@@ -86,3 +86,34 @@ and no `windows::`, `wasapi`, `webview2_com`, `libc`, `x11rb`, `core_graphics` o
 - Comments and docs say what something is for and why, in plain words, as the existing
   ones do.
 - English is the source language of every text; translations live in `src/locales/`.
+
+## Icons
+
+Replix draws its own icons; there is no icon library. All of them live in
+`src/components/Icon.svelte` and are used as `<Icon name="…" size={16} />`. They should look
+like one set: soft and round, never boxy or pointed.
+
+- **Grid.** A 20×20 view box. The drawing stays inside 3–17 (2.5–17.5 for wide shapes), centred
+  by eye, not by numbers: a triangle or star sits slightly lower than its box.
+- **Stroke.** One line, 1.7 wide, in `currentColor`, with round ends and round joins. No second
+  weight, no hard-coded colour; the button or text around it decides the colour.
+- **Round everywhere.** No sharp corner anywhere. Rectangles use `box(x, y, w, h, r)`, circles
+  `ring(cx, cy, r)`, and anything with points (triangles, stars, the bolt, the pencil) goes through `soft(points, r)`, which rounds each corner. Corner radius: 2.5–3 on
+  shapes about 12–14 wide, 2 on shapes about 10 wide, 1–1.5 on small parts.
+- **Lines** (chevrons, arrows, crosses, the slash of mute) stay open strokes; the round ends
+  and joins already make them soft. Don't close them into outlines.
+- **Same thing, same drawing.** Parts that recur are shared constants (`FRAME`, `PENCIL`,
+  `SPEAKER`, `TRAY`), so related icons match. Reuse them before drawing a new variant.
+- **Filled.** An icon can be drawn solid (`filled`, or listed in `FILLED`). It keeps its stroke,
+  so the solid and outlined forms have the same size and outline. Leave room for the stroke
+  when drawing a solid icon (the two bars of `pause` are thin for that reason).
+- **Few details.** An icon is read at 12–20 px. Two or three parts at most; a dot is
+  `M x y h.01` with the round stroke.
+- **Size.** 16 in buttons and menus, 18 (the default) in the sidebar and lists, 12–14 inside
+  badges and small chips. Don't scale the stroke.
+- **Window buttons** (`TitleBar.svelte`) are 10×10 with a 1 px stroke to match the system's own,
+  but follow the same rule: round ends, rounded box.
+- **Program icons** in the editor come from the system (`appIcons.svelte.ts`) and are shown
+  as they are.
+- **Naming.** Name an icon for what it shows or the action (`trash`, `copy`, `link`), not the
+  place it is used. Before adding one, check whether an existing icon already says it.

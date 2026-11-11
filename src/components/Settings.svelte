@@ -26,6 +26,7 @@
   import { themes } from "../lib/themes";
   import Slider from "./Slider.svelte";
   import Switch from "./Switch.svelte";
+  import TrackDefaults from "./TrackDefaults.svelte";
 
   let monitors = $state<Monitor[]>([]);
   let encoders = $state<EncoderOption[]>([]);
@@ -266,6 +267,10 @@
           </div>
         {/if}
       </div>
+
+      <h2>{t("Track volume")}</h2>
+      <p class="meta intro">{t("How loud each track starts when you open a clip in the editor. A saved draft keeps its own.")}</p>
+      <TrackDefaults />
 
       <h2>{t("Games & apps")}</h2>
       <p class="meta intro">{t("Give a game or app its own settings. Anything you add here also counts as a game.")}</p>

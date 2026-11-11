@@ -572,5 +572,20 @@
   "Session recovered": "Sesión recuperada",
   "{title}, recording": "{title}, grabando",
   "Stop": "Detener",
-  "rec": "rec"
+  "rec": "rec",
+  "{name} starts at {volume}% in clips you open from now on.": "{name} empieza al {volume}% en los clips que abras a partir de ahora.",
+  "{name} starts muted in clips you open from now on.": "{name} empieza silenciado en los clips que abras a partir de ahora.",
+  "Apps": "Apps",
+  "Default saved": "Predeterminado guardado",
+  "Drag to make the timeline taller or shorter · double-click to reset": "Arrastra para hacer la línea de tiempo más alta o más baja · doble clic para restablecer",
+  "Everything else you hear": "Todo lo demás que oyes",
+  "Forget the default for {name}": "Olvidar el predeterminado de {name}",
+  "How loud each track starts when you open a clip in the editor. A saved draft keeps its own.": "Lo fuerte que empieza cada pista al abrir un clip en el editor. Un borrador guardado conserva los suyos.",
+  "Programs with a track of their own": "Programas con pista propia",
+  "Right-click a track in the editor to give one program its own default.": "Haz clic derecho en una pista del editor para dar a un programa su propio predeterminado.",
+  "The game's own sound": "El sonido del juego",
+  "Timeline height": "Altura de la línea de tiempo",
+  "Track volume": "Volumen de pistas",
+  "Use as default for new clips": "Usar como predeterminado en clips nuevos",
+  "Your voice": "Tu voz"
 }

@@ -579,5 +579,20 @@
   "Session recovered": "Sesja odzyskana",
   "{title}, recording": "{title}, nagrywanie",
   "Stop": "Zatrzymaj",
-  "rec": "rec"
+  "rec": "rec",
+  "{name} starts at {volume}% in clips you open from now on.": "{name} zaczyna od {volume}% w klipach otwieranych od teraz.",
+  "{name} starts muted in clips you open from now on.": "{name} zaczyna wyciszony w klipach otwieranych od teraz.",
+  "Apps": "Aplikacje",
+  "Default saved": "Zapisano domyślne",
+  "Drag to make the timeline taller or shorter · double-click to reset": "Przeciągnij, aby powiększyć lub zmniejszyć oś czasu · dwuklik przywraca",
+  "Everything else you hear": "Wszystko inne, co słyszysz",
+  "Forget the default for {name}": "Zapomnij domyślne dla {name}",
+  "How loud each track starts when you open a clip in the editor. A saved draft keeps its own.": "Jak głośno zaczyna każda ścieżka, gdy otwierasz klip w edytorze. Zapisany szkic zachowuje własne.",
+  "Programs with a track of their own": "Programy z własną ścieżką",
+  "Right-click a track in the editor to give one program its own default.": "Kliknij prawym przyciskiem ścieżkę w edytorze, aby nadać programowi własne domyślne.",
+  "The game's own sound": "Dźwięk samej gry",
+  "Timeline height": "Wysokość osi czasu",
+  "Track volume": "Głośność ścieżek",
+  "Use as default for new clips": "Użyj jako domyślne dla nowych klipów",
+  "Your voice": "Twój głos"
 }

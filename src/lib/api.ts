@@ -156,6 +156,19 @@ export interface Settings {
   /** "auto" follows the system. */
   language: string;
   onboarded: boolean;
+  /** How tracks start out in the editor; see lib/trackDefaults. */
+  trackDefaults: TrackDefault[];
+}
+
+/** How a track starts out in the editor before anything is changed there. */
+export interface TrackDefault {
+  /** "game", "app", "desktop" or "mic" for a kind of track, or a program's executable name in lower case. */
+  key: string;
+  /** Shown in the settings for a program. */
+  name: string;
+  path?: string | null;
+  enabled: boolean;
+  volume: number;
 }
 
 export type RecState = "starting" | "off" | "waiting" | "recording" | "error";

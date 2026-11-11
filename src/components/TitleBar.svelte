@@ -33,13 +33,13 @@
   {/if}
   <div class="controls">
     <button type="button" aria-label={t("Minimize")} use:tip={t("Minimize")} onclick={() => win.minimize()}>
-      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 5h10" stroke="currentColor" /></svg>
+      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0.5 5h9" stroke="currentColor" stroke-linecap="round" /></svg>
     </button>
     <button type="button" aria-label={t("Maximize")} use:tip={t("Maximize")} onclick={() => win.toggleMaximize()}>
-      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" /></svg>
+      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="0.5" y="0.5" width="9" height="9" rx="2" fill="none" stroke="currentColor" /></svg>
     </button>
     <button type="button" class="close" aria-label={t("Close")} use:tip={store.settings?.closeToTray ? t("Close · keeps recording in the tray") : t("Close")} onclick={() => win.close()}>
-      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0 0l10 10M10 0L0 10" stroke="currentColor" /></svg>
+      <svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M0.5 0.5l9 9M9.5 0.5l-9 9" stroke="currentColor" stroke-linecap="round" /></svg>
     </button>
   </div>
 </div>

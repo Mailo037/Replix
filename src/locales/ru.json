@@ -564,5 +564,20 @@
   "Session recovered": "Сессия восстановлена",
   "{title}, recording": "{title}, идёт запись",
   "Stop": "Стоп",
-  "rec": "rec"
+  "rec": "rec",
+  "{name} starts at {volume}% in clips you open from now on.": "{name} начинается с {volume}% в клипах, которые вы откроете дальше.",
+  "{name} starts muted in clips you open from now on.": "{name} начинается без звука в клипах, которые вы откроете дальше.",
+  "Apps": "Приложения",
+  "Default saved": "Значение по умолчанию сохранено",
+  "Drag to make the timeline taller or shorter · double-click to reset": "Перетащите, чтобы сделать шкалу времени выше или ниже · двойной щелчок сбрасывает",
+  "Everything else you hear": "Всё остальное, что вы слышите",
+  "Forget the default for {name}": "Забыть значение по умолчанию для {name}",
+  "How loud each track starts when you open a clip in the editor. A saved draft keeps its own.": "С какой громкостью начинается каждая дорожка, когда вы открываете клип в редакторе. Сохранённый черновик хранит свои.",
+  "Programs with a track of their own": "Программы со своей дорожкой",
+  "Right-click a track in the editor to give one program its own default.": "Щёлкните дорожку в редакторе правой кнопкой, чтобы задать программе своё значение.",
+  "The game's own sound": "Звук самой игры",
+  "Timeline height": "Высота шкалы времени",
+  "Track volume": "Громкость дорожек",
+  "Use as default for new clips": "Использовать по умолчанию для новых клипов",
+  "Your voice": "Ваш голос"
 }

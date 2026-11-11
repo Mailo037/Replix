@@ -140,6 +140,33 @@ pub struct Settings {
     pub language: String,
     /// The first-start setup was finished or skipped.
     pub onboarded: bool,
+    /// How loud each kind of track, or one program's track, starts out in the editor.
+    /// Only the page reads them; a clip's own draft always wins.
+    pub track_defaults: Vec<TrackDefault>,
+}
+
+/// How a track starts out in the editor before anything is changed there.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default, rename_all = "camelCase")]
+pub struct TrackDefault {
+    /// "game", "app", "desktop" or "mic" for a kind of track, or a program's executable
+    /// name in lower case for that program's own track.
+    pub key: String,
+    /// Shown in the settings for a program.
+    pub name: String,
+    /// The program's full path, for its icon.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
+    /// Heard at all; off starts the track muted.
+    pub enabled: bool,
+    /// 1.0 is the track as recorded.
+    pub volume: f32,
+}
+
+impl Default for TrackDefault {
+    fn default() -> Self {
+        Self { key: String::new(), name: String::new(), path: None, enabled: true, volume: 1.0 }
+    }
 }
 
 /// One game or app's own settings. `None` keeps the general setting.
@@ -192,6 +219,7 @@ impl Default for Settings {
             excluded: Vec::new(),
             language: "auto".into(),
             onboarded: false,
+            track_defaults: Vec::new(),
         }
     }
 }

@@ -544,5 +544,20 @@
   "Session recovered": "会话已恢复",
   "{title}, recording": "{title}，录制中",
   "Stop": "停止",
-  "rec": "录制中"
+  "rec": "录制中",
+  "{name} starts at {volume}% in clips you open from now on.": "今后打开的剪辑中，{name} 从 {volume}% 开始。",
+  "{name} starts muted in clips you open from now on.": "今后打开的剪辑中，{name} 默认静音。",
+  "Apps": "应用",
+  "Default saved": "已保存默认值",
+  "Drag to make the timeline taller or shorter · double-click to reset": "拖动可调整时间线高度 · 双击恢复",
+  "Everything else you hear": "你听到的其他所有声音",
+  "Forget the default for {name}": "忘记 {name} 的默认值",
+  "How loud each track starts when you open a clip in the editor. A saved draft keeps its own.": "在编辑器中打开剪辑时每条音轨的初始音量。已保存的草稿保留自己的设置。",
+  "Programs with a track of their own": "拥有独立音轨的程序",
+  "Right-click a track in the editor to give one program its own default.": "在编辑器中右键点击音轨，可为某个程序设置专属默认值。",
+  "The game's own sound": "游戏本身的声音",
+  "Timeline height": "时间线高度",
+  "Track volume": "音轨音量",
+  "Use as default for new clips": "设为新剪辑的默认值",
+  "Your voice": "你的声音"
 }

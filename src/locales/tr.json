@@ -556,5 +556,20 @@
   "Session recovered": "Oturum kurtarıldı",
   "{title}, recording": "{title}, kaydediliyor",
   "Stop": "Durdur",
-  "rec": "kayıt"
+  "rec": "kayıt",
+  "{name} starts at {volume}% in clips you open from now on.": "{name} bundan sonra açtığın kliplerde %{volume} ile başlar.",
+  "{name} starts muted in clips you open from now on.": "{name} bundan sonra açtığın kliplerde sessiz başlar.",
+  "Apps": "Uygulamalar",
+  "Default saved": "Varsayılan kaydedildi",
+  "Drag to make the timeline taller or shorter · double-click to reset": "Zaman çizelgesini uzatmak veya kısaltmak için sürükle · sıfırlamak için çift tıkla",
+  "Everything else you hear": "Duyduğun diğer her şey",
+  "Forget the default for {name}": "{name} için varsayılanı unut",
+  "How loud each track starts when you open a clip in the editor. A saved draft keeps its own.": "Editörde bir klip açtığında her parçanın ne kadar yüksek başladığı. Kaydedilmiş bir taslak kendi değerlerini korur.",
+  "Programs with a track of their own": "Kendi parçası olan programlar",
+  "Right-click a track in the editor to give one program its own default.": "Bir programa kendi varsayılanını vermek için editörde bir parçaya sağ tıkla.",
+  "The game's own sound": "Oyunun kendi sesi",
+  "Timeline height": "Zaman çizelgesi yüksekliği",
+  "Track volume": "Parça sesi",
+  "Use as default for new clips": "Yeni klipler için varsayılan yap",
+  "Your voice": "Sesin"
 }

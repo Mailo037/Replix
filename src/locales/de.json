@@ -565,5 +565,20 @@
   "Session recovered": "Session wiederhergestellt",
   "{title}, recording": "{title}, wird aufgenommen",
   "Stop": "Stopp",
-  "rec": "rec"
+  "rec": "rec",
+  "{name} starts at {volume}% in clips you open from now on.": "{name} startet ab jetzt in jedem geöffneten Clip mit {volume}%.",
+  "{name} starts muted in clips you open from now on.": "{name} startet ab jetzt in jedem geöffneten Clip stumm.",
+  "Apps": "Apps",
+  "Default saved": "Standard gespeichert",
+  "Drag to make the timeline taller or shorter · double-click to reset": "Ziehen, um die Zeitleiste höher oder niedriger zu machen · Doppelklick setzt zurück",
+  "Everything else you hear": "Alles andere, was du hörst",
+  "Forget the default for {name}": "Standard für {name} vergessen",
+  "How loud each track starts when you open a clip in the editor. A saved draft keeps its own.": "Wie laut jede Spur startet, wenn du einen Clip im Editor öffnest. Ein gespeicherter Entwurf behält seine eigenen Werte.",
+  "Programs with a track of their own": "Programme mit eigener Spur",
+  "Right-click a track in the editor to give one program its own default.": "Klicke im Editor mit rechts auf eine Spur, um einem Programm einen eigenen Standard zu geben.",
+  "The game's own sound": "Der Ton des Spiels",
+  "Timeline height": "Höhe der Zeitleiste",
+  "Track volume": "Spur-Lautstärke",
+  "Use as default for new clips": "Als Standard für neue Clips",
+  "Your voice": "Deine Stimme"
 }

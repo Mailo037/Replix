@@ -1,8 +1,10 @@
 <script lang="ts">
   import { getCurrentWindow } from "@tauri-apps/api/window";
   import { appIcon } from "../lib/appIcons.svelte";
-  /** Audio tracks shown at once; more scroll. */
+  /** Audio tracks shown at once until the timeline is dragged taller or shorter; more scroll. */
   const MAX_ROWS = 3;
+  /** An audio row's height with the gap below it. */
+  const ROW = 45;
   import { listen } from "@tauri-apps/api/event";
   import { onDestroy, onMount, untrack } from "svelte";
   import { api, fileUrl, type Draft, type EditorData, type Marker, type Preset, type TrackEdit } from "../lib/api";
@@ -17,6 +19,7 @@
   import Waveform from "./Waveform.svelte";
   import { currentRound, endEditorRound } from "../lib/editorRound.svelte";
   import { t, tParts } from "../lib/i18n.svelte";
+  import { programKey, startingEdit, withDefault } from "../lib/trackDefaults";
 
   let { id }: { id: string } = $props();
 
@@ -55,6 +58,58 @@
   let audios: HTMLAudioElement[] = $state([]);
   let strip = $state<HTMLDivElement>();
   let preview = $state<HTMLDivElement>();
+  let rows = $state<HTMLDivElement>();
+
+  /** How tall the audio tracks may grow before they scroll, as last dragged; kept for next time. */
+  const ROWS_KEY = "replix.editor.rowsHeight";
+  let rowsHeight = $state(readRowsHeight());
+
+  function readRowsHeight(): number {
+    try {
+      const saved = Number(localStorage.getItem(ROWS_KEY));
+      if (saved > 0) return saved;
+    } catch {
+      // Storage may be off; the default works as well.
+    }
+    return MAX_ROWS * ROW - 4;
+  }
+
+  /**
+   * Sets how tall the audio tracks are: at least one row, at most all of them, and never more
+   * than `room` taller than now, so the player keeps its smallest size.
+   */
+  function setRowsHeight(want: number, room: number) {
+    if (!rows) return;
+    const shown = rows.getBoundingClientRect().height;
+    const most = Math.max(ROW - 4, Math.min(rows.scrollHeight, shown + room));
+    rowsHeight = Math.round(Math.min(most, Math.max(ROW - 4, want)));
+    try {
+      localStorage.setItem(ROWS_KEY, String(rowsHeight));
+    } catch {
+      // Not kept; it still applies until the editor closes.
+    }
+  }
+
+  /** Height the player can still give up, in pixels. */
+  const playerRoom = () => Math.max(0, (viewer?.clientHeight ?? 0) - 120);
+
+  /** Dragging the grip above the timeline makes the tracks taller (up) or shorter (down). */
+  function resizeTimeline(e: PointerEvent) {
+    if (!rows) return;
+    e.preventDefault();
+    const target = e.currentTarget as HTMLElement;
+    target.setPointerCapture(e.pointerId);
+    const startY = e.clientY;
+    const startHeight = rows.getBoundingClientRect().height;
+    // The player shrinks as the tracks grow, so its room is measured afresh each move.
+    const move = (ev: PointerEvent) => setRowsHeight(startHeight + (startY - ev.clientY), playerRoom());
+    const up = () => {
+      target.removeEventListener("pointermove", move);
+      target.removeEventListener("pointerup", up);
+    };
+    target.addEventListener("pointermove", move);
+    target.addEventListener("pointerup", up);
+  }
 
   type Part = { start: number; end: number; removed: boolean };
   const EPS = 0.001;
@@ -111,7 +166,8 @@
       title = d.title;
       trimStart = d.draft?.trimStart ?? 0;
       trimEnd = d.draft?.trimEnd ?? d.duration;
-      edits = d.tracks.map((_, i) => d.draft?.tracks[i] ?? { enabled: true, volume: 1 });
+      // Without a draft, each track starts as its default in the settings says.
+      edits = d.tracks.map((track, i) => d.draft?.tracks[i] ?? startingEdit(store.settings, track));
       splits = d.draft?.splits ?? [];
       cuts = d.draft?.cuts ?? [];
       vertical = d.draft?.vertical ?? false;
@@ -247,12 +303,19 @@
     audios.forEach((a) => a?.pause());
   }
 
-  /** Mouse wheel over the timeline moves the playhead: a fifth of a second per notch, one frame with Shift. */
+  /**
+   * Mouse wheel over the timeline moves the playhead: a fifth of a second per notch, one frame
+   * with Shift. Over the track names on the left it scrolls the audio tracks instead.
+   */
   function wheelScrub(node: HTMLElement) {
     const onWheel = (e: WheelEvent) => {
       const delta = e.deltaY || e.deltaX;
       if (!delta) return;
       e.preventDefault();
+      if (e.target instanceof Element && e.target.closest(".head")) {
+        if (rows) rows.scrollTop += e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * 40 : e.deltaY;
+        return;
+      }
       seek(current + (delta < 0 ? 1 : -1) * (e.shiftKey ? 1 / 30 : 0.2));
     };
     node.addEventListener("wheel", onWheel, { passive: false });
@@ -324,7 +387,7 @@
 
   function openTrackMenu(i: number, e: MouseEvent) {
     e.preventDefault();
-    trackMenu = { i, x: Math.min(e.clientX, innerWidth - 230), y: Math.min(e.clientY, innerHeight - 110) };
+    trackMenu = { i, x: Math.min(e.clientX, innerWidth - 270), y: Math.min(e.clientY, innerHeight - 150) };
   }
 
   async function extractTrack(i: number) {
@@ -345,6 +408,25 @@
     } catch (e) {
       store.notify(t("Couldn't save the audio"), String(e));
     }
+  }
+
+  /** Keeps how this track sounds now as how it starts in every clip opened without a draft. */
+  function saveTrackDefault(i: number) {
+    trackMenu = null;
+    const settings = store.settings;
+    const track = data?.tracks[i];
+    if (!settings || !track) return;
+    const edit = edits[i];
+    const name = trackName(track);
+    const key = programKey(track) ?? track.kind;
+    const next = { key, name: track.name, path: track.exe ?? null, enabled: edit.enabled, volume: edit.volume };
+    store.save({ ...settings, trackDefaults: withDefault(settings.trackDefaults ?? [], next) });
+    store.notify(
+      t("Default saved"),
+      edit.enabled
+        ? t("{name} starts at {volume}% in clips you open from now on.", { name, volume: Math.round(edit.volume * 100) })
+        : t("{name} starts muted in clips you open from now on.", { name }),
+    );
   }
 
   function removeTrack(i: number) {
@@ -868,6 +950,23 @@
     </div>
 
     <div class="timeline">
+      {#if data.tracks.length}
+        <button
+          type="button"
+          class="grip"
+          aria-label={t("Timeline height")}
+          use:tip={t("Drag to make the timeline taller or shorter · double-click to reset")}
+          onpointerdown={resizeTimeline}
+          ondblclick={() => setRowsHeight(MAX_ROWS * ROW - 4, playerRoom())}
+          onkeydown={(e) => {
+            if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+            e.preventDefault();
+            e.stopPropagation();
+            const now = rows?.getBoundingClientRect().height ?? rowsHeight;
+            setRowsHeight(now + (e.key === "ArrowUp" ? ROW : -ROW), playerRoom());
+          }}
+        ></button>
+      {/if}
       <div class="toolbar">
         <button
           type="button"
@@ -1055,7 +1154,7 @@
           </div>
         </div>
 
-        <div class="audio-rows scroll" class:many={data.tracks.length > MAX_ROWS} style:--rows={MAX_ROWS}>
+        <div class="audio-rows scroll" bind:this={rows} style:max-height="min({rowsHeight}px, max({ROW - 4}px, 100vh - 400px))">
         {#each data.tracks as track, i (i)}
           {#if edits[i] && !edits[i].removed}
             {@const icon = appIcon(track.exe)}
@@ -1086,6 +1185,7 @@
                     value={Math.round(edits[i].volume * 100)}
                     valuetext="{Math.round(edits[i].volume * 100)}%"
                     disabled={!edits[i].enabled}
+                    wheel={false}
                     oninput={(v) => (edits[i].volume = v / 100)}
                   />
                 </div>
@@ -1182,6 +1282,9 @@
           >
             <button type="button" role="menuitem" onclick={() => extractTrack(m.i)}>
               <Icon name="export" size={16} />{t("Save as audio file")}
+            </button>
+            <button type="button" role="menuitem" onclick={() => saveTrackDefault(m.i)}>
+              <Icon name="speaker" size={16} />{t("Use as default for new clips")}
             </button>
             <button type="button" role="menuitem" class="danger" onclick={() => removeTrack(m.i)}>
               <Icon name="trash" size={16} />{t("Remove track")}
@@ -1453,6 +1556,7 @@
 
   /* Timeline */
   .timeline {
+    position: relative;
     flex: none;
     display: flex;
     flex-direction: column;
@@ -1460,6 +1564,40 @@
     padding: 8px 12px 12px;
     border-radius: 24px;
     background: var(--overlay);
+  }
+  /* Along the timeline's top edge; the pill shows where to grab. */
+  .grip {
+    position: absolute;
+    top: -6px;
+    left: 24px;
+    right: 24px;
+    height: 14px;
+    z-index: 4;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: ns-resize;
+    touch-action: none;
+    outline: none;
+  }
+  .grip::after {
+    content: "";
+    position: absolute;
+    top: 8px;
+    left: 50%;
+    width: 36px;
+    height: 4px;
+    margin-left: -18px;
+    border-radius: 2px;
+    background: var(--line);
+    transition: background-color 140ms ease, width 140ms ease, margin-left 140ms ease;
+  }
+  .grip:hover::after,
+  .grip:focus-visible::after,
+  .grip:active::after {
+    width: 56px;
+    margin-left: -28px;
+    background: var(--accent);
   }
   .toolbar {
     display: flex;
@@ -1645,15 +1783,11 @@
   .removed-row {
     justify-items: start;
   }
-  /* After a few tracks the rest scroll, so the timeline keeps its height. */
+  /* Past the height dragged at the grip the rest scroll, so the timeline keeps its height. */
   .audio-rows {
     display: flex;
     flex-direction: column;
     gap: 4px;
-  }
-  .audio-rows.many {
-    /* A row is 41px tall, with 4px between rows. */
-    max-height: calc(var(--rows) * 45px - 4px);
     overflow-y: auto;
     overscroll-behavior: contain;
   }
