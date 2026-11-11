@@ -247,6 +247,27 @@ pub fn empty_aac_slots(dir: &Path, list: &Path) -> Result<Vec<usize>> {
             "json",
         ])
         .arg(format!("concatf:{}", path_arg(list)));
+    empty_aac(cmd)
+}
+
+/// The same for one file that holds the whole recording, such as a session's own file.
+pub fn empty_aac_streams(file: &Path) -> Result<Vec<usize>> {
+    let mut cmd = Command::new(tool("ffprobe"));
+    cmd.args([
+        "-v",
+        "error",
+        "-count_packets",
+        "-show_error",
+        "-show_entries",
+        "stream=codec_type,codec_name,nb_read_packets:error=code,string",
+        "-of",
+        "json",
+    ])
+    .arg(file);
+    empty_aac(cmd)
+}
+
+fn empty_aac(cmd: Command) -> Result<Vec<usize>> {
     // Unlike a header probe, this reads the whole clip and may take as long as a remux.
     let out = probe_output(cmd, Duration::from_secs(600), &|| true)?;
     let parsed: ProbeOut = serde_json::from_slice(&out)?;

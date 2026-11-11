@@ -575,5 +575,9 @@
   "Zoom in": "Przybliż",
   "Zoom in · +": "Przybliż · +",
   "Zoom out": "Oddal",
-  "Zoom out · −": "Oddal · −"
+  "Zoom out · −": "Oddal · −",
+  "Session recovered": "Sesja odzyskana",
+  "{title}, recording": "{title}, nagrywanie",
+  "Stop": "Zatrzymaj",
+  "rec": "rec"
 }

@@ -47,6 +47,8 @@ class Store {
   loaded = $state(false);
   view = $state<View>({ name: "library", filter: "all", game: null });
   notice = $state<Notice | null>(null);
+  /** The newest picture of the session being recorded, for its tile in the library. */
+  sessionPicture = $state<{ since: number; path: string } | null>(null);
   /** Hotkeys another program already owns. */
   conflicts = $state<string[]>([]);
   /** The window is on screen; hidden in the tray or minimised, Replix keeps quiet. */
@@ -108,7 +110,14 @@ class Store {
       if (this.stale) this.refresh();
     });
     // Listening first, each subscription confirmed: the first scan may already report.
-    await listen<Status>("status", (e) => (this.status = e.payload));
+    await listen<Status>("status", (e) => {
+      this.status = e.payload;
+      if (this.sessionPicture && this.sessionPicture.since !== e.payload.sessionSince) this.sessionPicture = null;
+    });
+    await listen<[number, string]>("session-picture", (e) => {
+      const [since, path] = e.payload;
+      if (since === this.status.sessionSince) this.sessionPicture = { since, path };
+    });
     await listen("library-changed", () => this.refresh());
     // Replix says when a scan had to leave files unread. Free again right away (it was a
     // moment of lost focus), scan again now; else when Replix is back or the editor closes.

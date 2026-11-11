@@ -540,5 +540,9 @@
   "Zoom in": "放大",
   "Zoom in · +": "放大 · +",
   "Zoom out": "缩小",
-  "Zoom out · −": "缩小 · −"
+  "Zoom out · −": "缩小 · −",
+  "Session recovered": "会话已恢复",
+  "{title}, recording": "{title}，录制中",
+  "Stop": "停止",
+  "rec": "录制中"
 }

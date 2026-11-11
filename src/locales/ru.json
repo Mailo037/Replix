@@ -560,5 +560,9 @@
   "Zoom in": "Приблизить",
   "Zoom in · +": "Приблизить · +",
   "Zoom out": "Отдалить",
-  "Zoom out · −": "Отдалить · −"
+  "Zoom out · −": "Отдалить · −",
+  "Session recovered": "Сессия восстановлена",
+  "{title}, recording": "{title}, идёт запись",
+  "Stop": "Стоп",
+  "rec": "rec"
 }

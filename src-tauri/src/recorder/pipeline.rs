@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Context, Result};
 use parking_lot::Mutex;
 
+use super::session::{Hidden, Journal, Live};
 use super::PendingClip;
 use crate::audio::Router;
 use crate::encoder::{self, Encoder};
@@ -81,6 +82,12 @@ impl Target {
 pub(super) struct Session {
     pub first: u64,
     pub since: u64,
+    /// Writes the session into the clips folder while it runs. None when that could not
+    /// start, or stopped: the buffer then keeps the session's segments until it ends.
+    pub live: Option<Live>,
+    /// When a picture of the session was last made for the library, and how many so far.
+    pub pictured: Option<Instant>,
+    pub pictures: u32,
 }
 
 pub(super) struct BufferDir(pub PathBuf);
@@ -335,7 +342,8 @@ impl Pipeline {
         if done.len() > keep {
             let mut floor = done[done.len() - keep].index;
             if let Some(s) = &self.session {
-                floor = floor.min(s.first);
+                // What is in the session's file no longer has to stay in the buffer.
+                floor = floor.min(s.live.as_ref().map_or(s.first, Live::written));
             }
             if let Some(p) = self.pins.iter().filter_map(Weak::upgrade).map(|pin| *pin).min() {
                 floor = floor.min(p);
@@ -349,7 +357,10 @@ impl Pipeline {
                 self.segments.pop_front();
             }
         }
-        if let Some(oldest) = self.segments.front().map(|s| s.start - PRIVACY_MARGIN) {
+        // A session's file reaches back further than the buffer does.
+        let session_start = self.session.as_ref().and_then(|s| s.live.as_ref()).and_then(Live::span).map(|s| s.0);
+        let oldest = self.segments.front().map(|s| session_start.map_or(s.start, |start| start.min(s.start)) - PRIVACY_MARGIN);
+        if let Some(oldest) = oldest {
             self.markers.retain(|m| *m >= oldest);
             // The newest look stays: it tells whether the windows are still there.
             let last = self.private.len().saturating_sub(1);
@@ -374,6 +385,35 @@ impl Pipeline {
         let shown = platform::excluded_areas(index, excluded, &mut self.memo);
         let now = self.now();
         note_private(&mut self.private, shown, now);
+    }
+
+    /// Hands the session's file the segments completed since the last look, and keeps its
+    /// journal up to date. False once the file can take no more.
+    pub fn feed_session(&mut self) -> bool {
+        self.segments();
+        let now = self.now();
+        let Some(session) = self.session.as_mut() else { return true };
+        let Some(live) = session.live.as_mut() else { return true };
+        live.feed(&self.segments);
+        if live.failed() {
+            return false;
+        }
+        let origin = live.span().map(|s| s.0);
+        let from = origin.unwrap_or(now);
+        let journal = Journal {
+            game: self.target.label(),
+            since: session.since,
+            fps: self.settings.fps,
+            kbps: self.settings.quality.video_kbps(),
+            origin,
+            tracks: self.router.tracks_between(session.since, crate::audio::now_ms()),
+            markers: self.markers.iter().copied().filter(|m| *m >= from).collect(),
+            // Whatever is on screen now may still be there when the session breaks off.
+            private: private_masks(&self.private, from, f64::INFINITY, f64::INFINITY).iter().map(Hidden::from).collect(),
+            done: false,
+        };
+        live.note(journal);
+        true
     }
 
     /// Whether a kept-out program was on screen between two stream times, or is now.

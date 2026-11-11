@@ -552,5 +552,9 @@
   "Zoom in": "Yakınlaştır",
   "Zoom in · +": "Yakınlaştır · +",
   "Zoom out": "Uzaklaştır",
-  "Zoom out · −": "Uzaklaştır · −"
+  "Zoom out · −": "Uzaklaştır · −",
+  "Session recovered": "Oturum kurtarıldı",
+  "{title}, recording": "{title}, kaydediliyor",
+  "Stop": "Durdur",
+  "rec": "kayıt"
 }

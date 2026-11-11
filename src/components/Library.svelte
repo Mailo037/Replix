@@ -6,6 +6,7 @@
   import { tip } from "../lib/tooltip";
   import ClipTile from "./ClipTile.svelte";
   import PendingTile from "./PendingTile.svelte";
+  import LiveTile from "./LiveTile.svelte";
   import Icon from "./Icon.svelte";
   import ImageViewer from "./ImageViewer.svelte";
   import Mark from "./Mark.svelte";
@@ -58,22 +59,115 @@
     });
   });
 
+  /** The session being recorded right now, if it belongs in this list. */
+  const live = $derived.by(() => {
+    const { sessionSince: since, target } = store.status;
+    if (!since || (filter !== "all" && filter !== "sessions")) return null;
+    const name = target ?? "";
+    if (game && name !== game) return null;
+    const title = `${name} session`.trim();
+    const q = query.trim().toLowerCase();
+    if (q && !title.toLowerCase().includes(q)) return null;
+    return { since, game: name, title };
+  });
+
+  type Entry =
+    | { key: string; live: NonNullable<typeof live> }
+    | { key: string; save: PendingSave }
+    | { key: string; item: Item };
+
   const groups = $derived.by(() => {
-    const out: { label: string; pending: PendingSave[]; items: Item[] }[] = [];
-    // Saves in progress are the newest, so they lead their day.
-    for (const save of waiting) {
-      const label = day(save.created);
+    const out: { label: string; entries: Entry[] }[] = [];
+    const add = (label: string, entry: Entry) => {
       const last = out[out.length - 1];
-      if (last?.label === label) last.pending.push(save);
-      else out.push({ label, pending: [save], items: [] });
-    }
-    for (const item of visible) {
-      const label = day(item.created);
-      const last = out[out.length - 1];
-      if (last?.label === label) last.items.push(item);
-      else out.push({ label, pending: [], items: [item] });
-    }
+      if (last?.label === label) last.entries.push(entry);
+      else out.push({ label, entries: [entry] });
+    };
+    // What is being recorded and saved is the newest, so it leads its day.
+    if (live) add(day(Date.now()), { key: "live", live });
+    for (const save of waiting) add(day(save.created), { key: save.id, save });
+    for (const item of visible) add(day(item.created), { key: item.id, item });
     return out;
+  });
+
+  // Only the tiles near the window exist. A library of thousands of clips would otherwise
+  // be thousands of tiles and pictures held in memory, most of them never looked at. Each
+  // day is cut into blocks of a few rows; a block away from view is an empty box of the
+  // height its tiles would have, so the scroll bar and position stay as they are.
+  const GAP_X = 18;
+  const GAP_Y = 26;
+  const MIN_TILE = 230;
+  const ROWS = 3;
+  /** Under a thumbnail: the gap, the title and the line below it. */
+  const TEXT = 52;
+
+  let body = $state<HTMLElement>();
+  let width = $state(0);
+  const cols = $derived(Math.max(1, Math.floor((width + GAP_X) / (MIN_TILE + GAP_X))));
+  /** A row is as high as a 16:9 thumbnail of the column's width and the text under it. The
+      grid is given this height too, so a box away from view is exactly as tall as its tiles. */
+  const rowHeight = $derived(((Math.max(width, MIN_TILE) - (cols - 1) * GAP_X) / cols) * (9 / 16) + TEXT);
+
+  const days = $derived.by(() => {
+    const per = cols * ROWS;
+    let index = 0;
+    return groups.map((group) => {
+      const blocks: { key: string; index: number; rows: number; entries: Entry[] }[] = [];
+      for (let i = 0; i < group.entries.length; i += per) {
+        const entries = group.entries.slice(i, i + per);
+        blocks.push({ key: `${group.label}#${i / per}`, index: index++, rows: Math.ceil(entries.length / cols), entries });
+      }
+      return { label: group.label, count: group.entries.length, blocks };
+    });
+  });
+
+  /** Blocks in or near the window, by key, as the observer last saw them. */
+  let near = $state<Record<string, boolean>>({});
+  let observer: IntersectionObserver | undefined;
+  const blockKeys = new WeakMap<Element, string>();
+
+  /** Until the observer has looked at a block, the first ones count as in view. */
+  const shown = (block: { key: string; index: number }) => near[block.key] ?? block.index < 2;
+
+  function watch(node: HTMLElement, key: string) {
+    observer ??= new IntersectionObserver(
+      (seen) => {
+        for (const entry of seen) {
+          const k = blockKeys.get(entry.target);
+          if (k !== undefined && near[k] !== entry.isIntersecting) near[k] = entry.isIntersecting;
+        }
+      },
+      // A screen or so ahead in both directions, so scrolling does not show empty boxes.
+      { root: node.closest(".body"), rootMargin: "900px 0px" },
+    );
+    blockKeys.set(node, key);
+    observer.observe(node);
+    return {
+      update(next: string) {
+        blockKeys.set(node, (key = next));
+      },
+      destroy() {
+        observer?.unobserve(node);
+        delete near[key];
+      },
+    };
+  }
+
+  $effect(() => {
+    const node = body;
+    if (!node) return;
+    const measure = () => {
+      const style = getComputedStyle(node);
+      width = node.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+    };
+    measure();
+    const resize = new ResizeObserver(measure);
+    resize.observe(node);
+    return () => {
+      resize.disconnect();
+      observer?.disconnect();
+      observer = undefined;
+    };
   });
 
   const shots = $derived(visible.filter((i) => i.kind === "screenshot"));
@@ -220,8 +314,8 @@
     {/if}
   </header>
 
-  <div class="scroll body">
-    {#if store.loaded && visible.length === 0 && waiting.length === 0}
+  <div class="scroll body" bind:this={body} style:--cols={cols} style:--row="{rowHeight}px">
+    {#if store.loaded && visible.length === 0 && waiting.length === 0 && !live}
       <div class="empty">
         <span class="empty-mark"><Mark size={64} /></span>
         {#if store.items.length === 0}
@@ -244,20 +338,33 @@
       </div>
     {/if}
 
-    {#each groups as group (group.label)}
+    {#each days as group (group.label)}
       <section class="group" aria-label={group.label}>
         <div class="group-head">
           <h2>{group.label}</h2>
-          <span class="ring mono">{group.items.length + group.pending.length}</span>
+          <span class="ring mono">{group.count}</span>
         </div>
-        <div class="grid">
-          {#each group.pending as save (save.id)}
-            <PendingTile {save} />
-          {/each}
-          {#each group.items as item (item.id)}
-            <ClipTile {item} onopen={open} onselect={select} {selecting} selected={selectedIds.has(item.id)} />
-          {/each}
-        </div>
+        {#each group.blocks as block (block.key)}
+          <!-- One element in view or not, so the observer keeps watching the same box. -->
+          <div
+            class="grid block"
+            class:shown={shown(block)}
+            use:watch={block.key}
+            style:height={shown(block) ? undefined : `${block.rows * rowHeight + (block.rows - 1) * GAP_Y}px`}
+          >
+            {#if shown(block)}
+              {#each block.entries as entry (entry.key)}
+                {#if "live" in entry}
+                  <LiveTile {...entry.live} />
+                {:else if "save" in entry}
+                  <PendingTile save={entry.save} />
+                {:else}
+                  <ClipTile item={entry.item} onopen={open} onselect={select} {selecting} selected={selectedIds.has(entry.item.id)} />
+                {/if}
+              {/each}
+            {/if}
+          </div>
+        {/each}
       </section>
     {/each}
   </div>
@@ -411,17 +518,22 @@
     gap: 24px;
     mask-image: linear-gradient(to bottom, transparent 0, #000 16px, #000 calc(100% - 28px), transparent 100%);
   }
-  /* Days scrolled out of view are skipped by layout and paint, which keeps a big library
-     smooth. The side padding leaves room for stickers, outlines and the hover zoom, which
-     poke out of the tiles and would otherwise be clipped. */
   .group {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    margin-inline: -10px;
-    padding-inline: 10px;
-    content-visibility: auto;
-    contain-intrinsic-size: auto 640px;
+  }
+  /* A few rows of a day. Away from view it is an empty box of the same height (see `days`);
+     the gap between blocks is the gap between rows, so a day reads as one grid. */
+  .block {
+    flex: none;
+    contain: layout style;
+  }
+  .block + .block {
+    margin-top: 14px;
+  }
+  .block:not(.shown) {
+    contain: strict;
   }
   .group-head {
     display: flex;
@@ -445,9 +557,11 @@
     display: grid;
     place-items: center;
   }
+  /* The column count comes from the script, which sizes the empty boxes by it. */
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+    grid-template-columns: repeat(var(--cols, 4), minmax(0, 1fr));
+    grid-auto-rows: var(--row, auto);
     gap: 26px 18px;
   }
   .empty {

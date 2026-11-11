@@ -44,7 +44,8 @@
 </script>
 
 <div class="shell">
-  <pre class="raster" aria-hidden="true" style:margin-top="-{drift.n % 16}px">{field}</pre>
+  <!-- Moved, not laid out again: the drift costs the page no layout and no repaint. -->
+  <div class="raster" aria-hidden="true"><pre style:transform="translateY(-{drift.n % 16}px)">{field}</pre></div>
 
   <TitleBar />
 
@@ -126,14 +127,17 @@
     pointer-events: none;
   }
   .raster {
-    margin: 0;
     overflow: hidden;
+    opacity: 0.22;
+    mask-image: linear-gradient(to bottom, #000, transparent);
+  }
+  .raster pre {
+    margin: 0;
     font-family: var(--mono);
     font-size: 11px;
     line-height: 16px;
     color: var(--ghost);
-    opacity: 0.22;
-    mask-image: linear-gradient(to bottom, #000, transparent);
+    will-change: transform;
   }
   .body {
     position: relative;

@@ -540,5 +540,9 @@
   "Zoom in": "拡大",
   "Zoom in · +": "拡大 · +",
   "Zoom out": "縮小",
-  "Zoom out · −": "縮小 · −"
+  "Zoom out · −": "縮小 · −",
+  "Session recovered": "セッションを復元しました",
+  "{title}, recording": "{title}、録画中",
+  "Stop": "停止",
+  "rec": "録画中"
 }

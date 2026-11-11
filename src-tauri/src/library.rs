@@ -256,6 +256,10 @@ fn media_files(root: &Path) -> Vec<(PathBuf, u64)> {
     let media = |entry: std::fs::DirEntry| {
         let meta = metadata(&entry).ok().filter(|m| m.is_file())?;
         let path = entry.path();
+        // A session still being recorded is no library item yet; it grows by the second.
+        if crate::recorder::is_live_file(&path) {
+            return None;
+        }
         kind_of(&path).map(|_| (path, meta.len()))
     };
     for entry in entries.flatten() {

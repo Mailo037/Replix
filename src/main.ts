@@ -1,7 +1,5 @@
 import { mount } from "svelte";
 import "./app.css";
-import App from "./App.svelte";
-import Toast from "./components/Toast.svelte";
 
 const isToast = location.hash === "#toast";
 if (isToast) document.body.classList.add("toast-body");
@@ -33,4 +31,8 @@ window.addEventListener("wheel", (e) => e.ctrlKey && e.preventDefault(), { passi
 // The mouse's back and forward buttons.
 window.addEventListener("mouseup", (e) => (e.button === 3 || e.button === 4) && e.preventDefault(), { capture: true });
 
-export default mount(isToast ? Toast : App, { target: document.getElementById("app")! });
+// Each window loads only its own page. The toast window stays loaded for as long as Replix
+// runs, and has no use for the library and the editor.
+const page = isToast ? await import("./components/Toast.svelte") : await import("./App.svelte");
+
+export default mount(page.default, { target: document.getElementById("app")! });

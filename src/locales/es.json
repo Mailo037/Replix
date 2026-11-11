@@ -568,5 +568,9 @@
   "Zoom in": "Acercar",
   "Zoom in · +": "Acercar · +",
   "Zoom out": "Alejar",
-  "Zoom out · −": "Alejar · −"
+  "Zoom out · −": "Alejar · −",
+  "Session recovered": "Sesión recuperada",
+  "{title}, recording": "{title}, grabando",
+  "Stop": "Detener",
+  "rec": "rec"
 }

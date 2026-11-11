@@ -12,6 +12,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use super::pipeline::{area_key, segment_name, BufferDir, Mask};
+use super::session;
 use crate::audio::{self, Track, TrackKind};
 use crate::encoder::{self, Encoder};
 use crate::ffmpeg;
@@ -138,10 +139,18 @@ impl Drop for Placeholder {
     }
 }
 
+/// What a save is made from.
+pub(super) enum Footage {
+    /// Segments of the buffer, joined. The pin keeps them there until the save has read them.
+    Buffer { dir: Arc<BufferDir>, segments: Vec<u64>, _pin: Arc<u64> },
+    /// A session's own file, written while it ran (see `session`). With it, the piece of
+    /// the buffer the library's picture of the save is made from.
+    Live { file: PathBuf, _picture: Option<(Arc<BufferDir>, Arc<u64>)> },
+}
+
 pub(super) struct SaveJob {
     pub app: AppHandle,
-    pub dir: Arc<BufferDir>,
-    pub segments: Vec<u64>,
+    pub footage: Footage,
     pub tracks: Vec<Track>,
     pub kind: Kind,
     pub name: String,
@@ -161,7 +170,8 @@ pub(super) struct SaveJob {
     /// For blacking out, which means encoding the picture again.
     pub encoder: &'static Encoder,
     pub kbps: u32,
-    pub _pin: Arc<u64>,
+    /// When it was recorded, if that was not just now: a session that broke off earlier.
+    pub recorded: Option<u64>,
     pub placeholder: Placeholder,
 }
 
@@ -170,14 +180,15 @@ impl SaveJob {
         std::thread::spawn(move || self.run());
     }
 
-    fn run(self) {
+    pub fn run(self) {
         let result = self.write();
-        drop(self._pin);
         self.placeholder
             .finish(result.as_ref().ok().map(|(_, out)| out.as_path()));
         match result {
             Ok((meta, _)) => {
-                let what = if self.kind == Kind::Session {
+                let what = if self.recorded.is_some() {
+                    tr("Session recovered")
+                } else if self.kind == Kind::Session {
                     tr("Session saved")
                 } else {
                     tr("Clip saved")
@@ -197,7 +208,8 @@ impl SaveJob {
                 }
                 crate::toast(&self.app, &what, &detail);
                 let _ = self.app.emit("library-changed", ());
-                drop(self.dir);
+                // The buffer's part in this is over; its segments may go.
+                drop(self.footage);
                 if self.limit_gb > 0 {
                     let _cleanup = STORAGE_LIMIT_LOCK.lock();
                     if library::enforce_limit(
@@ -218,17 +230,22 @@ impl SaveJob {
     fn write(&self) -> Result<(Meta, PathBuf)> {
         let id = SAVE_ID.fetch_add(1, Ordering::Relaxed);
         let stamp = format!("{}-{}-{id}", audio::now_ms(), std::process::id());
-        let list = self.dir.0.join(format!("save-{stamp}.txt"));
         let label = if self.kind == Kind::Session {
             Some("Session")
         } else {
             None
         };
         let folder = library::new_path(&self.clips_dir, &self.name, "mp4", label);
+        // Work files sit in the buffer, which is cleared anyway; a session's own file has
+        // none to offer, so they go next to the clip under hidden names.
+        let work = |name: &str| match &self.footage {
+            Footage::Buffer { dir, .. } => dir.0.join(format!("{name}-{stamp}.txt")),
+            Footage::Live { .. } => folder.with_file_name(format!(".replix-{stamp}-{name}.txt")),
+        };
+        let (list, graph) = (work("save"), work("hide"));
         let joined = folder.with_file_name(format!(".replix-{stamp}.part"));
         let trimmed = folder.with_file_name(format!(".replix-{stamp}-trimmed.part"));
         let hidden = folder.with_file_name(format!(".replix-{stamp}-hidden.part"));
-        let graph = self.dir.0.join(format!("hide-{stamp}.txt"));
         let result = (|| {
             let Rendered {
                 mut source,
@@ -255,12 +272,17 @@ impl SaveJob {
                 }
             });
             let _publish = PUBLISH_LOCK.lock();
-            let out = library::new_path(&self.clips_dir, &self.name, "mp4", label);
+            // A session keeps the name it was recorded under, which carries its start.
+            let named = match &self.footage {
+                Footage::Live { file, .. } => session::finished_name(file).filter(|p| !p.exists()),
+                Footage::Buffer { .. } => None,
+            };
+            let out = named.unwrap_or_else(|| library::new_path(&self.clips_dir, &self.name, "mp4", label));
             let meta = Meta {
                 kind: self.kind,
                 title: library::default_title(self.kind, &self.name),
                 game: self.name.clone(),
-                created: audio::now_ms(),
+                created: self.recorded.unwrap_or_else(audio::now_ms),
                 duration: info.duration,
                 width: info.width,
                 height: info.height,
@@ -297,29 +319,96 @@ impl SaveJob {
         for path in [list, joined, trimmed, hidden, graph] {
             let _ = std::fs::remove_file(path);
         }
-        result
+        match (&self.footage, result) {
+            // The session is in the library; the file it was recorded into has done its part.
+            (Footage::Live { file, .. }, Ok(saved)) => {
+                session::discard(file);
+                Ok(saved)
+            }
+            (Footage::Live { file, .. }, Err(e)) => self.keep_as_recorded(file, e),
+            (Footage::Buffer { .. }, result) => result,
+        }
+    }
+
+    /// A session that could not be made into an MP4 (no room for a second copy, say) goes
+    /// into the library as the file it was recorded into, rather than not at all. Where a
+    /// kept-out program would show, it stays out: the next start tries again.
+    fn keep_as_recorded(&self, file: &Path, error: anyhow::Error) -> Result<(Meta, PathBuf)> {
+        if !self.private.is_empty() || std::fs::metadata(file).map_or(true, |m| m.len() == 0) {
+            return Err(error);
+        }
+        log::warn!("keeping the session as recorded: {error:#}");
+        let _publish = PUBLISH_LOCK.lock();
+        let out = session::finished_name(file)
+            .map(|p| p.with_extension("mkv"))
+            .filter(|p| !p.exists())
+            .unwrap_or_else(|| library::new_path(&self.clips_dir, &self.name, "mkv", Some("Session")));
+        let info = ffmpeg::probe(file).unwrap_or_default();
+        let meta = Meta {
+            kind: self.kind,
+            title: library::default_title(self.kind, &self.name),
+            game: self.name.clone(),
+            created: self.recorded.unwrap_or_else(audio::now_ms),
+            duration: if info.duration > 0.0 { info.duration } else { self.duration },
+            width: info.width,
+            height: info.height,
+            // Every slot is in the file, used or not, so they are named as the file has them.
+            tracks: (0..info.audio_titles.len())
+                .map(|slot| match self.tracks.iter().find(|t| t.slot == slot) {
+                    Some(t) => TrackMeta { name: t.name.clone(), kind: t.kind, exe: t.exe.clone() },
+                    None => TrackMeta { name: format!("Track {}", slot + 1), kind: TrackKind::App, exe: None },
+                })
+                .collect(),
+            unread: info.duration <= 0.0,
+            markers: library::tidy_markers(self.markers.iter().map(|m| library::Marker::at(m - self.origin)).collect(), 0.0),
+            ..Default::default()
+        };
+        if let Err(e) = library::write_meta(&out, &meta) {
+            log::warn!("could not write the details of {}: {e}", out.display());
+        }
+        if let Err(e) = std::fs::rename(file, &out) {
+            library::remove_meta(&out);
+            return Err(e).context(tr("Could not move the recording into the library"));
+        }
+        session::discard(file);
+        Ok((meta, out))
     }
 
     /// The finished file, its length, and how much of the joined segments it skips: trimmed
     /// if that worked, whole if not.
     fn render<'a>(&self, list: &Path, joined: &'a Path, trimmed: &'a Path) -> Result<Rendered<'a>> {
-        // The segments share one timeline, so they are read back to back as a single stream.
-        // That skips opening and probing every segment on its own. Names in the list are
-        // relative to the buffer folder, which FFmpeg runs in.
-        let text: String = self
-            .segments
-            .iter()
-            .map(|i| segment_name(*i) + "\n")
-            .collect();
-        std::fs::write(list, text)?;
         let tracks: Vec<(usize, &str)> = self
             .tracks
             .iter()
             .map(|t| (t.slot, t.name.as_str()))
             .collect();
+        let (dir, segments) = match &self.footage {
+            Footage::Buffer { dir, segments, .. } => (dir, segments),
+            // One file, already in order: copied into an MP4 as it is.
+            Footage::Live { file, .. } => {
+                let dir = file.parent().unwrap_or(Path::new("."));
+                let slots = remux(dir, Source::File(file), &tracks, None, joined, self.duration, self.fps)?;
+                // A file that broke off does not say how long it is; the copy does.
+                let length = ffmpeg::probe(joined).map(|i| i.duration).ok().filter(|d| *d > 0.0);
+                return Ok(Rendered {
+                    source: joined,
+                    length: length.unwrap_or(self.duration),
+                    skipped: 0.0,
+                    tracks: retained_tracks(&self.tracks, &slots),
+                });
+            }
+        };
+        // The segments share one timeline, so they are read back to back as a single stream.
+        // That skips opening and probing every segment on its own. Names in the list are
+        // relative to the buffer folder, which FFmpeg runs in.
+        let text: String = segments
+            .iter()
+            .map(|i| segment_name(*i) + "\n")
+            .collect();
+        std::fs::write(list, text)?;
         let remux = |out, trim| {
             remux_segments(
-                &self.dir.0,
+                &dir.0,
                 list,
                 &tracks,
                 trim,
@@ -404,8 +493,25 @@ fn audio_layout(tracks: &[Track]) -> (Option<usize>, Vec<&str>) {
     )
 }
 
-/// Remuxes without decoding audio. Recovery is only for MP4's missing sample-rate error;
-/// only AAC slots proven empty across the whole selection may be removed.
+/// Where a save reads its recording from.
+#[derive(Clone, Copy)]
+enum Source<'a> {
+    /// A list of the buffer's segments, read back to back.
+    Segments(&'a Path),
+    /// One file with every audio slot in it.
+    File(&'a Path),
+}
+
+impl Source<'_> {
+    /// What FFmpeg is given after `-i`.
+    fn input(&self) -> String {
+        match self {
+            Source::Segments(list) => format!("concatf:{}", ffmpeg::path_arg(list)),
+            Source::File(file) => ffmpeg::path_arg(file),
+        }
+    }
+}
+
 fn remux_segments(
     dir: &Path,
     list: &Path,
@@ -415,8 +521,22 @@ fn remux_segments(
     seconds: f64,
     fps: u32,
 ) -> Result<Vec<usize>> {
+    remux(dir, Source::Segments(list), tracks, trim, out, seconds, fps)
+}
+
+/// Remuxes without decoding audio. Recovery is only for MP4's missing sample-rate error;
+/// only AAC slots proven empty across the whole selection may be removed.
+fn remux(
+    dir: &Path,
+    source: Source,
+    tracks: &[(usize, &str)],
+    trim: Option<(f64, f64)>,
+    out: &Path,
+    seconds: f64,
+    fps: u32,
+) -> Result<Vec<usize>> {
     let length = trim.map_or(seconds, |t| t.1);
-    let input = joined_input(list, tracks, trim);
+    let input = stream_input(&source.input(), tracks, trim);
     match write_mp4(dir, &input, out, moov_room(length, fps, tracks.len())) {
         Ok(()) => return Ok(tracks.iter().map(|t| t.0).collect()),
         Err(e) if e.to_string().contains("sample rate not set") => {
@@ -426,7 +546,10 @@ fn remux_segments(
         }
         Err(e) => return Err(e),
     }
-    let empty = ffmpeg::empty_aac_slots(dir, list)?;
+    let empty = match source {
+        Source::Segments(list) => ffmpeg::empty_aac_slots(dir, list)?,
+        Source::File(file) => ffmpeg::empty_aac_streams(file)?,
+    };
     let kept: Vec<_> = tracks
         .iter()
         .copied()
@@ -436,16 +559,21 @@ fn remux_segments(
     log::warn!("saving without packetless AAC tracks: {removed:?}");
     // A retained track may first play beyond FFmpeg's normal five-second/5 MB probe.
     // Let this exceptional retry find its header anywhere in the selection too.
-    let list_path = if list.is_absolute() {
-        list.to_path_buf()
-    } else {
-        dir.join(list)
+    let bytes = match source {
+        Source::Segments(list) => {
+            let list_path = if list.is_absolute() {
+                list.to_path_buf()
+            } else {
+                dir.join(list)
+            };
+            std::fs::read_to_string(list_path)?
+                .lines()
+                .try_fold(0u64, |total, name| {
+                    std::fs::metadata(dir.join(name)).map(|m| total.saturating_add(m.len()))
+                })?
+        }
+        Source::File(file) => std::fs::metadata(file)?.len(),
     };
-    let bytes = std::fs::read_to_string(list_path)?
-        .lines()
-        .try_fold(0u64, |total, name| {
-            std::fs::metadata(dir.join(name)).map(|m| total.saturating_add(m.len()))
-        })?;
     let mut input: Vec<String> = [
         "-probesize".into(),
         bytes.max(32).to_string(),
@@ -453,7 +581,7 @@ fn remux_segments(
         i64::MAX.to_string(),
     ]
     .into();
-    input.extend(joined_input(list, &kept, trim));
+    input.extend(stream_input(&source.input(), &kept, trim));
     write_mp4(dir, &input, out, moov_room(length, fps, kept.len()))?;
     Ok(kept.iter().map(|t| t.0).collect())
 }
@@ -555,17 +683,17 @@ fn black_out_args(
     args
 }
 
-/// Reads the segments in `list` as one stream with the chosen audio streams and their titles.
-/// With `trim` (seconds to skip, seconds to keep), the clip is cut in the same pass: the
-/// first segment starts on a keyframe, and shifting the stream back by the part before the
-/// clip leaves that keyframe at a negative time, which the MP4 hides with an edit list.
-/// Writing stops at the key press. No joined copy is written first.
-pub(super) fn joined_input(list: &Path, tracks: &[(usize, &str)], trim: Option<(f64, f64)>) -> Vec<String> {
+/// Reads `input` (the segments of a list, or one file) as one stream with the chosen audio
+/// streams and their titles. With `trim` (seconds to skip, seconds to keep), the clip is cut
+/// in the same pass: the first segment starts on a keyframe, and shifting the stream back by
+/// the part before the clip leaves that keyframe at a negative time, which the MP4 hides
+/// with an edit list. Writing stops at the key press. No joined copy is written first.
+fn stream_input(input: &str, tracks: &[(usize, &str)], trim: Option<(f64, f64)>) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     if let Some((skip, _)) = trim {
         args.extend(["-itsoffset".into(), format!("{:.3}", -skip)]);
     }
-    args.extend(["-i".into(), format!("concatf:{}", ffmpeg::path_arg(list)), "-map".into(), "0:v:0".into()]);
+    args.extend(["-i".into(), input.into(), "-map".into(), "0:v:0".into()]);
     for (k, (slot, name)) in tracks.iter().enumerate() {
         args.extend(["-map".into(), format!("0:a:{slot}")]);
         args.extend(ffmpeg::name_track(k, name));
@@ -597,6 +725,11 @@ pub(super) fn into_session(seconds: f64) -> String {
 mod tests {
     use super::*;
     use std::process::Command;
+
+    /// `stream_input` for the segments in `list`.
+    fn joined_input(list: &Path, tracks: &[(usize, &str)], trim: Option<(f64, f64)>) -> Vec<String> {
+        stream_input(&Source::Segments(list).input(), tracks, trim)
+    }
 
     /// FFmpeg as used by the tests: the one on PATH. Tests that need it skip without it.
     fn run(dir: &Path, args: &[&str]) {
@@ -1282,6 +1415,62 @@ mod tests {
             }
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A session's own file gives an MP4 with the chosen tracks both as a crash leaves it,
+    /// still open and without its end, and once it is closed properly.
+    #[test]
+    fn a_session_file_becomes_an_mp4_broken_off_or_closed() {
+        use super::super::pipeline::Segment;
+        use super::super::session::Live;
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir = audio_fixture("live");
+        let buffer = Arc::new(BufferDir(dir.clone()));
+        let file = dir.join("Game Session.recording.mkv");
+        let segments: std::collections::VecDeque<Segment> =
+            (0..6).map(|i| Segment { index: i, start: i as f64 * 2.0, end: i as f64 * 2.0 + 2.0 }).collect();
+        // The session began in the second segment.
+        let mut live = Live::start(buffer.clone(), file.clone(), 1).unwrap();
+        live.feed(&segments);
+        assert_eq!((live.span(), live.newest), (Some((2.0, 12.0)), Some(5)));
+        let wait = |what: &str, done: &dyn Fn() -> bool| {
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
+            while !done() {
+                assert!(std::time::Instant::now() < deadline, "{what}");
+                std::thread::sleep(Duration::from_millis(20));
+            }
+        };
+        wait("segments are written", &|| live.written() == 6);
+        assert!(!live.failed());
+        wait("the file has data before it is closed", &|| std::fs::metadata(&file).is_ok_and(|m| m.len() > 100_000));
+        let tracks = [(1, "Desktop"), (3, "Microphone")];
+        let names = vec![Some("Desktop".to_string()), Some("Microphone".to_string())];
+        let slots = remux(&dir, Source::File(&file), &tracks, None, Path::new("broken.mp4"), 10.0, 30).unwrap();
+        assert_eq!(slots, vec![1, 3]);
+        let broken = ffmpeg::probe(&dir.join("broken.mp4")).unwrap();
+        assert!(broken.duration > 1.0, "what was on disk is kept: {}", broken.duration);
+        assert_eq!(broken.audio_titles, names);
+
+        let (closed, result) = std::sync::mpsc::channel();
+        live.finish(move |clean| closed.send(clean).unwrap());
+        assert!(result.recv_timeout(Duration::from_secs(60)).unwrap(), "FFmpeg closed the file cleanly");
+        remux(&dir, Source::File(&file), &tracks, None, Path::new("whole.mp4"), 10.0, 30).unwrap();
+        let whole = ffmpeg::probe(&dir.join("whole.mp4")).unwrap();
+        assert!((whole.duration - 10.0).abs() < 0.3, "all five segments: {}", whole.duration);
+        assert_eq!(whole.audio_titles, names);
+        // The same picture as the segments joined the old way.
+        std::fs::write(dir.join("list.txt"), (1..6).map(|i| segment_name(i) + "\n").collect::<String>()).unwrap();
+        remux_segments(&dir, Path::new("list.txt"), &tracks, None, Path::new("joined.mp4"), 10.0, 30).unwrap();
+        let video = |name: &str| {
+            let out = Command::new("ffmpeg").current_dir(&dir).args(["-v", "error", "-i", name, "-map", "0:v", "-f", "md5", "-"]).output().unwrap();
+            assert!(out.status.success());
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        assert_eq!(video("whole.mp4"), video("joined.mp4"));
+        assert_eq!(ffmpeg::empty_aac_streams(&file).unwrap(), Vec::<usize>::new());
+        drop(buffer);
     }
 
     #[test]

@@ -568,5 +568,9 @@
   "Zoom in": "Ingrandisci",
   "Zoom in · +": "Ingrandisci · +",
   "Zoom out": "Riduci",
-  "Zoom out · −": "Riduci · −"
+  "Zoom out · −": "Riduci · −",
+  "Session recovered": "Sessione recuperata",
+  "{title}, recording": "{title}, registrazione in corso",
+  "Stop": "Ferma",
+  "rec": "rec"
 }

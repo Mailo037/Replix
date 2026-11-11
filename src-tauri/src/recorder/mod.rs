@@ -2,11 +2,13 @@
 //!
 //! FFmpeg captures the target continuously and cuts the stream into two-second
 //! MPEG-TS segments with one audio stream per slot. Saving a clip joins the newest
-//! segments without re-encoding; a session keeps every segment from its start.
+//! segments without re-encoding; a session copies every segment from its start into a
+//! file of its own as it goes (see `session`), so it survives a crash.
 
 mod health;
 mod pipeline;
 mod save;
+mod session;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -26,7 +28,16 @@ use crate::settings::{CaptureSource, Settings};
 use crate::platform;
 use health::Health;
 use pipeline::{private_masks, segment_name, Pipeline, Segment, Session, Target, SEGMENT_SECONDS};
-use save::{Placeholder, SaveJob};
+use save::{Footage, Placeholder, SaveJob};
+use session::Live;
+
+/// How often the library's picture of a running session is renewed while someone looks.
+const PICTURE_EVERY: Duration = Duration::from_secs(30);
+
+/// Whether a file in the clips folder is a session still being recorded.
+pub(crate) fn is_live_file(path: &std::path::Path) -> bool {
+    session::is_live(path)
+}
 
 /// A locked screen or a sleeping graphics adapter can make every encoder test fail.
 const ENCODER_RETRY: Duration = Duration::from_secs(60);
@@ -167,6 +178,8 @@ impl Worker {
         }
         let buffer_root = self.buffer_root();
         let _ = std::fs::remove_dir_all(&buffer_root);
+        session::clear_pictures(&previews_dir(&self.app));
+        self.recover_sessions();
         loop {
             match rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(command) => self.handle(command),
@@ -194,6 +207,52 @@ impl Worker {
 
     fn buffer_root(&self) -> PathBuf {
         self.app.path().app_local_data_dir().unwrap_or_else(|_| std::env::temp_dir()).join("buffer")
+    }
+
+    /// Sessions that broke off (a crash, a power cut, Replix quit in the middle) are still
+    /// in the clips folder as they were recorded; each becomes a session in the library.
+    /// They are listed before anything records, so a session started now is never taken
+    /// for one, and saved one after another beside the recording.
+    fn recover_sessions(&self) {
+        let found = session::leftovers(&self.settings.clips_dir);
+        if found.is_empty() {
+            return;
+        }
+        let (app, settings) = (self.app.clone(), self.settings.clone());
+        let encoder = self.encoder().unwrap_or_else(encoder::software);
+        let work = move || {
+            for left in found {
+                log::info!("recovering the session in {}", left.file.display());
+                let (origin, private) = left.journal.masks_from_start();
+                let journal = left.journal;
+                let seconds = left.ended.saturating_sub(journal.since) as f64 / 1000.0;
+                let tracks = if journal.tracks.is_empty() { session::tracks_in(&left.file) } else { journal.tracks };
+                let placeholder = Placeholder::announce(&app, Kind::Session, &journal.game, seconds, None);
+                let job = SaveJob {
+                    app: app.clone(),
+                    footage: Footage::Live { file: left.file, _picture: None },
+                    tracks,
+                    kind: Kind::Session,
+                    name: journal.game,
+                    trim_to: None,
+                    duration: seconds,
+                    fps: if journal.fps > 0 { journal.fps } else { settings.fps },
+                    clips_dir: settings.clips_dir.clone(),
+                    limit_gb: settings.storage_limit_gb,
+                    origin,
+                    markers: journal.markers,
+                    private,
+                    encoder,
+                    kbps: if journal.kbps > 0 { journal.kbps } else { settings.quality.video_kbps() },
+                    recorded: Some(left.ended),
+                    placeholder,
+                };
+                job.run();
+            }
+        };
+        if let Err(e) = std::thread::Builder::new().name("recovery".into()).spawn(work) {
+            log::error!("sessions left behind could not be recovered now: {e}");
+        }
     }
 
     /// The chosen encoder, or the best one; one that keeps failing at start is passed over
@@ -339,6 +398,18 @@ impl Worker {
                 failed = Some(p.last_error());
             } else {
                 Self::finish_clips(&self.app, &self.settings, p, false);
+                if !p.feed_session() {
+                    // The session's file takes no more: a full or lost drive. What is in
+                    // it is saved as it is, and the rest of the session stays in the
+                    // buffer until it ends.
+                    let rest = p.session.as_ref().map(|s| (s.since, s.live.as_ref().map_or(s.first, Live::written)));
+                    Self::finish_session(&self.app, &self.settings, p);
+                    if let Some((since, first)) = rest {
+                        p.session = Some(Session { first, since, live: None, pictured: None, pictures: 0 });
+                        p.router.hold = true;
+                    }
+                }
+                Self::picture_session(&self.app, p);
                 p.trim(p.settings.buffer_seconds);
                 p.watch_privacy(&excluded);
                 if p.last_poll.elapsed() > Duration::from_secs(2) {
@@ -490,8 +561,7 @@ impl Worker {
             let (origin, until) = (first.start, last.end);
             let job = SaveJob {
                 app: app.clone(),
-                dir: p.dir.clone(),
-                segments: picked.iter().map(|s| s.index).collect(),
+                footage: Footage::Buffer { dir: p.dir.clone(), segments: picked.iter().map(|s| s.index).collect(), _pin: clip.pin },
                 tracks: p.router.tracks_between(clip.pressed.saturating_sub((seconds as u64 + 2) * 1000), clip.pressed),
                 kind: Kind::Clip,
                 name: p.target.label(),
@@ -505,7 +575,7 @@ impl Worker {
                 private: private_masks(&p.private, origin, until, stream_now),
                 encoder: p.encoder,
                 kbps: p.settings.quality.video_kbps(),
-                _pin: clip.pin,
+                recorded: None,
                 placeholder: clip.placeholder,
             };
             job.start();
@@ -525,19 +595,70 @@ impl Worker {
         };
         if p.session.is_some() {
             Self::finish_session(&self.app, &self.settings, p);
-            p.session = None;
-            p.router.hold = false;
         } else {
             let (done, current) = p.segments();
             let first = current.unwrap_or_else(|| done.back().map(|s| s.index + 1).unwrap_or(0));
-            p.session = Some(Session { first, since: audio::now_ms() });
+            // Written straight into the clips folder while it runs. If that cannot start,
+            // the session is kept in the buffer and saved when it ends.
+            let file = library::new_path(&self.settings.clips_dir, &p.target.label(), session::LIVE_EXT, Some("Session"));
+            let live = Live::start(p.dir.clone(), file, first)
+                .inspect_err(|e| log::warn!("the session is kept in the buffer; its own file could not be started: {e:#}"))
+                .ok();
+            p.session = Some(Session { first, since: audio::now_ms(), live, pictured: None, pictures: 0 });
             p.router.hold = true;
+            p.feed_session();
             crate::toast(&self.app, &tr("Session started"), &tr("Press the session key again to stop."));
         }
     }
 
+    /// A picture of the running session for its tile in the library, renewed now and then,
+    /// and only while someone has Replix in front of them.
+    fn picture_session(app: &AppHandle, p: &mut Pipeline) {
+        if !(crate::page_visible() && crate::app_focused()) {
+            return;
+        }
+        let Some(session) = p.session.as_ref() else { return };
+        if session.pictured.is_some_and(|at| at.elapsed() < PICTURE_EVERY) {
+            return;
+        }
+        let (since, first, n) = (session.since, session.first, session.pictures);
+        let Some(segment) = p.segments.back().filter(|s| s.index >= first).cloned() else { return };
+        // Never from a stretch that may show a program kept out of recordings.
+        let private = p.private_near(segment.start, segment.end);
+        if let Some(session) = p.session.as_mut() {
+            session.pictured = Some(Instant::now());
+            session.pictures += u32::from(!private);
+        }
+        if private {
+            return;
+        }
+        let (dir, pin) = (p.dir.clone(), p.pin(segment.index));
+        let previews = previews_dir(app);
+        let app = app.clone();
+        std::thread::spawn(move || {
+            let out = previews.join(session::picture_name(since, n));
+            let go = || crate::page_visible();
+            if library::make_thumb(&dir.0.join(segment_name(*pin)), Kind::Clip, 0.0, &out, &go).is_ok() {
+                let _ = app.emit("session-picture", (since, out.to_string_lossy().into_owned()));
+                // The page has moved on to this one.
+                if let Some(before) = n.checked_sub(1) {
+                    let _ = std::fs::remove_file(previews.join(session::picture_name(since, before)));
+                }
+            }
+        });
+    }
+
     fn finish_session(app: &AppHandle, settings: &Settings, p: &mut Pipeline) {
-        let Some(Session { first, since }) = p.session else { return };
+        let Some(Session { first, since, live, pictures, .. }) = p.session.take() else { return };
+        p.router.hold = false;
+        let previews = previews_dir(app);
+        for n in pictures.saturating_sub(2)..pictures {
+            let _ = std::fs::remove_file(previews.join(session::picture_name(since, n)));
+        }
+        if let Some(live) = live {
+            Self::finish_live(app, settings, p, since, live);
+            return;
+        }
         let stream_now = p.now();
         let (done, _) = p.segments();
         let segments: Vec<Segment> = done.iter().filter(|s| s.index >= first).cloned().collect();
@@ -554,8 +675,7 @@ impl Worker {
         let placeholder = Placeholder::announce(app, Kind::Session, &name, duration, preview);
         let job = SaveJob {
             app: app.clone(),
-            dir: p.dir.clone(),
-            segments: segments.iter().map(|s| s.index).collect(),
+            footage: Footage::Buffer { dir: p.dir.clone(), segments: segments.iter().map(|s| s.index).collect(), _pin: p.pin(first) },
             tracks,
             kind: Kind::Session,
             name,
@@ -569,11 +689,63 @@ impl Worker {
             private,
             encoder: p.encoder,
             kbps: p.settings.quality.video_kbps(),
-            _pin: p.pin(first),
+            recorded: None,
             placeholder,
         };
         crate::toast(app, &tr("Saving session…"), &job.name);
         job.start();
+    }
+
+    /// Ends a session that wrote its own file: the last segments go in, the file is closed,
+    /// and it becomes an MP4 in the library.
+    fn finish_live(app: &AppHandle, settings: &Settings, p: &mut Pipeline, since: u64, mut live: Live) {
+        let stream_now = p.now();
+        p.segments();
+        if !live.failed() {
+            live.feed(&p.segments);
+        }
+        // What is handed over but not yet written stays in the buffer until it is.
+        let waiting = p.pin(live.written());
+        let Some((origin, until)) = live.span() else {
+            crate::toast(app, &tr("Nothing to save yet"), &tr("The session has no completed recording segments."));
+            let file = live.file.clone();
+            live.finish(move |_| {
+                drop(waiting);
+                session::discard(&file);
+            });
+            return;
+        };
+        let name = p.target.label();
+        let private = private_masks(&p.private, origin, until, stream_now);
+        // The library's picture of the save comes from the buffer, never from a stretch
+        // that may show a program kept out of recordings.
+        let picture = live.newest.filter(|_| private.is_empty()).map(|index| (p.dir.clone(), p.pin(index)));
+        let preview = picture.as_ref().map(|(dir, pin)| dir.0.join(segment_name(**pin)));
+        let placeholder = Placeholder::announce(app, Kind::Session, &name, live.seconds(), preview);
+        let job = SaveJob {
+            app: app.clone(),
+            footage: Footage::Live { file: live.file.clone(), _picture: picture },
+            tracks: p.router.tracks_between(since, audio::now_ms()),
+            kind: Kind::Session,
+            name,
+            trim_to: None,
+            duration: live.seconds(),
+            fps: p.settings.fps,
+            clips_dir: settings.clips_dir.clone(),
+            limit_gb: settings.storage_limit_gb,
+            origin,
+            markers: p.markers.iter().copied().filter(|m| *m >= origin && *m <= until + SEGMENT_SECONDS).collect(),
+            private,
+            encoder: p.encoder,
+            kbps: p.settings.quality.video_kbps(),
+            recorded: None,
+            placeholder,
+        };
+        crate::toast(app, &tr("Saving session…"), &job.name);
+        live.finish(move |_| {
+            drop(waiting);
+            job.run();
+        });
     }
 
     /// Marks this moment; the editor shows it on the timeline of every clip or session that
@@ -647,6 +819,11 @@ impl Worker {
             }
         });
     }
+}
+
+/// Where pictures of saves in progress and of a running session are made.
+fn previews_dir(app: &AppHandle) -> PathBuf {
+    app.path().app_cache_dir().unwrap_or_else(|_| std::env::temp_dir()).join("previews")
 }
 
 #[cfg(test)]

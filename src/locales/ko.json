@@ -540,5 +540,9 @@
   "Zoom in": "확대",
   "Zoom in · +": "확대 · +",
   "Zoom out": "축소",
-  "Zoom out · −": "축소 · −"
+  "Zoom out · −": "축소 · −",
+  "Session recovered": "세션 복구됨",
+  "{title}, recording": "{title}, 녹화 중",
+  "Stop": "중지",
+  "rec": "녹화 중"
 }

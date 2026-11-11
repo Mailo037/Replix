@@ -10,7 +10,7 @@
 
 Replix starts on its own when a game is in front and keeps a rolling buffer, from 15 seconds up to 10 minutes. Nothing to start, nothing to stop. When something great happens, press the key; the game keeps running and a small note in the corner tells you it's saved.
 
-Instead of games, Replix can also watch the whole screen or a single app. For longer stretches, start a session and it records until you press the key again. Press <kbd>Alt</kbd> + <kbd>M</kbd> while recording to mark a moment; the editor shows every marker on the timeline and jumps from one to the next.
+Instead of games, Replix can also watch the whole screen or a single app. For longer stretches, start a session and it records until you press the key again. A session is written into your clips folder while it runs, so a crash or a power cut does not cost the recording: the next time Replix starts, it turns up in the library. The library shows a session that is being recorded, with its time and a button to stop it. Press <kbd>Alt</kbd> + <kbd>M</kbd> while recording to mark a moment; the editor shows every marker on the timeline and jumps from one to the next.
 
 ![Recording menu in the title bar](docs/images/status.png)
 
