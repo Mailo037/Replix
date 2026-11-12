@@ -1,5 +1,7 @@
 {
+  "About half the space. Exports are still H.264, which plays everywhere.": "Yaklaşık yarı yer kaplar. Dışa aktarımlar her yerde oynatılan H.264 olarak kalır.",
   "Audio was unavailable. This recording was saved without sound.": "Ses kullanılamıyordu. Bu kayıt sessiz olarak kaydedildi.",
+  "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264 her yerde oynatılır. HEVC aynı görüntü için yaklaşık yarı yer kaplar.",
   "Some audio tracks were unavailable and could not be saved.": "Bazı ses parçaları kullanılamıyordu ve kaydedilemedi.",
   " · {n} of {total}": " · {n} / {total}",
   "[ clean voice ]": "[ temiz ses ]",
@@ -524,6 +526,7 @@
   "Version {version}": "Sürüm {version}",
   "Version {version} is ready to install": "Sürüm {version} kurulmaya hazır",
   "Video": "Video",
+  "Video format": "Video biçimi",
   "Videos and pictures": "Videolar ve resimler",
   "Volume": "Ses",
   "Volume of all tracks": "Tüm parçaların sesi",

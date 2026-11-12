@@ -4,6 +4,8 @@ export type Kind = "clip" | "session" | "screenshot";
 export type TrackKind = "game" | "app" | "mic" | "desktop";
 export type Source = "game" | "screen" | "app";
 export type Quality = "low" | "medium" | "high";
+/** The format recordings are written in; exports are always H.264. */
+export type Codec = "h264" | "hevc";
 export type ToastPosition = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
 
 export interface TrackMeta {
@@ -134,6 +136,7 @@ export interface Settings {
   quality: Quality;
   height: number;
   encoder: string;
+  codec: Codec;
   recordMic: boolean;
   micDevice: string | null;
   micVolume: number;
@@ -263,6 +266,8 @@ export const api = {
   setSettings: (settings: Settings, revision: number) => invoke<number>("set_settings", { settings, revision }),
   getStatus: () => invoke<Status>("get_status"),
   getEncoders: () => invoke<EncoderOption[]>("get_encoders"),
+  /** The formats this PC can record in. */
+  getCodecs: () => invoke<Codec[]>("get_codecs"),
   listApps: () => invoke<AppWindow[]>("list_apps"),
   listMonitors: () => invoke<Monitor[]>("list_monitors"),
   listLibrary: () => invoke<Item[]>("list_library"),

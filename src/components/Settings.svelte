@@ -4,6 +4,7 @@
   import {
     api,
     type AppWindow,
+    type Codec,
     type EncoderOption,
     type InputDevice,
     type Monitor,
@@ -11,6 +12,7 @@
     type StorageInfo,
   } from "../lib/api";
   import { lengthLabel, size } from "../lib/format";
+  import { playsHevc } from "../lib/media";
   import { store } from "../lib/store.svelte";
   import { updates } from "../lib/updates.svelte";
   import Icon from "./Icon.svelte";
@@ -30,6 +32,7 @@
 
   let monitors = $state<Monitor[]>([]);
   let encoders = $state<EncoderOption[]>([]);
+  let codecs = $state<Codec[]>(["h264"]);
   let apps = $state<AppWindow[]>([]);
   let choosingApp = $state(false);
   let recording = $state<keyof Settings["hotkeys"] | null>(null);
@@ -37,6 +40,8 @@
   let mics = $state<InputDevice[]>([]);
 
   const s = $derived(store.settings!);
+  /** HEVC is offered where a graphics card records it and the editor can play it; once chosen it stays, so it can be switched back. */
+  const offerHevc = $derived((codecs.includes("hevc") && playsHevc()) || s.codec === "hevc");
   // Its own derived so the mic test restarts only when the device really changes.
   const micDevice = $derived(store.settings?.micDevice ?? null);
   const defaultMic = $derived(mics.find((m) => m.default));
@@ -56,9 +61,10 @@
   });
 
   onMount(async () => {
-    [monitors, encoders, mics, storage] = await Promise.all([
+    [monitors, encoders, codecs, mics, storage] = await Promise.all([
       api.listMonitors(),
       api.getEncoders(),
+      api.getCodecs(),
       api.listMics(),
       api.storageInfo(),
     ]);
@@ -210,6 +216,29 @@
             />
           </div>
         </div>
+        {#if offerHevc}
+          <div class="row">
+            <div class="text">
+              <span>{t("Video format")}</span>
+              <span class="meta">
+                {s.codec === "hevc"
+                  ? t("About half the space. Exports are still H.264, which plays everywhere.")
+                  : t("H.264 plays everywhere. HEVC needs about half the space for the same picture.")}
+              </span>
+            </div>
+            <div class="pick">
+              <Segmented
+                label={t("Video format")}
+                value={s.codec}
+                options={[
+                  { value: "h264", label: "H.264" },
+                  { value: "hevc", label: "HEVC" },
+                ]}
+                onchange={(v) => update({ codec: v })}
+              />
+            </div>
+          </div>
+        {/if}
         <div class="row">
           <div class="text"><span>{t("Mouse cursor")}</span><span class="meta">{t("Show the pointer in clips")}</span></div>
           <Switch checked={s.captureCursor} label={t("Show mouse cursor")} onchange={(v) => update({ captureCursor: v })} />

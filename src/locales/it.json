@@ -1,5 +1,7 @@
 {
+  "About half the space. Exports are still H.264, which plays everywhere.": "Circa metà dello spazio. Le esportazioni restano in H.264, che si riproduce ovunque.",
   "Audio was unavailable. This recording was saved without sound.": "L’audio non era disponibile. Questa registrazione è stata salvata senza audio.",
+  "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264 si riproduce ovunque. HEVC occupa circa metà dello spazio per la stessa immagine.",
   "Some audio tracks were unavailable and could not be saved.": "Alcune tracce audio non erano disponibili e non è stato possibile salvarle.",
   " · {n} of {total}": " · {n} di {total}",
   "[ clean voice ]": "[ voce pulita ]",
@@ -540,6 +542,7 @@
   "Version {version}": "Versione {version}",
   "Version {version} is ready to install": "La versione {version} è pronta da installare",
   "Video": "Video",
+  "Video format": "Formato video",
   "Videos and pictures": "Video e immagini",
   "Volume": "Volume",
   "Volume of all tracks": "Volume di tutte le tracce",

@@ -1,5 +1,7 @@
 {
+  "About half the space. Exports are still H.264, which plays everywhere.": "大约只占一半空间。导出仍为 H.264，随处都能播放。",
   "Audio was unavailable. This recording was saved without sound.": "音频不可用，此录制已保存为无声视频。",
+  "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264 随处都能播放。同样的画面，HEVC 大约只需一半空间。",
   "Some audio tracks were unavailable and could not be saved.": "部分音轨不可用，未能保存。",
   " · {n} of {total}": " · {n}/{total}",
   "[ clean voice ]": "[ 纯净人声 ]",
@@ -512,6 +514,7 @@
   "Version {version}": "版本 {version}",
   "Version {version} is ready to install": "版本 {version} 可以安装了",
   "Video": "视频",
+  "Video format": "视频格式",
   "Videos and pictures": "视频和图片",
   "Volume": "音量",
   "Volume of all tracks": "所有音轨的音量",

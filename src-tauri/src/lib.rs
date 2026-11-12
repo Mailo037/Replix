@@ -223,6 +223,7 @@ pub fn run() {
             system::ffmpeg_setup,
             system::retry_ffmpeg,
             system::get_encoders,
+            system::get_codecs,
             system::list_apps,
             system::list_monitors,
             system::report_focus,

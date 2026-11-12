@@ -1,5 +1,7 @@
 {
+  "About half the space. Exports are still H.264, which plays everywhere.": "容量はおよそ半分。書き出しはどこでも再生できる H.264 のままです。",
   "Audio was unavailable. This recording was saved without sound.": "音声を取得できなかったため、この録画は音声なしで保存されました。",
+  "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264 はどこでも再生できます。HEVC は同じ画質でおよそ半分の容量です。",
   "Some audio tracks were unavailable and could not be saved.": "一部の音声トラックを取得できなかったため、保存できませんでした。",
   " · {n} of {total}": " · {n} / {total}",
   "[ clean voice ]": "[ クリーンな音声 ]",
@@ -512,6 +514,7 @@
   "Version {version}": "バージョン {version}",
   "Version {version} is ready to install": "バージョン {version} をインストールできます",
   "Video": "動画",
+  "Video format": "動画形式",
   "Videos and pictures": "動画と画像",
   "Volume": "音量",
   "Volume of all tracks": "すべてのトラックの音量",

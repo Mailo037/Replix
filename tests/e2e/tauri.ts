@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { EditorData, Item, Settings } from "../../src/lib/api";
+import type { Codec, EditorData, Item, Settings } from "../../src/lib/api";
 
 // The page talks to Replix's Rust side through Tauri. In these tests a stand-in answers
 // instead: it is put into the page before Replix's own scripts run, answers the commands
@@ -17,6 +17,7 @@ export const settings: Settings = {
   quality: "medium",
   height: 0,
   encoder: "auto",
+  codec: "h264",
   recordMic: true,
   micDevice: null,
   micVolume: 1,
@@ -96,6 +97,7 @@ export interface Fixture {
   items: Item[];
   editors: Record<string, EditorData>;
   encoders: { id: string; label: string }[];
+  codecs: Codec[];
 }
 
 export function fixture(overrides: Partial<Fixture> = {}): Fixture {
@@ -104,7 +106,8 @@ export function fixture(overrides: Partial<Fixture> = {}): Fixture {
     settings,
     items: list,
     editors: Object.fromEntries(list.map((i) => [i.id, editorData(i)])),
-    encoders: [{ id: "auto", label: "Automatic" }],
+    encoders: [{ id: "nvenc", label: "NVIDIA NVENC" }],
+    codecs: ["h264"],
     ...overrides,
   };
 }
@@ -166,6 +169,8 @@ export async function mockTauri(page: Page, data: Fixture = fixture()) {
           return Array.from({ length: 200 }, (_, i) => 0.3 + 0.3 * Math.abs(Math.sin(i / 7)));
         case "get_encoders":
           return state.encoders;
+        case "get_codecs":
+          return state.codecs;
         case "list_mics":
           return [{ id: "mic", name: "USB Headset", default: true }];
         case "list_monitors":

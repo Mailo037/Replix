@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::encoder::Codec;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CaptureSource {
@@ -111,6 +113,9 @@ pub struct Settings {
     pub height: u32,
     /// "auto" or an encoder id from `encoder::candidates`.
     pub encoder: String,
+    /// The format recordings are written in. HEVC is used where a graphics card can encode
+    /// it; otherwise recordings stay H.264.
+    pub codec: Codec,
     pub record_mic: bool,
     /// The microphone's id (WASAPI on Windows, the PulseAudio source on Linux, the
     /// AVFoundation name on macOS); `None` follows the system default.
@@ -200,6 +205,7 @@ impl Default for Settings {
             quality: Quality::Medium,
             height: 0,
             encoder: "auto".into(),
+            codec: Codec::H264,
             record_mic: true,
             mic_device: None,
             mic_volume: 1.0,
@@ -296,6 +302,7 @@ impl Settings {
             || self.quality != other.quality
             || self.height != other.height
             || self.encoder != other.encoder
+            || self.codec != other.codec
             || self.record_mic != other.record_mic
             || self.mic_device != other.mic_device
             || self.capture_cursor != other.capture_cursor

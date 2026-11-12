@@ -1,5 +1,7 @@
 {
+  "About half the space. Exports are still H.264, which plays everywhere.": "Примерно вдвое меньше места. Экспорт по-прежнему в H.264, он воспроизводится везде.",
   "Audio was unavailable. This recording was saved without sound.": "Звук был недоступен. Эта запись сохранена без звука.",
+  "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264 воспроизводится везде. HEVC занимает примерно вдвое меньше места при той же картинке.",
   "Some audio tracks were unavailable and could not be saved.": "Некоторые звуковые дорожки были недоступны и не были сохранены.",
   " · {n} of {total}": " · {n} из {total}",
   "[ clean voice ]": "[ чистый голос ]",
@@ -532,6 +534,7 @@
   "Version {version}": "Версия {version}",
   "Version {version} is ready to install": "Версия {version} готова к установке",
   "Video": "Видео",
+  "Video format": "Формат видео",
   "Videos and pictures": "Видео и изображения",
   "Volume": "Громкость",
   "Volume of all tracks": "Громкость всех дорожек",

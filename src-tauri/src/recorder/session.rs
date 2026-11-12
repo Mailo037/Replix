@@ -20,6 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use super::pipeline::{segment_name, BufferDir, Mask, Segment};
 use crate::audio::{Track, TrackKind};
+use crate::encoder::Codec;
 use crate::ffmpeg::{self, SpawnTied};
 use crate::platform::{self, Area};
 
@@ -75,6 +76,9 @@ pub(super) struct Journal {
     pub since: u64,
     pub fps: u32,
     pub kbps: u32,
+    /// The picture's format; sessions from before HEVC are H.264.
+    #[serde(default)]
+    pub format: Codec,
     /// Stream time where the file starts; none until its first segment is in.
     pub origin: Option<f64>,
     pub tracks: Vec<Track>,
@@ -470,6 +474,7 @@ mod tests {
             since: 5,
             fps: 60,
             kbps: 20000,
+            format: Codec::H264,
             origin: Some(10.0),
             markers: vec![11.5],
             private: vec![Hidden::from(&open)],

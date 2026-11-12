@@ -71,7 +71,8 @@ Everything is recorded and kept on your computer, in `Videos\Replix` (`~/Videos/
 
 ## Good to know
 
-- Recording uses your graphics card's video encoder (NVIDIA, AMD or Intel) and falls back to the processor when there is none.
+- Recording uses your graphics card's video encoder (NVIDIA, AMD or Intel) and falls back to the processor when there is none. The bitrate follows what you record: a 1440p game at 120 fps gets more than a 1080p one at 30.
+- Where the graphics card can, clips can be recorded in HEVC, which needs about half the space. Exports are always H.264, so they play everywhere.
 - Replix waits in the tray (the menu bar on macOS) and can start when you log in.
 
 ## Linux and macOS
@@ -86,6 +87,7 @@ Replix runs on all three systems. Windows has everything above; on the others a 
 | Private windows | visible areas are blacked out; opaque windows in front stay visible | same, on X11 | same, including app captures recorded as a display |
 | A track per app | yes | yes, through PulseAudio or PipeWire (`pulseaudio-utils`) | no: the microphone, plus all system sound when a loopback device like [BlackHole](https://existential.audio/blackhole/) is installed |
 | Video encoder | NVIDIA, AMD, Intel, processor | NVIDIA, VA-API (AMD, Intel), processor | VideoToolbox, processor |
+| HEVC recording | NVIDIA, AMD, Intel | NVIDIA, VA-API, if the system can play HEVC (GStreamer's `gst-libav`) | VideoToolbox |
 | Copy a clip | yes | with `wl-clipboard` or `xclip` | yes |
 | Hotkeys | yes | X11 | yes |
 

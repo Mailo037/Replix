@@ -1,5 +1,7 @@
 {
+  "About half the space. Exports are still H.264, which plays everywhere.": "용량이 약 절반입니다. 내보내기는 어디서나 재생되는 H.264로 유지됩니다.",
   "Audio was unavailable. This recording was saved without sound.": "오디오를 사용할 수 없어 이 녹화는 소리 없이 저장되었습니다.",
+  "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264는 어디서나 재생됩니다. HEVC는 같은 화질에 약 절반의 용량이 듭니다.",
   "Some audio tracks were unavailable and could not be saved.": "일부 오디오 트랙을 사용할 수 없어 저장하지 못했습니다.",
   " · {n} of {total}": " · {total} 중 {n}",
   "[ clean voice ]": "[ 깨끗한 음성 ]",
@@ -512,6 +514,7 @@
   "Version {version}": "버전 {version}",
   "Version {version} is ready to install": "버전 {version}을(를) 설치할 준비가 됐어요",
   "Video": "비디오",
+  "Video format": "동영상 형식",
   "Videos and pictures": "동영상과 사진",
   "Volume": "볼륨",
   "Volume of all tracks": "모든 트랙의 볼륨",

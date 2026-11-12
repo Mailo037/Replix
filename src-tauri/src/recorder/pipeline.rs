@@ -79,6 +79,16 @@ impl Target {
     }
 }
 
+/// The size of the recorded picture as far as it is known before the first frame: the
+/// monitor that is recorded, or for a game or app the monitor it is on, else the main one.
+/// Games mostly run at their monitor's size; the bitrate follows it.
+fn picture_size(target: &Target) -> Option<(u32, u32)> {
+    let monitors = platform::monitors();
+    let on = target.screen().and_then(|i| monitors.iter().find(|m| m.index == i));
+    let monitor = on.or_else(|| monitors.iter().find(|m| m.primary)).or(monitors.first())?;
+    Some((u32::try_from(monitor.width).ok()?, u32::try_from(monitor.height).ok()?))
+}
+
 pub(super) struct Session {
     pub first: u64,
     pub since: u64,
@@ -140,6 +150,8 @@ pub(super) struct Pipeline {
     /// The settings this capture runs with, including the target's own ones.
     pub settings: Settings,
     pub encoder: &'static Encoder,
+    /// The video bitrate it records at, in kbit/s: the quality's, for this picture.
+    pub kbps: u32,
     pub last_poll: Instant,
     pub segments: VecDeque<Segment>,
     list_offset: u64,
@@ -203,7 +215,8 @@ impl Pipeline {
         if let Some(filter) = capture.filter {
             args.extend(["-filter:v".into(), filter]);
         }
-        args.extend(encoder::args(encoder, settings.quality.video_kbps()));
+        let kbps = encoder::bitrate(settings.quality.video_kbps(), picture_size(&target), settings.fps, encoder.format);
+        args.extend(encoder::args(encoder, kbps));
         args.extend(
             [
                 "-force_key_frames", "expr:gte(t,n_forced*2)", "-c:a", "aac", "-b:a", "160k", "-max_muxing_queue_size",
@@ -216,7 +229,7 @@ impl Pipeline {
         args.push(ffmpeg::path_arg(&dir.join("list.csv")));
         args.push(ffmpeg::path_arg(&dir.join("seg%06d.ts")));
 
-        log::info!("starting capture of {} with {}", target.label(), encoder.id);
+        log::info!("starting capture of {} with {} at {kbps} kbit/s", target.label(), encoder.id);
         let started = Instant::now();
         let mut cmd = std::process::Command::new(ffmpeg::exe());
         platform::background(&mut cmd, false);
@@ -252,6 +265,7 @@ impl Pipeline {
             session: None,
             settings: settings.clone(),
             encoder,
+            kbps,
             last_poll: Instant::now(),
             segments: VecDeque::new(),
             list_offset: 0,
@@ -404,7 +418,8 @@ impl Pipeline {
             game: self.target.label(),
             since: session.since,
             fps: self.settings.fps,
-            kbps: self.settings.quality.video_kbps(),
+            kbps: self.kbps,
+            format: self.encoder.format,
             origin,
             tracks: self.router.tracks_between(session.since, crate::audio::now_ms()),
             markers: self.markers.iter().copied().filter(|m| *m >= from).collect(),
