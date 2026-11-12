@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::encoder::Encoder;
 use crate::ffmpeg::SpawnTied;
 use crate::{ffmpeg, media};
-use crate::library::{Draft, Meta, TrackEdit, TrackMeta};
+use crate::library::{Draft, Meta, Speed, TextOverlay, TrackEdit, TrackMeta};
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -260,6 +260,12 @@ pub struct ExportRequest {
     /// All sound together: 1 as recorded, up to 2 for twice as loud.
     #[serde(default = "full")]
     pub master_volume: f64,
+    /// Parts that play slower, in seconds of the clip.
+    #[serde(default)]
+    pub speeds: Vec<Speed>,
+    /// Words laid over the picture.
+    #[serde(default)]
+    pub texts: Vec<TextOverlay>,
 }
 
 const DISCORD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
@@ -285,6 +291,107 @@ pub(crate) fn kept(request: &ExportRequest) -> Vec<(f64, f64)> {
     parts
 }
 
+/// The slowest a part can play: FFmpeg's atempo keeps the pitch down to half speed per pass,
+/// and two passes reach a quarter.
+const SLOWEST: f64 = 0.25;
+
+/// The kept parts as pieces that each play at one speed, in seconds of the cut-together clip
+/// (start, end, factor). Neighbours at the same speed are one piece.
+pub(crate) fn pieces(request: &ExportRequest) -> Vec<(f64, f64, f64)> {
+    let start = request.trim_start.max(0.0);
+    let speed_at = |t: f64| {
+        request.speeds.iter().find(|s| t >= s.start && t < s.end).map_or(1.0, |s| s.factor.clamp(SLOWEST, 1.0))
+    };
+    let mut out: Vec<(f64, f64, f64)> = Vec::new();
+    let mut before = 0.0;
+    for (a, b) in kept(request) {
+        let mut edges = vec![a, b];
+        for s in &request.speeds {
+            edges.extend([s.start - start, s.end - start].into_iter().filter(|t| *t > a && *t < b));
+        }
+        edges.sort_by(f64::total_cmp);
+        for w in edges.windows(2) {
+            let (x, y) = (w[0], w[1]);
+            if y - x < 0.001 {
+                continue;
+            }
+            let factor = speed_at(start + (x + y) / 2.0);
+            let (from, to) = (before + x - a, before + y - a);
+            match out.last_mut() {
+                Some(last) if last.2 == factor && (last.1 - from).abs() < 0.001 => last.1 = to,
+                _ => out.push((from, to, factor)),
+            }
+        }
+        before += b - a;
+    }
+    out
+}
+
+/// Sound at `factor` of its speed with the pitch kept; atempo goes down to 0.5 per pass.
+fn tempo(mut factor: f64) -> String {
+    let mut passes = Vec::new();
+    while factor < 0.5 - 1e-6 {
+        passes.push("atempo=0.5".to_string());
+        factor /= 0.5;
+    }
+    if (factor - 1.0).abs() > 1e-6 {
+        passes.push(format!("atempo={}", (factor * 10_000.0).round() / 10_000.0));
+    }
+    if passes.is_empty() {
+        "anull".into()
+    } else {
+        passes.join(",")
+    }
+}
+
+/// Plays `[from]` piece by piece at each piece's speed into `[to]`; `audio` for sound.
+fn speed_graph(from: &str, to: &str, pieces: &[(f64, f64, f64)], audio: bool) -> Vec<String> {
+    let (a, trim, setpts) = if audio { ("a", "atrim", "asetpts") } else { ("", "trim", "setpts") };
+    let slow = |f: f64| if audio { format!("{setpts}=PTS-STARTPTS,{}", tempo(f)) } else { format!("{setpts}=(PTS-STARTPTS)/{f:.4}") };
+    if let [(_, _, f)] = pieces {
+        return vec![format!("[{from}]{}[{to}]", slow(*f))];
+    }
+    let n = pieces.len();
+    let mut graph = vec![format!("[{from}]{a}split={n}{}", (0..n).map(|i| format!("[{to}p{i}]")).collect::<String>())];
+    let mut joined = String::new();
+    for (i, (x, y, f)) in pieces.iter().enumerate() {
+        graph.push(format!("[{to}p{i}]{trim}=start={x:.3}:end={y:.3},{}[{to}q{i}]", slow(*f)));
+        joined.push_str(&format!("[{to}q{i}]"));
+    }
+    graph.push(format!("{joined}concat=n={n}:v={}:a={}[{to}]", u8::from(!audio), u8::from(audio)));
+    graph
+}
+
+/// The part of the source picture the export shows, in pixels: the 9:16 crop, worked out as
+/// the crop filter does, or the whole picture. Words are placed within it.
+fn frame_box(width: u32, height: u32, request: &ExportRequest) -> (f64, f64, f64, f64) {
+    let (iw, ih) = (width as f64, height as f64);
+    if !request.vertical {
+        return (0.0, 0.0, iw, ih);
+    }
+    let w = ((iw.min(ih * 9.0 / 16.0) * request.crop_scale.clamp(0.2, 1.0)) / 2.0).trunc() * 2.0;
+    let h = (w * 16.0 / 9.0 / 2.0).trunc() * 2.0;
+    ((iw - w) * request.crop_x.clamp(0.0, 1.0), (ih - h) * request.crop_y.clamp(0.0, 1.0), w, h)
+}
+
+/// The PNG inside a `data:image/png;base64,` URL.
+fn png_bytes(url: &str) -> Result<Vec<u8>> {
+    use base64::Engine;
+    let data = url.split_once(',').map_or(url, |(_, d)| d);
+    Ok(base64::engine::general_purpose::STANDARD.decode(data.trim())?)
+}
+
+/// A folder for an export's text pictures, removed when the export is done.
+struct TextFiles(Option<std::path::PathBuf>);
+
+impl Drop for TextFiles {
+    fn drop(&mut self) {
+        if let Some(dir) = &self.0 {
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+}
+
 /// `names` are the clip's track names, for the separate tracks of an MKV.
 pub fn export(
     source: &Path,
@@ -301,7 +408,10 @@ pub fn export(
     if parts.is_empty() {
         bail!(crate::i18n::tr("Nothing is left after the cuts."));
     }
-    let length: f64 = parts.iter().map(|(a, b)| b - a).sum();
+    let pieces = pieces(request);
+    let slowed = pieces.iter().any(|p| p.2 < 1.0);
+    // Slower parts make the export longer.
+    let length: f64 = pieces.iter().map(|(a, b, f)| (b - a) / f).sum();
     // With cuts, keep only the frames and samples inside the parts and close the gaps.
     let pick = (parts.len() > 1)
         .then(|| parts.iter().map(|(a, b)| format!("between(t,{a:.3},{b:.3})")).collect::<Vec<_>>().join("+"));
@@ -356,9 +466,43 @@ pub fn export(
         }
     };
 
+    // Before the main chain: words over the picture (on the source's own timeline, so they
+    // go with the frames they were placed on), then the cuts and the slow parts.
+    let mut filters: Vec<String> = Vec::new();
+    let mut head = "[0:v]".to_string();
+    let mut text_files = TextFiles(None);
+    let texts: Vec<&TextOverlay> = request.texts.iter().filter(|t| !t.png.is_empty() && t.end > t.start).collect();
+    if !texts.is_empty() {
+        static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("replix-text-{}-{n}", std::process::id()));
+        std::fs::create_dir_all(&dir)?;
+        text_files.0 = Some(dir.clone());
+        let info = ffmpeg::probe(source)?;
+        let (bx, by, bw, bh) = frame_box(info.width, info.height, request);
+        for (k, text) in texts.iter().enumerate() {
+            let file = dir.join(format!("text{k}.png"));
+            std::fs::write(&file, png_bytes(&text.png)?)?;
+            args.extend(["-i".into(), ffmpeg::path_arg(&file)]);
+            let tall = ((text.height.clamp(0.01, 1.0) * bh / 2.0).round() * 2.0).max(2.0);
+            filters.push(format!("[{}:v]scale=-2:{tall},format=rgba[tx{k}]", k + 1));
+            let (x, y) = (bx + text.x.clamp(0.0, 1.0) * bw, by + text.y.clamp(0.0, 1.0) * bh);
+            let (a, b) = (text.start - start, text.end - start);
+            filters.push(format!(
+                "{head}[tx{k}]overlay=x={x:.1}-overlay_w/2:y={y:.1}-overlay_h/2:enable='between(t,{a:.3},{b:.3})'[ov{k}]"
+            ));
+            head = format!("[ov{k}]");
+        }
+    }
+    let select = pick.as_ref().map(|p| format!("select='{p}',setpts=N/FRAME_RATE/TB"));
     let mut video: Vec<String> = Vec::new();
-    if let Some(p) = &pick {
-        video.push(format!("select='{p}',setpts=N/FRAME_RATE/TB"));
+    if slowed {
+        let cut = select.map(|s| format!("{s},")).unwrap_or_default();
+        filters.push(format!("{head}{cut}null[vcut]"));
+        filters.extend(speed_graph("vcut", "vslow", &pieces, false));
+        head = "[vslow]".into();
+    } else if let Some(s) = select {
+        video.push(s);
     }
     if request.vertical {
         // Even sizes, as the encoders want them; the scale afterwards brings it to 1080x1920.
@@ -385,21 +529,30 @@ pub fn export(
         video.push("fps=30".into());
     }
 
-    let mut filters: Vec<String> = Vec::new();
     if gif {
         // A palette of its own keeps the colours clean within 256 of them.
         video.push("split[g0][g1]".into());
-        filters.push(format!("[0:v]{}", video.join(",")));
+        filters.push(format!("{head}{}", video.join(",")));
         filters.push("[g0]palettegen=stats_mode=diff[pal]".into());
         filters.push("[g1][pal]paletteuse=dither=bayer:bayer_scale=4[v]".into());
     } else {
         video.push(format!("format={}", encoder.export_pix_fmt));
-        filters.push(format!("[0:v]{}[v]", video.join(",")));
+        filters.push(format!("{head}{}[v]", video.join(",")));
     }
     // Cuts close the gaps in the sound too.
-    let close = |from: &str, to: &str| match &pick {
-        Some(p) => format!("[{from}]aselect='{p}',asetpts=N/SR/TB[{to}]"),
-        None => format!("[{from}]anull[{to}]"),
+    let close = |from: &str, to: &str| -> Vec<String> {
+        let cut = match &pick {
+            Some(p) => format!("aselect='{p}',asetpts=N/SR/TB"),
+            None => "anull".into(),
+        };
+        if slowed {
+            // The slow parts after the cuts, as for the picture.
+            let mut graph = vec![format!("[{from}]{cut}[{to}cut]")];
+            graph.extend(speed_graph(&format!("{to}cut"), to, &pieces, true));
+            graph
+        } else {
+            vec![format!("[{from}]{cut}[{to}]")]
+        }
     };
     if !enabled.is_empty() {
         let mut inputs = String::new();
@@ -410,7 +563,7 @@ pub fn export(
             if separate {
                 // One copy for the mix, one for the track's own stream.
                 filters.push(format!("[0:a:{i}]volume={volume:.3}{silence},asplit[a{k}][s{k}]"));
-                filters.push(close(&format!("s{k}"), &format!("t{k}")));
+                filters.extend(close(&format!("s{k}"), &format!("t{k}")));
             } else {
                 filters.push(format!("[0:a:{i}]volume={volume:.3}{silence}[a{k}]"));
             }
@@ -421,7 +574,7 @@ pub fn export(
         } else {
             filters.push(format!("{inputs}amix=inputs={}:normalize=0:dropout_transition=0[mix]", enabled.len()));
         }
-        filters.push(close("mix", "aout"));
+        filters.extend(close("mix", "aout"));
     }
     args.extend(["-filter_complex".into(), filters.join(";"), "-map".into(), "[v]".into()]);
     if enabled.is_empty() {
@@ -820,6 +973,8 @@ mod tests {
             crop_y: 0.5,
             crop_scale: 1.0,
             master_volume: 1.0,
+            speeds: Vec::new(),
+            texts: Vec::new(),
         };
         let out = dir.join("out.mkv");
         let names = ["Game".to_string(), "Discord".to_string(), "Microphone".to_string()];
@@ -827,6 +982,121 @@ mod tests {
         let info = ffmpeg::probe(&out).unwrap();
         assert_eq!(info.audio_titles, vec![Some("Mix".to_string()), Some("Game".to_string()), Some("Microphone".to_string())]);
         assert!((info.duration - 2.0).abs() < 0.2, "the cut is closed: {}", info.duration);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn plain(trim_end: f64) -> ExportRequest {
+        ExportRequest {
+            trim_start: 0.0,
+            trim_end,
+            tracks: vec![TrackEdit { enabled: true, volume: 1.0, start: None, end: None, removed: false }],
+            preset: Preset::Original,
+            cuts: Vec::new(),
+            vertical: false,
+            crop_x: 0.5,
+            crop_y: 0.5,
+            crop_scale: 1.0,
+            master_volume: 1.0,
+            speeds: Vec::new(),
+            texts: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn pieces_follow_cuts_and_slow_parts() {
+        let request = ExportRequest {
+            trim_start: 1.0,
+            cuts: vec![[4.0, 5.0]],
+            speeds: vec![Speed { start: 3.0, end: 6.0, factor: 0.5 }, Speed { start: 8.0, end: 20.0, factor: 0.1 }],
+            ..plain(9.0)
+        };
+        // Kept: 1–4 and 5–9, as 0–3 and 3–7. Slow from 3 to 6 (2–3 and 3–4 once cut together)
+        // and, at a quarter at the slowest, from 8 on (6–7).
+        assert_eq!(pieces(&request), vec![(0.0, 2.0, 1.0), (2.0, 4.0, 0.5), (4.0, 6.0, 1.0), (6.0, 7.0, 0.25)]);
+        assert_eq!(pieces(&plain(5.0)), vec![(0.0, 5.0, 1.0)]);
+        assert_eq!(tempo(0.25), "atempo=0.5,atempo=0.5");
+        assert_eq!(tempo(1.0), "anull");
+    }
+
+    fn sample_clip(dir: &Path) -> std::path::PathBuf {
+        let clip = dir.join("clip.mp4");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=black:size=320x180:rate=30", "-f", "lavfi", "-i", "sine=f=440:r=48000"])
+            .args(["-t", "4", "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac", "-y"])
+            .arg(&clip)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        clip
+    }
+
+    /// A slow part makes the export longer by what it slows, picture and sound alike.
+    #[test]
+    fn slow_parts_lengthen_the_export() {
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("replix-slow-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = sample_clip(&dir);
+        let request = ExportRequest { speeds: vec![Speed { start: 1.0, end: 2.0, factor: 0.5 }], ..plain(4.0) };
+        let out = dir.join("slow.mp4");
+        export(&clip, &request, &["Game".into()], crate::encoder::software(), &out, |_| {}, &|| false).unwrap();
+        let info = ffmpeg::probe(&out).unwrap();
+        assert!((info.duration - 5.0).abs() < 0.25, "4 s with one of them at half speed: {}", info.duration);
+        assert_eq!(info.audio_channels.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The colour of one pixel of the export at a moment.
+    fn pixel(file: &Path, at: f64, x: u32, y: u32) -> [u8; 3] {
+        let out = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-ss", &format!("{at:.2}"), "-i"])
+            .arg(file)
+            .args(["-frames:v", "1", "-vf", &format!("crop=1:1:{x}:{y},format=rgb24"), "-f", "rawvideo", "-"])
+            .output()
+            .unwrap();
+        [out.stdout[0], out.stdout[1], out.stdout[2]]
+    }
+
+    /// Words are laid over the picture where and while the editor placed them, inside the
+    /// 9:16 frame when that is the format.
+    #[test]
+    fn texts_are_laid_over_the_picture() {
+        use base64::Engine;
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("replix-text-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = sample_clip(&dir);
+        // A white box stands in for the page's drawing of the words.
+        let png = dir.join("white.png");
+        let made = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i", "color=c=white:size=40x20", "-frames:v", "1", "-y"])
+            .arg(&png)
+            .status()
+            .unwrap();
+        assert!(made.success());
+        let url = format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(std::fs::read(&png).unwrap()));
+        let text = TextOverlay { text: "GG".into(), x: 0.25, y: 0.5, size: 0.1, height: 0.2, start: 1.0, end: 2.0, png: url };
+
+        let out = dir.join("text.mp4");
+        let request = ExportRequest { texts: vec![text.clone()], ..plain(4.0) };
+        export(&clip, &request, &["Game".into()], crate::encoder::software(), &out, |_| {}, &|| false).unwrap();
+        // At a quarter across, half way down: white while shown, black before and after.
+        assert!(pixel(&out, 1.5, 80, 90).iter().all(|c| *c > 200));
+        assert!(pixel(&out, 0.5, 80, 90).iter().all(|c| *c < 50));
+        assert!(pixel(&out, 2.8, 80, 90).iter().all(|c| *c < 50));
+
+        // In 9:16 the frame is the crop: a quarter across it, in a picture 1080 wide.
+        let out = dir.join("tall.mp4");
+        let request = ExportRequest { vertical: true, texts: vec![text], ..plain(4.0) };
+        export(&clip, &request, &["Game".into()], crate::encoder::software(), &out, |_| {}, &|| false).unwrap();
+        assert!(pixel(&out, 1.5, 270, 960).iter().all(|c| *c > 200));
+        assert!(pixel(&out, 1.5, 810, 960).iter().all(|c| *c < 50));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

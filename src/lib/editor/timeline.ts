@@ -59,6 +59,51 @@ export function joinAt(parts: Part[], splits: number[], cuts: Range[], at: numbe
   return { splits: nextSplits, cuts };
 }
 
+/** A slower stretch, in seconds of the original. */
+export interface Slow {
+  start: number;
+  end: number;
+  factor: number;
+}
+
+/** The slowest a part can play, as the export can keep the pitch down to a quarter. */
+export const SLOWEST = 0.25;
+
+/** How fast the clip plays at `t`: 1, or the factor of a slow stretch there. */
+export const speedAt = (speeds: Slow[], t: number) =>
+  speeds.find((s) => t >= s.start - EPS && t < s.end - EPS)?.factor ?? 1;
+
+/** How long the kept parts play, slow stretches taking longer. */
+export function playLength(parts: Part[], speeds: Slow[]): number {
+  let total = 0;
+  for (const p of parts) {
+    if (p.removed) continue;
+    const edges = [p.start, ...speeds.flatMap((s) => [s.start, s.end]).filter((t) => t > p.start && t < p.end), p.end].sort((a, b) => a - b);
+    for (let i = 0; i + 1 < edges.length; i++) total += (edges[i + 1] - edges[i]) / speedAt(speeds, (edges[i] + edges[i + 1]) / 2);
+  }
+  return total;
+}
+
+/** The speeds with `part` at `factor`: what overlapped it is cut back to its edges; 1 leaves it normal. */
+export function withSpeed(speeds: Slow[], part: { start: number; end: number }, factor: number): Slow[] {
+  const out: Slow[] = [];
+  for (const s of speeds) {
+    if (s.end <= part.start + EPS || s.start >= part.end - EPS) out.push(s);
+    else {
+      if (s.start < part.start - EPS) out.push({ ...s, end: part.start });
+      if (s.end > part.end + EPS) out.push({ ...s, start: part.end });
+    }
+  }
+  if (factor < 1) out.push({ start: part.start, end: part.end, factor: Math.max(SLOWEST, factor) });
+  return out.sort((a, b) => a.start - b.start);
+}
+
+/** The next speed for a part: normal, half, a quarter, then normal again. */
+export const nextSpeed = (factor: number) => (factor > 0.5 + EPS ? 0.5 : factor > SLOWEST + EPS ? SLOWEST : 1);
+
+/** A speed as people read it: 1×, ½×, ¼×. */
+export const speedLabel = (factor: number) => (factor >= 1 - EPS ? "1×" : Math.abs(factor - 0.5) < EPS ? "½×" : Math.abs(factor - 0.25) < EPS ? "¼×" : `${factor}×`);
+
 /** Ruler marks: a round step that gives about ten of them. */
 export function rulerTicks(total: number): number[] {
   if (!(total > 0)) return [];

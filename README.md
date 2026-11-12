@@ -22,7 +22,7 @@ Pick your microphone, check that it's picking you up, and let noise suppression 
 
 ## Edit in seconds
 
-Trim the start and end, split the clip and take out the parts you don't need. Turn tracks off or down, let a track play for only part of the clip, or save one on its own as audio. Then export in full quality, small enough for Discord, or as a GIF. <kbd>Ctrl</kbd> + <kbd>Z</kbd> takes any step back.
+Trim the start and end, split the clip and take out the parts you don't need. Play a part at half or a quarter speed, and put words over the picture: drag them where they belong and set how long they show. Turn tracks off or down, let a track play for only part of the clip, or save one on its own as audio. Then export in full quality, small enough for Discord, or as a GIF. <kbd>Ctrl</kbd> + <kbd>Z</kbd> takes any step back.
 
 ![Editor with a part cut out and its audio tracks](docs/images/editor.png)
 

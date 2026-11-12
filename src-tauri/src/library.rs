@@ -71,6 +71,41 @@ pub struct Draft {
     /// All sound together: 1 as recorded, up to 2 for twice as loud.
     #[serde(default = "full")]
     pub master_volume: f64,
+    /// Parts that play slower, in seconds of the clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speeds: Vec<Speed>,
+    /// Words laid over the picture.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<TextOverlay>,
+}
+
+/// A stretch of the clip that plays slower: 0.5 is half speed. Sound keeps its pitch.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Speed {
+    pub start: f64,
+    pub end: f64,
+    pub factor: f64,
+}
+
+/// Words over the picture. The page draws them (in Replix's own font, with an outline) and
+/// keeps the drawing here, so an export lays the very same picture on top and needs no font.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextOverlay {
+    pub text: String,
+    /// Where the middle of the text sits in the frame, 0 to 1 from the left and the top. The
+    /// frame is the 9:16 crop in that format, else the whole picture.
+    pub x: f64,
+    pub y: f64,
+    /// The letters' size as a share of the frame's height, as set in the editor.
+    pub size: f64,
+    /// The drawing's height as a share of the frame's height.
+    pub height: f64,
+    /// Shown from and to, in seconds of the clip.
+    pub start: f64,
+    pub end: f64,
+    /// The drawing, as a PNG data URL.
+    pub png: String,
 }
 
 fn full() -> f64 {

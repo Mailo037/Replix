@@ -104,3 +104,49 @@ test("the export menu offers every format", async ({ page }) => {
   const [request] = await calls(page, "export_clip");
   expect(request.args).toMatchObject({ request: { preset: "discord" } });
 });
+
+test("slows the part under the playhead and exports it slow", async ({ page }) => {
+  await openEditor(page);
+  await playheadTo(page, 2);
+  await page.keyboard.press("s");
+  const speed = page.getByRole("button", { name: /Speed of this part/ });
+  await speed.click();
+  await expect(speed).toHaveAccessibleName("Speed of this part: ½×");
+  // The part from 2 to 6 s now takes 8.
+  await expect(page.locator(".length")).toContainText("0:10.0 long");
+  await speed.click();
+  await expect(speed).toHaveAccessibleName("Speed of this part: ¼×");
+  await expect(page.locator(".length")).toContainText("0:18.0 long");
+  await speed.click();
+  await expect(page.locator(".length")).toContainText("0:06.0 long");
+  await speed.click();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const [request] = await calls(page, "export_clip");
+  expect((request.args.request as { speeds: unknown }).speeds).toEqual([{ start: 2, end: 6, factor: 0.5 }]);
+});
+
+test("adds text, edits it and exports its drawing", async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole("button", { name: "Text", exact: true }).click();
+  const panel = page.getByRole("dialog", { name: "Text" });
+  const words = panel.getByRole("textbox", { name: "Words" });
+  await expect(words).toHaveValue("Your text");
+  await words.fill("GG EZ");
+  await expect(page.getByRole("img", { name: "GG EZ" })).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(panel).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Text “GG EZ” from 0:00.0 to 0:03.0/ })).toBeVisible();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const [request] = await calls(page, "export_clip");
+  const [text] = (request.args.request as { texts: { text: string; png: string; start: number; end: number; x: number; y: number }[] }).texts;
+  expect(text).toMatchObject({ text: "GG EZ", start: 0, end: 3, x: 0.5, y: 0.8 });
+  expect(text.png).toMatch(/^data:image\/png;base64,/);
+});
+
+test("a text can be taken away again", async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole("button", { name: "Text", exact: true }).click();
+  await page.getByRole("dialog", { name: "Text" }).getByRole("button", { name: "Remove text" }).click();
+  await expect(page.getByRole("img", { name: "Your text" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /Text “Your text”/ })).toHaveCount(0);
+});

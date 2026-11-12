@@ -40,6 +40,34 @@ export interface Draft {
   cropScale?: number;
   /** All sound together: 1 as recorded, up to 2. */
   masterVolume?: number;
+  /** Parts that play slower. */
+  speeds?: Speed[];
+  /** Words over the picture. */
+  texts?: TextOverlay[];
+}
+
+/** A stretch of the clip that plays slower: 0.5 is half speed. In seconds of the clip. */
+export interface Speed {
+  start: number;
+  end: number;
+  factor: number;
+}
+
+/** Words over the picture, drawn by the page; the export lays the same drawing on top. */
+export interface TextOverlay {
+  text: string;
+  /** Middle of the text in the frame (the 9:16 crop in that format), 0 to 1. */
+  x: number;
+  y: number;
+  /** Letter size as a share of the frame's height. */
+  size: number;
+  /** The drawing's height as a share of the frame's height. */
+  height: number;
+  /** Shown from and to, in seconds of the clip. */
+  start: number;
+  end: number;
+  /** The drawing as a PNG data URL. */
+  png: string;
 }
 
 export interface Item {

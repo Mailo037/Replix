@@ -7,6 +7,7 @@
   import { tip } from "../../lib/tooltip";
   import Icon from "../Icon.svelte";
   import CropFrame from "./CropFrame.svelte";
+  import TextLayer from "./TextLayer.svelte";
 
   /** The picture, as large as the room allows at the clip's own shape, with each track playing beside it. */
   let {
@@ -75,6 +76,9 @@
       {/each}
       {#if ed.vertical && preview}
         <CropFrame {ed} {preview} />
+      {/if}
+      {#if ed.texts.length}
+        <TextLayer {ed} />
       {/if}
       {#if !ed.playing}
         <button type="button" class="play" aria-label={t("Play")} use:tip={t("Play · Space")} onclick={() => ed.play()}><Icon name="play" size={20} /></button>

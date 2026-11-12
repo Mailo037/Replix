@@ -1,7 +1,8 @@
-import type { Draft, EditorData, Marker, Settings, TrackEdit } from "../api";
+import type { Draft, EditorData, Marker, Settings, Speed, TextOverlay, TrackEdit } from "../api";
 import { startingEdit } from "../trackDefaults";
 import { frameShare, type Crop } from "./crop";
-import { joinAt, keptLength, partAt, partsOf, putBack, withSplit, type Range } from "./timeline";
+import { drawText } from "./textImage";
+import { joinAt, nextSpeed, partAt, partsOf, playLength, putBack, speedAt, withSpeed, withSplit, type Range } from "./timeline";
 
 /** A marker this close to the playhead counts as on it. */
 export const NEAR = 0.25;
@@ -29,6 +30,12 @@ export class EditorSession {
   masterVolume = $state(1);
   /** Moments marked while recording or here. Saved with the clip as they change, not with a draft. */
   markers = $state<Marker[]>([]);
+  /** Parts that play slower. */
+  speeds = $state<Speed[]>([]);
+  /** Words over the picture. */
+  texts = $state<TextOverlay[]>([]);
+  /** The text being worked on: moved in the picture and edited in its panel. */
+  selectedText = $state<number | null>(null);
 
   current = $state(0);
   playing = $state(false);
@@ -38,8 +45,10 @@ export class EditorSession {
   duration = $derived(this.data?.duration ?? 0);
   parts = $derived(partsOf(this.trimStart, this.trimEnd, this.splits, this.cuts));
   kept = $derived(this.parts.filter((p) => !p.removed));
-  /** How long the export will be. */
-  length = $derived(keptLength(this.parts));
+  /** How long the export will be; slow parts take longer. */
+  length = $derived(playLength(this.parts, this.speeds));
+  /** How fast the preview plays where the playhead is. */
+  rate = $derived(speedAt(this.speeds, this.current));
   playStart = $derived(this.kept[0]?.start ?? this.trimStart);
   playEnd = $derived(this.kept[this.kept.length - 1]?.end ?? this.trimEnd);
   /** The part under the playhead. */
@@ -75,7 +84,10 @@ export class EditorSession {
       cropY: d.draft?.cropY,
       cropScale: d.draft?.cropScale,
       masterVolume: d.draft?.masterVolume,
+      speeds: d.draft?.speeds,
+      texts: d.draft?.texts,
     });
+    this.selectedText = null;
   }
 
   /** The edit as a draft, to save or export. */
@@ -91,6 +103,8 @@ export class EditorSession {
       cropY: this.crop.y,
       cropScale: this.crop.scale,
       masterVolume: this.masterVolume,
+      speeds: $state.snapshot(this.speeds),
+      texts: $state.snapshot(this.texts),
     };
   }
 
@@ -104,6 +118,9 @@ export class EditorSession {
     this.vertical = d.vertical;
     this.crop = { x: d.cropX, y: d.cropY ?? 0.5, scale: d.cropScale ?? 1 };
     this.masterVolume = d.masterVolume ?? 1;
+    this.speeds = d.speeds ?? [];
+    this.texts = d.texts ?? [];
+    if (this.selectedText !== null && !this.texts[this.selectedText]) this.selectedText = null;
   }
 
   seek(t: number) {
@@ -175,6 +192,48 @@ export class EditorSession {
       return "removed";
     }
     return "last";
+  }
+
+  /** Plays the part under the playhead at the next speed: normal, half, a quarter. */
+  cycleSpeed() {
+    const part = this.here;
+    if (!part || part.removed) return;
+    this.speeds = withSpeed(this.speeds, part, nextSpeed(speedAt(this.speeds, (part.start + part.end) / 2)));
+  }
+
+  /** Puts words at the playhead for three seconds, low in the middle, and selects them. */
+  async addText(text: string) {
+    const start = Math.min(this.current, Math.max(0, this.duration - 0.5));
+    const size = 0.08;
+    const drawn = await drawText(text);
+    this.texts = [
+      ...this.texts,
+      { text, x: 0.5, y: 0.8, size, height: size * drawn.ratio, start, end: Math.min(this.duration, start + 3), png: drawn.png },
+    ];
+    this.selectedText = this.texts.length - 1;
+  }
+
+  /** Changes the words of a text and draws them again. */
+  async setText(i: number, text: string) {
+    const drawn = await drawText(text);
+    const t = this.texts[i];
+    // Gone, or changed again while this drawing was made.
+    if (!t || t.text !== text) return;
+    t.png = drawn.png;
+    t.height = t.size * drawn.ratio;
+  }
+
+  /** Sets a text's letter size; the drawing scales with it. */
+  setTextSize(i: number, size: number) {
+    const t = this.texts[i];
+    if (!t) return;
+    t.height = (t.height / t.size) * size;
+    t.size = size;
+  }
+
+  removeText(i: number) {
+    this.texts = this.texts.filter((_, k) => k !== i);
+    this.selectedText = null;
   }
 
   /** Takes away the split at `at`. */

@@ -2,6 +2,7 @@
   import { fileUrl } from "../../lib/api";
   import { follow, timeAt } from "../../lib/editor/actions";
   import type { EditorSession } from "../../lib/editor/session.svelte";
+  import { speedLabel } from "../../lib/editor/timeline";
   import { position } from "../../lib/format";
   import { t } from "../../lib/i18n.svelte";
   import { store } from "../../lib/store.svelte";
@@ -52,6 +53,11 @@
       style:background-image={ed.data.filmstrip && store.visible ? `url("${fileUrl(ed.data.filmstrip)}")` : undefined}
     >
       <span class="range" style:left="{ed.pct(ed.trimStart)}%" style:width="{ed.pct(ed.trimEnd) - ed.pct(ed.trimStart)}%"></span>
+      {#each ed.speeds as s (s.start)}
+        <span class="slow" style:left="{ed.pct(s.start)}%" style:width="{ed.pct(s.end) - ed.pct(s.start)}%">
+          <span class="slow-label mono">{speedLabel(s.factor)}</span>
+        </span>
+      {/each}
       {#each ed.splits.filter((s) => s > ed.trimStart && s < ed.trimEnd) as s (s)}
         <span class="split-mark" style:left="{ed.pct(s)}%"></span>
         <button
@@ -90,6 +96,23 @@
   .strip {
     height: 46px;
     background-size: 100% 100%;
+  }
+  /* A slow part: a band along the bottom with its speed. */
+  .slow {
+    position: absolute;
+    bottom: 3px;
+    height: 14px;
+    border-radius: 6px;
+    background: color-mix(in srgb, var(--lavender) 70%, transparent);
+    pointer-events: none;
+    overflow: hidden;
+  }
+  .slow-label {
+    display: block;
+    padding: 0 5px;
+    font-size: 10px;
+    line-height: 14px;
+    color: var(--on-sticker);
   }
   .range {
     position: absolute;

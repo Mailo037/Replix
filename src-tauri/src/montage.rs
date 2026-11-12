@@ -33,6 +33,8 @@ pub fn request_for(meta: &Meta, defaults: &[TrackDefault]) -> ExportRequest {
         crop_y: 0.5,
         crop_scale: 1.0,
         master_volume: 1.0,
+        speeds: Vec::new(),
+        texts: Vec::new(),
     });
     ExportRequest {
         trim_start: draft.trim_start,
@@ -45,6 +47,8 @@ pub fn request_for(meta: &Meta, defaults: &[TrackDefault]) -> ExportRequest {
         crop_y: draft.crop_y,
         crop_scale: draft.crop_scale,
         master_volume: draft.master_volume,
+        speeds: draft.speeds,
+        texts: draft.texts,
     }
 }
 
@@ -221,6 +225,8 @@ mod tests {
             crop_y: 0.5,
             crop_scale: 1.0,
             master_volume: 1.0,
+            speeds: Vec::new(),
+            texts: Vec::new(),
         };
         let parts = [
             Part { source: clip(&dir, "a.mp4", "320x180", true, 3), meta: meta("First", 3.0, true, None) },

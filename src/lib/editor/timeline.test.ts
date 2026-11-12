@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { joinAt, keptLength, partAt, partsOf, putBack, rulerLabel, rulerTicks, withSplit, type Range } from "./timeline";
+import { joinAt, keptLength, nextSpeed, partAt, partsOf, playLength, putBack, rulerLabel, rulerTicks, speedAt, speedLabel, withSpeed, withSplit, type Range } from "./timeline";
 
 describe("partsOf", () => {
   it("is one part without splits", () => {
@@ -71,5 +71,32 @@ describe("ruler", () => {
 
   it("labels marks in minutes and seconds", () => {
     expect(rulerLabel(75)).toBe("1:15");
+  });
+});
+
+describe("slow parts", () => {
+  it("make the kept parts play longer", () => {
+    const parts = partsOf(0, 10, [2, 4, 6], [[6, 10]]);
+    expect(playLength(parts, [])).toBe(6);
+    expect(playLength(parts, [{ start: 2, end: 4, factor: 0.5 }])).toBe(8);
+    // Only what is kept counts, and a quarter takes four times as long.
+    expect(playLength(parts, [{ start: 5, end: 8, factor: 0.25 }])).toBe(9);
+  });
+
+  it("set one part's speed and leave the rest", () => {
+    const speeds = [{ start: 0, end: 6, factor: 0.5 }];
+    expect(withSpeed(speeds, { start: 2, end: 4 }, 0.25)).toEqual([
+      { start: 0, end: 2, factor: 0.5 },
+      { start: 2, end: 4, factor: 0.25 },
+      { start: 4, end: 6, factor: 0.5 },
+    ]);
+    expect(withSpeed(speeds, { start: 0, end: 6 }, 1)).toEqual([]);
+    expect(speedAt(speeds, 3)).toBe(0.5);
+    expect(speedAt(speeds, 7)).toBe(1);
+  });
+
+  it("go normal, half, a quarter and back", () => {
+    expect([1, 0.5, 0.25].map(nextSpeed)).toEqual([0.5, 0.25, 1]);
+    expect([1, 0.5, 0.25].map(speedLabel)).toEqual(["1×", "½×", "¼×"]);
   });
 });

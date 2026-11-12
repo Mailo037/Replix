@@ -9,6 +9,7 @@
   import { share } from "../lib/share";
   import { store } from "../lib/store.svelte";
   import Header from "./editor/Header.svelte";
+  import TextLane from "./editor/TextLane.svelte";
   import Player from "./editor/Player.svelte";
   import Timeline from "./editor/Timeline.svelte";
   import Toolbar from "./editor/Toolbar.svelte";
@@ -147,6 +148,13 @@
       // The preview can't go above full volume; the export can.
       audio.volume = heard ? Math.min(1, edit.volume * ed.masterVolume) : 0;
     });
+  });
+
+  // A slow part plays slower in the preview too; the sound keeps its pitch, as in the export.
+  $effect(() => {
+    const rate = ed.rate;
+    if (ed.video) ed.video.playbackRate = rate;
+    for (const audio of ed.audios) if (audio) audio.playbackRate = rate;
   });
 
   // Markers are part of the clip, not of a draft: a change is saved at once.
@@ -315,6 +323,9 @@
           ontogglepart={togglePart}
           onframe={saveFrame}
         />
+      {/snippet}
+      {#snippet lanes()}
+        <TextLane {ed} />
       {/snippet}
     </Timeline>
   {:else}

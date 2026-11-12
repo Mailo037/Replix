@@ -3231,6 +3231,7 @@ name = "replix"
 version = "0.3.6"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "chrono",
  "core-foundation 0.10.1",
  "core-graphics 0.25.0",

@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { EditorSession } from "../../lib/editor/session.svelte";
+  import { speedAt, speedLabel } from "../../lib/editor/timeline";
   import { position } from "../../lib/format";
   import { t, tParts } from "../../lib/i18n.svelte";
   import { tip } from "../../lib/tooltip";
@@ -24,6 +25,9 @@
     ontogglepart: () => void;
     onframe: () => void;
   } = $props();
+
+  /** How fast the part under the playhead plays. */
+  const partSpeed = $derived(ed.here ? speedAt(ed.speeds, (ed.here.start + ed.here.end) / 2) : 1);
 </script>
 
 <div class="toolbar">
@@ -53,6 +57,20 @@
     {:else}
       <Icon name="trash" size={16} />{t("Remove")}
     {/if}
+  </button>
+  <button
+    type="button"
+    class="tool"
+    class:on={partSpeed < 1}
+    disabled={!ed.here || ed.here.removed}
+    aria-label={t("Speed of this part: {speed}", { speed: speedLabel(partSpeed) })}
+    use:tip={t("Play the part under the playhead slower · ½×, ¼×, then normal again")}
+    onclick={() => ed.cycleSpeed()}
+  >
+    <Icon name="gauge" size={16} /><span class="mono">{speedLabel(partSpeed)}</span>
+  </button>
+  <button type="button" class="tool" use:tip={t("Add text at the playhead")} onclick={() => ed.addText(t("Your text"))}>
+    <Icon name="text" size={16} />{t("Text")}
   </button>
   <span class="sep"></span>
   <button
@@ -161,6 +179,9 @@
   .tool:disabled {
     opacity: 0.4;
     cursor: default;
+  }
+  .tool.on {
+    color: var(--lavender);
   }
   .tool.icon {
     width: 30px;
