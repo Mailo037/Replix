@@ -185,6 +185,12 @@ export async function mockTauri(page: Page, data: Fixture = fixture()) {
           return { clips: 2_000_000_000, exports: 0, free: 200_000_000_000 };
         case "export_clip":
           return "/home/test/Videos/Replix/Exports/clip.mp4";
+        case "combine_clips":
+          // Like Replix: progress first, then the new clip's id.
+          return new Promise((resolve) => {
+            setTimeout(() => window.__emit("export-progress", [args.ticket, 0.5]), 50);
+            setTimeout(() => resolve("montage"), 400);
+          });
         case "tag_items": {
           // Like Replix: the clips change, and the page hears which fields did.
           const patch: [string, { tags: string[] }][] = [];

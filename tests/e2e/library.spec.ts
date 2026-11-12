@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { mockTauri } from "./tauri";
+import { calls, mockTauri } from "./tauri";
 
 test("the library shows the clips by day and game", async ({ page }) => {
   await mockTauri(page);
@@ -69,4 +69,20 @@ test("several clips are tagged at once", async ({ page }) => {
   await page.getByRole("textbox", { name: "Add a tag" }).fill("highlight");
   await page.keyboard.press("Enter");
   await expect(page.getByRole("navigation").getByRole("button", { name: /highlight\s*2/ })).toBeVisible();
+});
+
+test("picked clips are combined into a montage, oldest first", async ({ page }) => {
+  await mockTauri(page);
+  await page.goto("/");
+  await page.getByRole("button", { name: "Select", exact: true }).click();
+  const toolbar = page.getByRole("toolbar", { name: "Selected clips" });
+  await page.getByRole("button", { name: "Select Last-lap overtake" }).click();
+  // One clip is no montage.
+  await expect(toolbar.getByRole("button", { name: "Combine" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Select Drift into the tunnel" }).click();
+  await toolbar.getByRole("button", { name: "Combine" }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Combining 2 clips" })).toBeVisible();
+  await expect(page.getByText("Montage saved")).toBeVisible();
+  const [call] = await calls(page, "combine_clips");
+  expect(call.args).toMatchObject({ ids: ["a", "c"], title: "Montage" });
 });

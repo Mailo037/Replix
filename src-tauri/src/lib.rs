@@ -8,6 +8,7 @@ mod i18n;
 mod install;
 mod library;
 mod media;
+mod montage;
 mod pipe;
 mod recorder;
 mod settings;
@@ -262,6 +263,7 @@ pub fn run() {
             editing::first_editor_round,
             editing::cancel_export,
             editing::export_clip,
+            editing::combine_clips,
             editing::save_frame,
             editing::extract_track,
             hotkeys::hotkey_conflicts,

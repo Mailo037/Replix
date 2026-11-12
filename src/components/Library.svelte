@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { listen } from "@tauri-apps/api/event";
+  import { onDestroy } from "svelte";
   import { api, type Item, type PendingSave } from "../lib/api";
   import { day, size } from "../lib/format";
   import { store, type Filter } from "../lib/store.svelte";
@@ -242,6 +244,33 @@
     api.tagItems(picked.map((i) => i.id), add, remove).catch((e) => store.notify(t("Tags not saved"), String(e)));
   }
 
+  /** A montage being made from picked clips: its ticket, how far it got and how many clips. */
+  let combining = $state<{ ticket: number; progress: number; count: number } | null>(null);
+  /** Pictures cannot go into a montage. */
+  const combinable = $derived(picked.filter((i) => i.kind !== "screenshot"));
+  const stopProgress = listen<[number, number]>("export-progress", (e) => {
+    if (combining && e.payload[0] === combining.ticket) combining.progress = e.payload[1];
+  });
+  onDestroy(() => stopProgress.then((f) => f()));
+
+  async function combinePicked() {
+    const ids = combinable.map((i) => i.id);
+    const ticket = Date.now() * 1000 + Math.floor(Math.random() * 1000);
+    combining = { ticket, progress: 0, count: ids.length };
+    stopSelecting();
+    try {
+      const id = await api.combineClips(ids, t("Montage"), ticket);
+      store.notify(t("Montage saved"), t("{n} clips, one after another", { n: ids.length }), {
+        label: t("Open"),
+        run: () => store.go({ name: "editor", id }),
+      });
+    } catch (e) {
+      if (String(e) !== "Export cancelled") store.notify(t("Couldn't combine the clips"), String(e));
+    } finally {
+      combining = null;
+    }
+  }
+
   async function copyPicked() {
     await api.copyItems(picked.map((i) => i.id));
     store.notify(t("Copied"), t("Paste into Discord, a chat or a folder."));
@@ -301,6 +330,11 @@
             <button type="button" aria-haspopup="dialog" onclick={(e) => (tagging = e.currentTarget.getBoundingClientRect())}>
               <Icon name="tag" size={16} />{t("Tag")}
             </button>
+            {#if combinable.length >= 2 && !combining}
+              <button type="button" use:tip={t("Join them into one clip, oldest first")} onclick={combinePicked}>
+                <Icon name="combine" size={16} />{t("Combine")}
+              </button>
+            {/if}
             <button type="button" class="danger" onclick={deletePicked}><Icon name="trash" size={16} />{isWindows ? t("Recycle bin") : t("Trash")}</button>
           </div>
         {/if}
@@ -314,6 +348,10 @@
         <span class="chip mono">{size(totalSize)}</span>
       {/if}
       <div class="tools">
+        {#if combining}
+          <span class="chip mono" role="status">{t("Combining {n} clips… {percent}%", { n: combining.count, percent: Math.round(combining.progress * 100) })}</span>
+          <button type="button" class="btn ghost small" onclick={() => combining && api.cancelExport(combining.ticket)}>{t("Cancel")}</button>
+        {/if}
         <button
           type="button"
           class="icon-btn"

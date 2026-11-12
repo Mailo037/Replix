@@ -265,7 +265,7 @@ pub struct ExportRequest {
 const DISCORD_BYTES: f64 = 10.0 * 1024.0 * 1024.0;
 
 /// The parts that stay, in seconds from the trim start.
-fn kept(request: &ExportRequest) -> Vec<(f64, f64)> {
+pub(crate) fn kept(request: &ExportRequest) -> Vec<(f64, f64)> {
     let start = request.trim_start.max(0.0);
     let end = request.trim_end.max(start + 0.1);
     let mut cuts: Vec<(f64, f64)> =
@@ -451,12 +451,18 @@ pub fn export(
         }
     }
     args.extend(["-y".into(), ffmpeg::path_arg(out)]);
+    run(&args, length, out, on_progress, cancelled)
+}
 
+/// Runs an export's FFmpeg (its arguments include `-progress pipe:1` and the output `out`),
+/// passing on how far it got as a share of `length` seconds. A cancelled, stuck or failed
+/// run leaves no file behind.
+pub(crate) fn run(args: &[String], length: f64, out: &Path, on_progress: impl Fn(f64), cancelled: &dyn Fn() -> bool) -> Result<()> {
     // Below normal priority, like the other helper jobs: an export can run while a game does.
     let mut cmd = std::process::Command::new(ffmpeg::exe());
     crate::platform::background(&mut cmd, true);
     let mut child = Reaped(cmd
-        .args(&args)
+        .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -598,7 +604,7 @@ fn watch_export(
 /// Threads an export may use at each stage (decoding, filters, encoding): half the cores,
 /// at least one. Together with the export's lower priority this leaves a game running
 /// beside it more room; it is no hard reservation.
-fn export_threads() -> usize {
+pub(crate) fn export_threads() -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get() / 2).max(1)
 }
 

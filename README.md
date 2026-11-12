@@ -28,6 +28,8 @@ Trim the start and end, split the clip and take out the parts you don't need. Tu
 
 Switch to 9:16 for TikTok, Shorts and Reels, and drag the frame to where the action is. Pull a corner to zoom in.
 
+Pick a few clips in the library and **Combine** them into a montage: each plays as you edited it, oldest first, at the first clip's size, with a marker where each one starts. The montage is a new clip you can trim and export like any other.
+
 For a video editor, export **Separate tracks**: an MKV with the mix first and then every track on its own, with its name.
 
 ![Editor in 9:16 with the frame over the car](docs/images/vertical.png)

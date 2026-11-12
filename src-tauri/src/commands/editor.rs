@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use parking_lot::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
-use crate::{app_focused, audio, blocking, editor, encoder, err, ffmpeg, library, media, page_visible, AppState, Res};
+use crate::{app_focused, audio, blocking, editor, encoder, err, ffmpeg, library, media, montage, page_visible, AppState, Res};
 
 #[tauri::command]
 pub async fn open_editor(app: AppHandle, id: String, round: u64) -> Res<editor::EditorData> {
@@ -104,6 +104,32 @@ pub async fn warm_editor(app: AppHandle, id: String) -> Res<bool> {
     .map_err(err)?
 }
 
+/// One export (or montage) at a time, from choosing its name to the software retry: a
+/// second one waits instead of doubling the load beside a game.
+static ONE_AT_A_TIME: Mutex<()> = parking_lot::const_mutex(());
+
+/// Waits for the export's turn. Cancelling one that still waits ends the wait too.
+fn take_turn(cancelled: &dyn Fn() -> bool) -> Res<parking_lot::MutexGuard<'static, ()>> {
+    loop {
+        if cancelled() {
+            return Err(editor::CANCELLED.into());
+        }
+        if let Some(turn) = ONE_AT_A_TIME.try_lock_for(std::time::Duration::from_millis(200)) {
+            return Ok(turn);
+        }
+    }
+}
+
+/// Forgets a cancel on every way out; one that comes later finds nothing to stop and is
+/// dropped after a while.
+struct Forget(u64);
+
+impl Drop for Forget {
+    fn drop(&mut self) {
+        CANCELLED_EXPORTS.lock().forget(self.0);
+    }
+}
+
 #[tauri::command]
 pub async fn export_clip(app: AppHandle, id: String, title: String, request: editor::ExportRequest, ticket: u64) -> Res<String> {
     tauri::async_runtime::spawn_blocking(move || {
@@ -112,28 +138,9 @@ pub async fn export_clip(app: AppHandle, id: String, title: String, request: edi
         let root = state.settings.lock().clips_dir.clone();
         // Exports are H.264 even where recordings are HEVC: they have to play everywhere.
         let encoder = encoder::for_exports(&state.recorder.encoders.lock());
-        // One export at a time, from choosing its name to the software retry: a second
-        // one waits instead of doubling the load beside a game.
-        static ONE_AT_A_TIME: Mutex<()> = parking_lot::const_mutex(());
         let cancelled = || CANCELLED_EXPORTS.lock().has(ticket);
-        // Forgotten on every way out; a cancel that comes later finds nothing to stop and
-        // is dropped after a while.
-        struct Forget(u64);
-        impl Drop for Forget {
-            fn drop(&mut self) {
-                CANCELLED_EXPORTS.lock().forget(self.0);
-            }
-        }
         let _forget = Forget(ticket);
-        // Cancelling one that still waits for its turn ends the wait too.
-        let _turn = loop {
-            if cancelled() {
-                return Err(editor::CANCELLED.into());
-            }
-            if let Some(turn) = ONE_AT_A_TIME.try_lock_for(std::time::Duration::from_millis(200)) {
-                break turn;
-            }
-        };
+        let _turn = take_turn(&cancelled)?;
         let out = library::export_path(&root, &title, request.preset.extension());
         let emitter = app.clone();
         // Tagged with the export it belongs to: an editor whose export still waits for its
@@ -158,6 +165,73 @@ pub async fn export_clip(app: AppHandle, id: String, title: String, request: edi
             return Err(err(e));
         }
         Ok(out.to_string_lossy().into_owned())
+    })
+    .await
+    .map_err(err)?
+}
+
+/// Joins clips, oldest first, into a new clip in the library; says its id. Progress and
+/// cancelling go by `ticket`, as for an export.
+#[tauri::command]
+pub async fn combine_clips(app: AppHandle, ids: Vec<String>, title: String, ticket: u64) -> Res<String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app.state::<AppState>();
+        let (root, defaults) = {
+            let s = state.settings.lock();
+            (s.clips_dir.clone(), s.track_defaults.clone())
+        };
+        let mut parts = Vec::new();
+        for id in &ids {
+            let source = state.path_of(id)?;
+            let meta = library::meta_or_describe(&source, &root);
+            if meta.kind != library::Kind::Screenshot && meta.duration > 0.0 {
+                parts.push(montage::Part { source, meta });
+            }
+        }
+        parts.sort_by_key(|p| p.meta.created);
+        let encoder = encoder::for_exports(&state.recorder.encoders.lock());
+        let cancelled = || CANCELLED_EXPORTS.lock().has(ticket);
+        let _forget = Forget(ticket);
+        let _turn = take_turn(&cancelled)?;
+
+        // Filed under the game when every clip is from the same one.
+        let game = match parts.first().map(|p| p.meta.game.clone()) {
+            Some(g) if !g.is_empty() && parts.iter().all(|p| p.meta.game == g) => g,
+            _ => "Montage".to_string(),
+        };
+        let out = library::new_path(&root, &game, "mp4", Some("Montage"));
+        let work = state.cache.join("montage").join(ticket.to_string());
+        let emitter = app.clone();
+        let progress = |p: f64| {
+            let _ = emitter.emit("export-progress", (ticket, p));
+        };
+        let mut result = montage::combine(&parts, &defaults, encoder, &work, &out, progress, &cancelled);
+        // A hardware encoder can refuse odd sizes or formats; software always works.
+        if result.is_err() && !cancelled() && encoder.codec != "libx264" {
+            log::warn!("montage with {} failed, using software: {:#}", encoder.id, result.as_ref().err().unwrap());
+            result = montage::combine(&parts, &defaults, encoder::software(), &work, &out, progress, &cancelled);
+        }
+        let _ = std::fs::remove_dir_all(&work);
+        let (length, markers) = result.map_err(|e| {
+            let _ = std::fs::remove_file(&out);
+            err(e)
+        })?;
+        let info = ffmpeg::probe(&out).unwrap_or_default();
+        let meta = library::Meta {
+            kind: library::Kind::Clip,
+            title: if title.trim().is_empty() { crate::i18n::tr("Montage") } else { title.trim().to_string() },
+            game,
+            created: audio::now_ms(),
+            duration: if info.duration > 0.0 { info.duration } else { length },
+            width: info.width,
+            height: info.height,
+            tracks: vec![library::TrackMeta { name: crate::i18n::tr("Mix"), kind: audio::TrackKind::Game, exe: None }],
+            markers: library::tidy_markers(markers, length),
+            ..Default::default()
+        };
+        library::write_meta(&out, &meta).map_err(err)?;
+        let _ = app.emit("library-changed", ());
+        Ok(library::id_for(&out))
     })
     .await
     .map_err(err)?
