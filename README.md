@@ -89,6 +89,6 @@ Replix runs on all three systems. Windows has everything above; on the others a 
 | Copy a clip | yes | with `wl-clipboard` or `xclip` | yes |
 | Hotkeys | yes | X11 | yes |
 
-On macOS the app is not notarized: the first time, open it with right-click › **Open**.
+On macOS the app is not notarized, so the first start is blocked once. Open it, close the message, then go to *System Settings* › *Privacy & Security*, scroll down and click **Open Anyway** next to Replix. On macOS 14 and older, right-click the app › **Open** does the same.
 
 Replix uses [FFmpeg](https://ffmpeg.org), licensed under the GPL v3, and downloads it on first start. Its source is available at [ffmpeg.org](https://ffmpeg.org/download.html).
