@@ -23,6 +23,19 @@ CI and releases build with the default toolchain of each system (MSVC on Windows
 
 On Linux and macOS Replix uses the FFmpeg on the system (`install.rs` checks it is 6 or newer and has `x11grab` or `avfoundation`).
 
+## Tests
+
+```sh
+npm test                                 # the page's logic (Vitest, src/**/*.test.ts)
+npm run test:e2e                         # the page in a browser (Playwright, tests/e2e)
+cd src-tauri && cargo test               # recording, saving, the library, FFmpeg
+```
+
+The browser tests run the page without Replix's Rust side: `tests/e2e/tauri.ts` answers
+its commands from fixtures, records every call so a test can check what was sent, and can
+send events. The first time, `npx playwright install chromium` fetches the browser. The
+media in `tests/fixtures` is VP9 and Opus, which Playwright's Chromium plays.
+
 ## Releasing
 
 ```powershell
