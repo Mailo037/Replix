@@ -243,6 +243,7 @@ pub fn run() {
             clips::save_draft,
             clips::rename_item,
             clips::set_favorite,
+            clips::tag_items,
             clips::set_markers,
             clips::delete_items,
             clips::restore_items,

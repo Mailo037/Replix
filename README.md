@@ -36,6 +36,10 @@ For a video editor, export **Separate tracks**: an MKV with the mix first and th
 
 Copy a clip and paste it straight into Discord or a chat, drag it out of the library, or get a link that works for 72 hours. Screenshots open in a viewer you can zoom into.
 
+## Find it again
+
+Give clips tags like *win* or *funny*, one at a time from a clip's menu or for a whole selection at once. Every tag gets a place in the sidebar, and searching for `#win` finds the clips that wear it.
+
 ## Bring in what you already have
 
 Import videos and pictures with the button in the library, or drop files and folders onto the window. Replix copies them into an *Imported* folder and leaves the originals where they were.

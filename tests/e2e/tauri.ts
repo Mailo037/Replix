@@ -66,14 +66,15 @@ function clip(id: string, title: string, game: string, minutesAgo: number, extra
     seen: true,
     unread: false,
     markers: [],
+    tags: [],
     ...extra,
   };
 }
 
 export const items: Item[] = [
-  clip("a", "Last-lap overtake", "Neon Rally", 5, { seen: false }),
+  clip("a", "Last-lap overtake", "Neon Rally", 5, { seen: false, tags: ["win"] }),
   clip("b", "Triple on the ridge", "Hollow Peak", 30, { favorite: true }),
-  clip("c", "Drift into the tunnel", "Neon Rally", 60 * 26),
+  clip("c", "Drift into the tunnel", "Neon Rally", 60 * 26, { tags: ["funny", "win"] }),
 ];
 
 export function editorData(item: Item): EditorData {
@@ -184,6 +185,20 @@ export async function mockTauri(page: Page, data: Fixture = fixture()) {
           return { clips: 2_000_000_000, exports: 0, free: 200_000_000_000 };
         case "export_clip":
           return "/home/test/Videos/Replix/Exports/clip.mp4";
+        case "tag_items": {
+          // Like Replix: the clips change, and the page hears which fields did.
+          const patch: [string, { tags: string[] }][] = [];
+          for (const item of state.items) {
+            if (!args.ids.includes(item.id)) continue;
+            const gone = args.remove.map((x: string) => x.toLowerCase());
+            const kept = (item.tags ?? []).filter((x) => !gone.includes(x.toLowerCase()));
+            for (const x of args.add) if (!kept.some((y) => y.toLowerCase() === x.toLowerCase())) kept.push(x);
+            item.tags = kept;
+            patch.push([item.id, { tags: kept }]);
+          }
+          setTimeout(() => window.__emit("items-meta", patch));
+          return null;
+        }
         case "plugin:app|version":
           return "0.0.0-test";
         default:

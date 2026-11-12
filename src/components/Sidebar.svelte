@@ -14,8 +14,8 @@
 
   const gameLabel = (name: string) => (name === "Desktop" ? t("Desktop") : name);
 
-  const isActive = (filter: Filter, game: string | null = null) =>
-    store.view.name === "library" && store.view.filter === filter && store.view.game === game;
+  const isActive = (filter: Filter, game: string | null = null, tag: string | null = null) =>
+    store.view.name === "library" && store.view.filter === filter && store.view.game === game && (store.view.tag ?? null) === tag;
 </script>
 
 <nav class="sidebar" aria-label={t("Library")}>
@@ -58,6 +58,29 @@
       </ul>
     </div>
   {/if}
+
+  {#if store.tags.length}
+    <div class="panel group tags-panel">
+      <div class="heading">{t("Tags")}</div>
+      <ul class="scroll tags">
+        {#each store.tags as tag (tag.name)}
+          <li>
+            <button
+              type="button"
+              class="row"
+              class:current={isActive("all", null, tag.name)}
+              aria-current={isActive("all", null, tag.name) ? "page" : undefined}
+              onclick={() => store.go({ name: "library", filter: "all", game: null, tag: tag.name })}
+            >
+              <Icon name="tag" />
+              <span class="label">{tag.name}</span>
+              <span class="count mono">{tag.count}</span>
+            </button>
+          </li>
+        {/each}
+      </ul>
+    </div>
+  {/if}
 </nav>
 
 <style>
@@ -82,8 +105,11 @@
     padding: 6px;
     border-radius: 22px;
   }
-  .games-panel {
+  /* Games and tags share the height left; each scrolls on its own. */
+  .games-panel,
+  .tags-panel {
     min-height: 0;
+    flex: 0 1 auto;
   }
   .heading {
     padding: 8px 12px 4px;
@@ -91,7 +117,8 @@
     font-weight: 700;
     color: var(--ghost);
   }
-  .games {
+  .games,
+  .tags {
     min-height: 0;
   }
   .row {

@@ -64,6 +64,8 @@ export interface Item {
   markers?: Marker[];
   /** Brought in from elsewhere; the space limit leaves it alone. */
   imported?: boolean;
+  /** Words given to the clip to find it again. */
+  tags?: string[];
 }
 
 /** A clip or session still being written; the library shows a placeholder for it. */
@@ -289,6 +291,8 @@ export const api = {
   saveDraft: (id: string, title: string, draft: Draft) => inOrder(() => invoke<void>("save_draft", { id, title, draft })),
   renameItem: (id: string, title: string) => inOrder(() => invoke<void>("rename_item", { id, title })),
   setFavorite: (ids: string[], favorite: boolean) => inOrder(() => invoke<void>("set_favorite", { ids, favorite })),
+  /** Puts tags on clips and takes tags off them. */
+  tagItems: (ids: string[], add: string[], remove: string[]) => inOrder(() => invoke<void>("tag_items", { ids, add, remove })),
   setMarkers: (id: string, markers: Marker[]) => inOrder(() => invoke<void>("set_markers", { id, markers })),
   /** Copies videos and pictures (or the ones in a folder) into the library. */
   importFiles: (paths: string[]) => invoke<Imported>("import_files", { paths }),

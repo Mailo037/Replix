@@ -178,6 +178,21 @@ pub async fn set_favorite(app: AppHandle, ids: Vec<String>, favorite: bool) -> R
     .await
 }
 
+/// Gives clips tags and takes tags away; several clips at once from the selection.
+#[tauri::command]
+pub async fn tag_items(app: AppHandle, ids: Vec<String>, add: Vec<String>, remove: Vec<String>) -> Res<()> {
+    in_order(move || {
+        let mut changed = Vec::new();
+        let result = ids.iter().try_for_each(|id| {
+            changed.push(update_meta(&app, id, |m| m.tags = library::change_tags(&m.tags, &add, &remove))?);
+            Ok(())
+        });
+        let _ = app.emit("items-meta", &changed);
+        result
+    })
+    .await
+}
+
 /// The recycle bin goes through the system's shell and can take a moment per file.
 #[tauri::command]
 pub async fn delete_items(app: AppHandle, ids: Vec<String>) -> Res<Vec<PathBuf>> {

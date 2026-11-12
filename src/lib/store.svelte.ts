@@ -9,7 +9,7 @@ import { i18n, t } from "./i18n.svelte";
 export type Filter = "all" | "clips" | "screenshots" | "sessions" | "drafts" | "favorites";
 
 export type View =
-  | { name: "library"; filter: Filter; game: string | null }
+  | { name: "library"; filter: Filter; game: string | null; tag?: string | null }
   | { name: "editor"; id: string }
   | { name: "settings" };
 
@@ -63,6 +63,20 @@ class Store {
       if (item.game) counts.set(item.game, (counts.get(item.game) ?? 0) + 1);
     }
     return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([name, count]) => ({ name, count }));
+  });
+
+  /** Every tag in the library with how many clips wear it, most used first. Compared ignoring case. */
+  tags = $derived.by(() => {
+    const counts = new Map<string, { name: string; count: number }>();
+    for (const item of this.items) {
+      for (const tag of item.tags ?? []) {
+        const key = tag.toLowerCase();
+        const entry = counts.get(key);
+        if (entry) entry.count++;
+        else counts.set(key, { name: tag, count: 1 });
+      }
+    }
+    return [...counts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name));
   });
 
   counts = $derived.by(() => {

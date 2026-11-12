@@ -10,11 +10,12 @@
   import Icon from "./Icon.svelte";
   import ImageViewer from "./ImageViewer.svelte";
   import Mark from "./Mark.svelte";
+  import TagEditor from "./TagEditor.svelte";
   import { chooseAndImport } from "../lib/importing";
   import { t, tParts } from "../lib/i18n.svelte";
   import { isWindows } from "../lib/platform";
 
-  let { filter, game }: { filter: Filter; game: string | null } = $props();
+  let { filter, game, tag = null }: { filter: Filter; game: string | null; tag?: string | null } = $props();
   let query = $state("");
   /** Which screenshot is open in the viewer. */
   let viewing = $state<number | null>(null);
@@ -33,17 +34,23 @@
   });
 
   const gameLabel = (name: string) => (name === "Desktop" ? t("Desktop") : name);
+  const wears = (i: Item, name: string) => (i.tags ?? []).some((x) => x.toLowerCase() === name.toLowerCase());
 
   const visible = $derived.by(() => {
     const q = query.trim().toLowerCase();
+    // "#win" looks for the tag; plain words find titles, games and tags alike.
+    const word = q.replace(/^#/, "");
     return store.items.filter((i) => {
       if (game && i.game !== game) return false;
+      if (tag && !wears(i, tag)) return false;
       if (filter === "clips" && i.kind !== "clip") return false;
       if (filter === "screenshots" && i.kind !== "screenshot") return false;
       if (filter === "sessions" && i.kind !== "session") return false;
       if (filter === "drafts" && !i.draft) return false;
       if (filter === "favorites" && !i.favorite) return false;
-      return !q || i.title.toLowerCase().includes(q) || i.game.toLowerCase().includes(q);
+      if (!q) return true;
+      if (q.startsWith("#")) return (i.tags ?? []).some((x) => x.toLowerCase().includes(word));
+      return i.title.toLowerCase().includes(q) || i.game.toLowerCase().includes(q) || (i.tags ?? []).some((x) => x.toLowerCase().includes(word));
     });
   });
 
@@ -51,6 +58,8 @@
   const waiting = $derived.by(() => {
     const q = query.trim().toLowerCase();
     return store.placeholders.filter((p) => {
+      // A clip still being saved has no tags yet.
+      if (tag) return false;
       if (game && p.game !== game) return false;
       if (filter === "clips" && p.kind !== "clip") return false;
       if (filter === "sessions" && p.kind !== "session") return false;
@@ -62,7 +71,7 @@
   /** The session being recorded right now, if it belongs in this list. */
   const live = $derived.by(() => {
     const { sessionSince: since, target } = store.status;
-    if (!since || (filter !== "all" && filter !== "sessions")) return null;
+    if (!since || tag || (filter !== "all" && filter !== "sessions")) return null;
     const name = target ?? "";
     if (game && name !== game) return null;
     const title = `${name} session`.trim();
@@ -183,6 +192,7 @@
   $effect(() => {
     void filter;
     void game;
+    void tag;
     stopSelecting();
   });
 
@@ -217,6 +227,19 @@
     const count = picked.length;
     await api.setFavorite(picked.map((i) => i.id), on);
     store.notify(on ? t("Added to favorites") : t("Removed from favorites"), t("{n} items", { n: count }));
+  }
+
+  /** Where the tag panel for the selection opened, while it is open. */
+  let tagging = $state<DOMRect | null>(null);
+  /** Every tag any picked clip wears; adding or removing one changes all of them. */
+  const pickedTags = $derived.by(() => {
+    const out: string[] = [];
+    for (const i of picked) for (const x of i.tags ?? []) if (!out.some((y) => y.toLowerCase() === x.toLowerCase())) out.push(x);
+    return out;
+  });
+
+  function tagPicked(add: string[], remove: string[]) {
+    api.tagItems(picked.map((i) => i.id), add, remove).catch((e) => store.notify(t("Tags not saved"), String(e)));
   }
 
   async function copyPicked() {
@@ -275,6 +298,9 @@
           <div class="actions" role="toolbar" aria-label={t("Selected clips")}>
             <button type="button" onclick={copyPicked}><Icon name="copy" size={16} />{t("Copy")}</button>
             <button type="button" onclick={favoritePicked}><Icon name="star" size={16} />{t("Favorite")}</button>
+            <button type="button" aria-haspopup="dialog" onclick={(e) => (tagging = e.currentTarget.getBoundingClientRect())}>
+              <Icon name="tag" size={16} />{t("Tag")}
+            </button>
             <button type="button" class="danger" onclick={deletePicked}><Icon name="trash" size={16} />{isWindows ? t("Recycle bin") : t("Trash")}</button>
           </div>
         {/if}
@@ -282,7 +308,7 @@
         <button type="button" class="btn small" onclick={stopSelecting}>{t("Done")}</button>
       </div>
     {:else}
-      <h1>{game === null ? titles[filter] : gameLabel(game)}</h1>
+      <h1>{tag !== null ? `#${tag}` : game === null ? titles[filter] : gameLabel(game)}</h1>
       {#if visible.length}
         <span class="chip mono">{t("{n} clips", { n: visible.length })}</span>
         <span class="chip mono">{size(totalSize)}</span>
@@ -369,6 +395,16 @@
     {/each}
   </div>
 </section>
+
+{#if tagging && picked.length}
+  <TagEditor
+    tags={pickedTags}
+    anchor={tagging}
+    onadd={(name) => tagPicked([name], [])}
+    onremove={(name) => tagPicked([], [name])}
+    onclose={() => (tagging = null)}
+  />
+{/if}
 
 {#if viewing !== null && shots.length}
   <ImageViewer items={shots} bind:index={viewing} onclose={() => (viewing = null)} />
