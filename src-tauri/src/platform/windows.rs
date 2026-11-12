@@ -777,6 +777,17 @@ pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
     }
 }
 
+/// Plays a short WAV without waiting, straight from memory; it needs no file.
+pub fn play_sound(wav: &'static [u8], _file: &std::path::Path) {
+    use windows::core::PCWSTR;
+    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
+    // SAFETY: with SND_MEMORY the "name" is the WAV's bytes; they are static, so they outlive
+    // the asynchronous playback.
+    unsafe {
+        let _ = PlaySoundW(PCWSTR(wav.as_ptr().cast()), None, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -808,16 +819,5 @@ mod tests {
         let _ = child.kill();
         let _ = child.wait();
         assert!(inside.as_bool());
-    }
-}
-
-/// Plays a short WAV without waiting, straight from memory; it needs no file.
-pub fn play_sound(wav: &'static [u8], _file: &std::path::Path) {
-    use windows::core::PCWSTR;
-    use windows::Win32::Media::Audio::{PlaySoundW, SND_ASYNC, SND_MEMORY, SND_NODEFAULT};
-    // SAFETY: with SND_MEMORY the "name" is the WAV's bytes; they are static, so they outlive
-    // the asynchronous playback.
-    unsafe {
-        let _ = PlaySoundW(PCWSTR(wav.as_ptr().cast()), None, SND_MEMORY | SND_ASYNC | SND_NODEFAULT);
     }
 }

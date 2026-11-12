@@ -71,7 +71,7 @@ pub fn foreground_work_area() -> Option<(i32, i32, i32, i32)> {
 /// Plays a sound file with the first of `players` that starts, without waiting for it. The
 /// player is waited for on a thread of its own, so it does not linger as a zombie.
 pub(super) fn play_file(players: &[&str], wav: &[u8], file: &Path) {
-    if !crate::sound::ensure_file(wav, file) {
+    if !ensure_file(wav, file) {
         return;
     }
     for player in players {
@@ -83,4 +83,15 @@ pub(super) fn play_file(players: &[&str], wav: &[u8], file: &Path) {
         }
     }
     log::debug!("no sound player found among {players:?}");
+}
+
+/// Writes the sound to `file` unless it is there already with the same size.
+fn ensure_file(wav: &[u8], file: &Path) -> bool {
+    if std::fs::metadata(file).is_ok_and(|m| m.len() == wav.len() as u64) {
+        return true;
+    }
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    std::fs::write(file, wav).is_ok()
 }

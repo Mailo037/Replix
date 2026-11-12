@@ -1,7 +1,6 @@
 //! A short sound that confirms a key press while a game is in front, where the corner note
 //! may be hidden. Made here rather than shipped as a file: two soft sine notes.
 
-use std::path::Path;
 use std::sync::OnceLock;
 
 use tauri::{AppHandle, Manager};
@@ -76,17 +75,6 @@ fn wav(notes: &[(f32, f32, f32)]) -> Vec<u8> {
         out.extend_from_slice(&((s.clamp(-1.0, 1.0) * i16::MAX as f32) as i16).to_le_bytes());
     }
     out
-}
-
-/// Writes the sound to `file` unless it is there already with the same size.
-pub(crate) fn ensure_file(wav: &[u8], file: &Path) -> bool {
-    if std::fs::metadata(file).is_ok_and(|m| m.len() == wav.len() as u64) {
-        return true;
-    }
-    if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    std::fs::write(file, wav).is_ok()
 }
 
 #[cfg(test)]
