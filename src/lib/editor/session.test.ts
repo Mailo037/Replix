@@ -47,11 +47,14 @@ describe("EditorSession", () => {
       cropY: 0.5,
       cropScale: 0.8,
       masterVolume: 1.5,
+      speeds: [{ start: 5, end: 7, factor: 0.5 }],
+      texts: [{ text: "GG", x: 0.5, y: 0.8, size: 0.08, height: 0.12, start: 1, end: 4, png: "data:image/png;base64," }],
     };
     const ed = new EditorSession("x");
     ed.load(data(draft), null);
     expect(ed.draft()).toEqual(draft);
-    expect(ed.length).toBe(6);
+    // 1–3 and 5–9 kept, 5–7 at half speed.
+    expect(ed.length).toBe(8);
   });
 
   it("removes and restores the part under the playhead, but not the last one", () => {
