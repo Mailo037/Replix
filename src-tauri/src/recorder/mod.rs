@@ -25,6 +25,7 @@ use crate::ffmpeg;
 use crate::i18n::tr;
 use crate::library::{self, Kind, Meta};
 use crate::settings::{CaptureSource, Settings};
+use crate::sound::{self, Chime};
 use crate::platform;
 use health::Health;
 use pipeline::{private_masks, segment_name, Pipeline, Segment, Session, Target, SEGMENT_SECONDS};
@@ -514,6 +515,7 @@ impl Worker {
     fn save_clip(&mut self) {
         let Some(p) = self.pipeline.as_mut() else {
             crate::toast(&self.app, &tr("Nothing to save"), &tr("Replix is not recording right now."));
+            sound::play(&self.app, Chime::Refused);
             return;
         };
         let seconds = p.settings.buffer_seconds as f64;
@@ -525,6 +527,7 @@ impl Worker {
         let Some(first) = done.iter().find(|s| s.end > end - seconds).map(|s| s.index).or(current) else {
             let (title, detail) = save::nothing_yet();
             crate::toast(&self.app, &title, &detail);
+            sound::play(&self.app, Chime::Refused);
             return;
         };
         // No preview from the buffer while a kept-out program may be in it.
@@ -539,6 +542,7 @@ impl Worker {
         };
         p.pending.push(pending);
         crate::toast(&self.app, &tr("Saving clip…"), &p.target.label());
+        sound::play(&self.app, Chime::Done);
     }
 
     /// Saves the clips whose end has been written, or all of them once the capture stopped.
@@ -601,8 +605,10 @@ impl Worker {
     fn toggle_session(&mut self) {
         let Some(p) = self.pipeline.as_mut() else {
             crate::toast(&self.app, &tr("Can't start a session"), &tr("Replix is not recording right now."));
+            sound::play(&self.app, Chime::Refused);
             return;
         };
+        sound::play(&self.app, Chime::Done);
         if p.session.is_some() {
             Self::finish_session(&self.app, &self.settings, p);
         } else {
@@ -765,6 +771,7 @@ impl Worker {
     fn add_marker(&mut self) {
         let Some(p) = self.pipeline.as_mut() else {
             crate::toast(&self.app, &tr("Can't set a marker"), &tr("Replix is not recording right now."));
+            sound::play(&self.app, Chime::Refused);
             return;
         };
         let now = p.now();
@@ -774,6 +781,7 @@ impl Worker {
             None => p.target.label(),
         };
         crate::toast(&self.app, &tr("Marker set"), &detail);
+        sound::play(&self.app, Chime::Done);
     }
 
     fn screenshot(&self) {
@@ -823,10 +831,12 @@ impl Worker {
                     let _ = library::write_meta(&path, &meta);
                     let _ = app.emit("library-changed", ());
                     crate::toast(&app, &tr("Screenshot saved"), &name);
+                    sound::play(&app, Chime::Done);
                 }
                 Err(e) => {
                     log::warn!("screenshot failed: {e}");
                     crate::toast(&app, &tr("Screenshot failed"), &tr("The picture could not be taken."));
+                    sound::play(&app, Chime::Refused);
                 }
             }
         });

@@ -1,4 +1,5 @@
 {
+  "A short sound when a clip, screenshot or marker is taken, so you know without looking": "Короткий звук, когда сохраняется клип, снимок экрана или метка, — чтобы знать, не глядя",
   "About half the space. Exports are still H.264, which plays everywhere.": "Примерно вдвое меньше места. Экспорт по-прежнему в H.264, он воспроизводится везде.",
   "Audio was unavailable. This recording was saved without sound.": "Звук был недоступен. Эта запись сохранена без звука.",
   "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264 воспроизводится везде. HEVC занимает примерно вдвое меньше места при той же картинке.",
@@ -452,6 +453,7 @@
   "Small": "Маленький",
   "Small enough for Discord.": "Достаточно мал для Discord.",
   "Something went wrong": "Что-то пошло не так",
+  "Sound": "Звук",
   "Space limit": "Лимит места",
   "Space used": "Занято места",
   "Split": "Разрезать",

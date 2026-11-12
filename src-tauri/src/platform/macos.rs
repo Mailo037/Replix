@@ -308,3 +308,8 @@ pub fn tie_to_app(_child: &std::process::Child) {}
 pub fn icon_rgba(_path: &str, _size: u32) -> Option<(u32, u32, Vec<u8>)> {
     None
 }
+
+/// Plays a short WAV without waiting, with `afplay`, which every Mac has.
+pub fn play_sound(wav: &'static [u8], file: &std::path::Path) {
+    super::unix::play_file(&["afplay"], wav, file);
+}

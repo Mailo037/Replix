@@ -483,6 +483,17 @@
           </div>
         {/if}
         <div class="row">
+          <div class="text">
+            <span>{t("Sound")}</span>
+            <span class="meta">{t("A short sound when a clip, screenshot or marker is taken, so you know without looking")}</span>
+          </div>
+          <Switch
+            checked={s.saveSound}
+            label={t("Sound")}
+            onchange={(v) => store.save({ ...s, saveSound: v }).then((saved) => void (saved && v && api.previewSound()))}
+          />
+        </div>
+        <div class="row">
           <div class="text"><span>{isWindows ? t("Start with Windows") : t("Start when you log in")}</span><span class="meta">{t("Opens quietly in the tray")}</span></div>
           <Switch checked={s.launchAtStartup} label={isWindows ? t("Start with Windows") : t("Start when you log in")} onchange={(v) => update({ launchAtStartup: v })} />
         </div>

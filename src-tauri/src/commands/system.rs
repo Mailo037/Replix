@@ -109,6 +109,12 @@ pub fn preview_toast(app: AppHandle) {
     crate::shell::corner_toast(&app, &crate::i18n::tr("Notifications show up here"), &crate::i18n::tr("Hover to keep one on screen"));
 }
 
+/// Plays the sound a saved clip makes, as the settings turn it on.
+#[tauri::command]
+pub fn preview_sound(app: AppHandle) {
+    crate::sound::play(&app, crate::sound::Chime::Done);
+}
+
 #[tauri::command]
 pub fn toggle_session(state: State<AppState>) {
     state.recorder.send(Command::ToggleSession);

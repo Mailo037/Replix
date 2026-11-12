@@ -151,6 +151,8 @@ export interface Settings {
   launchAtStartup: boolean;
   closeToTray: boolean;
   showToast: boolean;
+  /** A short sound when a hotkey saves something. */
+  saveSound: boolean;
   toastPosition: ToastPosition;
   toastSize: "small" | "medium" | "large";
   profiles: Profile[];
@@ -309,6 +311,7 @@ export const api = {
   toggleSession: () => invoke<void>("toggle_session"),
   addMarker: () => invoke<void>("add_marker"),
   previewToast: () => invoke<void>("preview_toast"),
+  previewSound: () => invoke<void>("preview_sound"),
   hotkeyConflicts: () => invoke<string[]>("hotkey_conflicts"),
   pauseHotkeys: (paused: boolean) => invoke<void>("pause_hotkeys", { paused }),
   extractTrack: (id: string, track: number, title: string, start: number, end: number) =>

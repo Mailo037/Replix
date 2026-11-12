@@ -1,4 +1,5 @@
 {
+  "A short sound when a clip, screenshot or marker is taken, so you know without looking": "保存剪辑、截图或标记时播放一声短促提示音，不用看也知道",
   "About half the space. Exports are still H.264, which plays everywhere.": "大约只占一半空间。导出仍为 H.264，随处都能播放。",
   "Audio was unavailable. This recording was saved without sound.": "音频不可用，此录制已保存为无声视频。",
   "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264 随处都能播放。同样的画面，HEVC 大约只需一半空间。",
@@ -432,6 +433,7 @@
   "Small": "小",
   "Small enough for Discord.": "足够小，可用于 Discord。",
   "Something went wrong": "出了点问题",
+  "Sound": "提示音",
   "Space limit": "空间上限",
   "Space used": "已用空间",
   "Split": "分割",

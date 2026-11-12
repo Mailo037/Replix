@@ -31,6 +31,7 @@ export const settings: Settings = {
   launchAtStartup: false,
   closeToTray: true,
   showToast: true,
+  saveSound: true,
   toastPosition: "bottomRight",
   toastSize: "medium",
   profiles: [],
@@ -151,8 +152,10 @@ export async function mockTauri(page: Page, data: Fixture = fixture()) {
         case "get_settings":
           return [state.settings, settingsRevision];
         case "set_settings":
+          // Like Replix: the newest revision it was sent is the one in effect.
           state.settings = args.settings;
-          return ++settingsRevision;
+          settingsRevision = Math.max(settingsRevision, args.revision);
+          return settingsRevision;
         case "get_status":
           return { state: "waiting", target: null, sessionSince: null, encoder: "NVIDIA NVENC", error: null, clipSeconds: 30 };
         case "first_editor_round":

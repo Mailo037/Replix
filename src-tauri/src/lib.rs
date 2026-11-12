@@ -14,6 +14,7 @@ mod settings;
 mod settings_sync;
 mod share;
 mod shell;
+mod sound;
 mod platform;
 
 use std::path::PathBuf;
@@ -232,6 +233,7 @@ pub fn run() {
             system::toggle_session,
             system::add_marker,
             system::preview_toast,
+            system::preview_sound,
             system::app_icon,
             system::list_mics,
             system::start_mic_test,

@@ -1,4 +1,5 @@
 {
+  "A short sound when a clip, screenshot or marker is taken, so you know without looking": "Un sonido breve al guardar un clip, una captura o un marcador, para saberlo sin mirar",
   "About half the space. Exports are still H.264, which plays everywhere.": "Ocupa más o menos la mitad. Las exportaciones siguen en H.264, que se reproduce en todas partes.",
   "Audio was unavailable. This recording was saved without sound.": "El audio no estaba disponible. Esta grabación se ha guardado sin sonido.",
   "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264 se reproduce en todas partes. HEVC necesita más o menos la mitad de espacio para la misma imagen.",
@@ -460,6 +461,7 @@
   "Small": "Pequeño",
   "Small enough for Discord.": "Lo bastante pequeño para Discord.",
   "Something went wrong": "Algo salió mal",
+  "Sound": "Sonido",
   "Space limit": "Límite de espacio",
   "Space used": "Espacio usado",
   "Split": "Dividir",

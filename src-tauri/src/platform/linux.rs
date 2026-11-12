@@ -585,3 +585,9 @@ pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
     let image = tauri::image::Image::from_bytes(&bytes).ok()?;
     Some((image.width(), image.height(), image.rgba().to_vec()))
 }
+
+/// Plays a short WAV without waiting: through PulseAudio or PipeWire (`paplay` comes with
+/// pulseaudio-utils, which Replix needs anyway), else PipeWire's or ALSA's own player.
+pub fn play_sound(wav: &'static [u8], file: &std::path::Path) {
+    super::unix::play_file(&["paplay", "pw-play", "aplay"], wav, file);
+}

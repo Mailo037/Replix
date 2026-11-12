@@ -135,6 +135,8 @@ pub struct Settings {
     pub launch_at_startup: bool,
     pub close_to_tray: bool,
     pub show_toast: bool,
+    /// A short sound when a hotkey saves something, or does nothing.
+    pub save_sound: bool,
     pub toast_position: ToastPosition,
     pub toast_size: ToastSize,
     /// Games and apps with their own settings.
@@ -219,6 +221,7 @@ impl Default for Settings {
             launch_at_startup: false,
             close_to_tray: true,
             show_toast: true,
+            save_sound: true,
             toast_position: ToastPosition::default(),
             toast_size: ToastSize::default(),
             profiles: Vec::new(),

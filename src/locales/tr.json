@@ -1,4 +1,5 @@
 {
+  "A short sound when a clip, screenshot or marker is taken, so you know without looking": "Bir klip, ekran görüntüsü ya da işaret alındığında kısa bir ses; bakmadan anlarsın",
   "About half the space. Exports are still H.264, which plays everywhere.": "Yaklaşık yarı yer kaplar. Dışa aktarımlar her yerde oynatılan H.264 olarak kalır.",
   "Audio was unavailable. This recording was saved without sound.": "Ses kullanılamıyordu. Bu kayıt sessiz olarak kaydedildi.",
   "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264 her yerde oynatılır. HEVC aynı görüntü için yaklaşık yarı yer kaplar.",
@@ -444,6 +445,7 @@
   "Small": "Küçük",
   "Small enough for Discord.": "Discord için yeterince küçük.",
   "Something went wrong": "Bir şeyler ters gitti",
+  "Sound": "Ses",
   "Space limit": "Alan sınırı",
   "Space used": "Kullanılan alan",
   "Split": "Böl",

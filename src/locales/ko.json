@@ -1,4 +1,5 @@
 {
+  "A short sound when a clip, screenshot or marker is taken, so you know without looking": "클립, 스크린샷, 마커를 저장하면 짧은 소리가 나서 보지 않아도 알 수 있어요",
   "About half the space. Exports are still H.264, which plays everywhere.": "용량이 약 절반입니다. 내보내기는 어디서나 재생되는 H.264로 유지됩니다.",
   "Audio was unavailable. This recording was saved without sound.": "오디오를 사용할 수 없어 이 녹화는 소리 없이 저장되었습니다.",
   "H.264 plays everywhere. HEVC needs about half the space for the same picture.": "H.264는 어디서나 재생됩니다. HEVC는 같은 화질에 약 절반의 용량이 듭니다.",
@@ -432,6 +433,7 @@
   "Small": "작게",
   "Small enough for Discord.": "Discord에 올리기 충분히 작아요.",
   "Something went wrong": "문제가 생겼어요",
+  "Sound": "소리",
   "Space limit": "공간 한도",
   "Space used": "사용 중인 공간",
   "Split": "나누기",

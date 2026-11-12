@@ -35,3 +35,12 @@ test("does not offer HEVC without an encoder for it", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Recording" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Video format" })).toHaveCount(0);
 });
+
+test("turning the sound on plays it once", async ({ page }) => {
+  await mockTauri(page, fixture({ settings: { ...fixture().settings, saveSound: false } }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("switch", { name: "Sound" }).click();
+  await expect.poll(async () => (await calls(page, "set_settings")).at(-1)?.args.settings).toMatchObject({ saveSound: true });
+  await expect.poll(async () => (await calls(page, "preview_sound")).length).toBe(1);
+});
