@@ -248,12 +248,44 @@ pub fn detect_cached(cache: &Path) -> (Vec<&'static Encoder>, bool) {
     (found, false)
 }
 
-/// All encoders that work here, best first, H.264 before HEVC. Takes a few seconds.
+/// All encoders that work here, best first, H.264 before HEVC. Takes a few seconds; nothing
+/// records until it is done (after an update, a new driver or a new graphics card).
 pub fn detect() -> Vec<&'static Encoder> {
-    let mut found: Vec<&'static Encoder> = Vec::new();
+    detect_with(works)
+}
+
+/// The hardware an encoder runs on, shared by its H.264, HEVC and copy variants: "nvenc",
+/// "amf", "qsv", "vaapi", "videotoolbox", or the software encoder's own name.
+fn family(e: &Encoder) -> &'static str {
+    e.codec.split_once('_').map_or(e.codec, |(_, hardware)| hardware)
+}
+
+/// Each family's encoders are tried one after another, as whether one is tried depends on
+/// the one before it. The families themselves are tried at the same time: they are different
+/// chips (or the processor), so the test takes as long as the slowest of them, not all
+/// of them together.
+fn detect_with(works: impl Fn(&Encoder) -> anyhow::Result<()> + Sync) -> Vec<&'static Encoder> {
+    let mut families: Vec<&'static str> = Vec::new();
     for candidate in CANDIDATES {
+        if !families.contains(&family(candidate)) {
+            families.push(family(candidate));
+        }
+    }
+    let works = &works;
+    let mut found: Vec<&'static Encoder> = std::thread::scope(|scope| {
+        let tries: Vec<_> = families.iter().map(|&f| scope.spawn(move || detect_family(f, works))).collect();
+        tries.into_iter().flat_map(|t| t.join().unwrap_or_default()).collect()
+    });
+    // Back in the order of the list, which is best first.
+    found.sort_by_key(|e| CANDIDATES.iter().position(|c| c.id == e.id));
+    found
+}
+
+fn detect_family(name: &str, works: &impl Fn(&Encoder) -> anyhow::Result<()>) -> Vec<&'static Encoder> {
+    let mut found: Vec<&'static Encoder> = Vec::new();
+    for candidate in CANDIDATES.iter().filter(|c| family(c) == name) {
         // A copy variant only matters when the direct one failed.
-        if candidate.id.ends_with("-copy") && found.iter().any(|e: &&Encoder| e.codec == candidate.codec) {
+        if candidate.id.ends_with("-copy") && found.iter().any(|e| e.codec == candidate.codec) {
             continue;
         }
         // HEVC is tried only on hardware whose H.264 encoder works, in the same way.
@@ -291,6 +323,66 @@ mod tests {
             assert!(base.is_some_and(|b| b < i), "{} has no H.264 encoder before it", e.id);
             assert!(e.codec.starts_with("hevc_"));
         }
+    }
+
+    /// What was found, and what was tried, when every encoder was tried one after another.
+    fn one_by_one(fails: &[&str]) -> (Vec<&'static str>, Vec<&'static str>) {
+        let mut found: Vec<&'static Encoder> = Vec::new();
+        let mut tried = Vec::new();
+        for c in CANDIDATES {
+            if c.id.ends_with("-copy") && found.iter().any(|e| e.codec == c.codec) {
+                continue;
+            }
+            if c.format == Codec::Hevc && !found.iter().any(|e| e.format == Codec::H264 && e.id == c.base()) {
+                continue;
+            }
+            tried.push(c.id);
+            if !fails.contains(&c.id) {
+                found.push(c);
+            }
+        }
+        (found.iter().map(|e| e.id).collect(), tried)
+    }
+
+    /// Trying the chips at the same time finds the same encoders, in the same order, as
+    /// trying everything one after another, whichever of them fail.
+    #[test]
+    fn families_tried_together_find_the_same_as_one_by_one() {
+        let mut cases: Vec<Vec<&str>> = vec![vec![], CANDIDATES.iter().map(|c| c.id).collect()];
+        cases.extend(CANDIDATES.iter().map(|c| vec![c.id]));
+        // Every hardware encoder broken: only the software one is left.
+        cases.push(CANDIDATES.iter().map(|c| c.id).filter(|id| *id != software().id).collect());
+        for fails in cases {
+            let tried = parking_lot::Mutex::new(Vec::new());
+            let found = detect_with(|e| {
+                tried.lock().push(e.id);
+                if fails.contains(&e.id) { anyhow::bail!("broken") } else { Ok(()) }
+            });
+            let ids: Vec<&str> = found.iter().map(|e| e.id).collect();
+            let (expected, mut expected_tried) = one_by_one(&fails);
+            assert_eq!(ids, expected, "with {fails:?} failing");
+            // No more tries than before: the same ones, in another order.
+            let mut tried = tried.into_inner();
+            tried.sort_unstable();
+            expected_tried.sort_unstable();
+            assert_eq!(tried, expected_tried, "with {fails:?} failing");
+        }
+    }
+
+    /// The software encoder and the graphics chips are tried at the same time.
+    #[test]
+    fn families_are_tried_at_the_same_time() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let running = AtomicUsize::new(0);
+        let most = AtomicUsize::new(0);
+        detect_with(|_| {
+            let now = running.fetch_add(1, Ordering::SeqCst) + 1;
+            most.fetch_max(now, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(100));
+            running.fetch_sub(1, Ordering::SeqCst);
+            Ok(())
+        });
+        assert!(most.load(Ordering::SeqCst) > 1, "only one try at a time");
     }
 
     /// Exports are H.264 even when HEVC is found first.

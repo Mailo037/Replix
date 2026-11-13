@@ -1,9 +1,14 @@
 //! Windows: WASAPI. Process loopback captures one app's process tree on its own.
 
+use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::{Duration, Instant};
 
-use wasapi::{AudioClient, DeviceEnumerator, DeviceState, Direction, SampleType, SessionState, StreamMode, WaveFormat};
+use wasapi::{
+    AudioClient, AudioSessionManager, DeviceEnumerator, DeviceState, Direction, SampleType, SessionState, StreamMode,
+    WaveFormat,
+};
 
 use super::{InputDevice, Source, CHANNELS, RATE};
 
@@ -84,26 +89,54 @@ pub fn input_devices() -> Vec<InputDevice> {
         .collect()
 }
 
+/// How long the output devices' session managers are kept between looks for apps playing
+/// sound. Listing the devices and asking each for its manager takes about as long as the
+/// look itself (some 6 ms with ten devices, every two seconds); a device plugged in
+/// meanwhile is looked at this much later. Apps that already have a track are recorded
+/// whatever device they play on.
+const DEVICES_FOR: Duration = Duration::from_secs(10);
+
+thread_local! {
+    static MANAGERS: RefCell<Option<(Instant, Vec<AudioSessionManager>)>> = const { RefCell::new(None) };
+}
+
+fn session_managers() -> Vec<AudioSessionManager> {
+    let Ok(enumerator) = DeviceEnumerator::new() else { return Vec::new() };
+    let Ok(devices) = enumerator.get_device_collection(&Direction::Render) else { return Vec::new() };
+    let count = devices.get_nbr_devices().unwrap_or(0);
+    (0..count).filter_map(|i| devices.get_device_at_index(i).ok()?.get_iaudiosessionmanager().ok()).collect()
+}
+
 /// (pid, playing) for every audio session on every output device.
 pub fn audio_sessions() -> Vec<(u32, bool)> {
-    let mut out = Vec::new();
-    let Ok(enumerator) = DeviceEnumerator::new() else { return out };
-    let Ok(devices) = enumerator.get_device_collection(&Direction::Render) else { return out };
-    let count = devices.get_nbr_devices().unwrap_or(0);
-    for i in 0..count {
-        let Ok(device) = devices.get_device_at_index(i) else { continue };
-        let Ok(manager) = device.get_iaudiosessionmanager() else { continue };
-        let Ok(sessions) = manager.get_audiosessionenumerator() else { continue };
-        for j in 0..sessions.get_count().unwrap_or(0) {
-            let Ok(session) = sessions.get_session(j) else { continue };
-            let state = session.get_state().ok();
-            if matches!(state, Some(SessionState::Expired) | None) {
+    MANAGERS.with_borrow_mut(|kept| {
+        if kept.as_ref().is_none_or(|(at, _)| at.elapsed() > DEVICES_FOR) {
+            let managers = session_managers();
+            // Nothing found may be a passing failure: asked again next time.
+            *kept = (!managers.is_empty()).then(|| (Instant::now(), managers));
+        }
+        let mut out = Vec::new();
+        let mut gone = false;
+        for manager in kept.iter().flat_map(|(_, managers)| managers) {
+            // A device that was unplugged: the list is made afresh next time.
+            let Ok(sessions) = manager.get_audiosessionenumerator() else {
+                gone = true;
                 continue;
-            }
-            if let Ok(pid) = session.get_process_id() {
-                out.push((pid, matches!(state, Some(SessionState::Active))));
+            };
+            for j in 0..sessions.get_count().unwrap_or(0) {
+                let Ok(session) = sessions.get_session(j) else { continue };
+                let state = session.get_state().ok();
+                if matches!(state, Some(SessionState::Expired) | None) {
+                    continue;
+                }
+                if let Ok(pid) = session.get_process_id() {
+                    out.push((pid, matches!(state, Some(SessionState::Active))));
+                }
             }
         }
-    }
-    out
+        if gone {
+            *kept = None;
+        }
+        out
+    })
 }

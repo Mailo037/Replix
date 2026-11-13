@@ -83,6 +83,12 @@ core-graphics = "0.25"
 debug = 0
 incremental = false
 
+# Noise suppression runs on the microphone all the time while recording; unoptimised it
+# costs the dev build several times what it costs a release. Built once, so it does not
+# slow down rebuilds.
+[profile.dev.package.nnnoiseless]
+opt-level = 3
+
 [profile.release]
 codegen-units = 1
 lto = true

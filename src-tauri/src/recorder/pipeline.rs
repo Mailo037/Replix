@@ -315,9 +315,15 @@ impl Pipeline {
 
     /// Completed segments in order, plus the index of the one being written.
     pub fn segments(&mut self) -> (&VecDeque<Segment>, Option<u64>) {
-        if let Ok(mut file) = std::fs::File::open(self.dir.0.join("list.csv")) {
-            if file.seek(SeekFrom::Start(self.list_offset)).is_ok() {
-                self.read_segments(BufReader::new(file));
+        let list = self.dir.0.join("list.csv");
+        // FFmpeg adds a line every two seconds, and this is asked several times a tick. Most
+        // looks find nothing new, and checking the size costs a fraction of opening the file
+        // to read (which a virus scanner may look at each time).
+        if std::fs::metadata(&list).is_ok_and(|m| m.len() > self.list_offset) {
+            if let Ok(mut file) = std::fs::File::open(&list) {
+                if file.seek(SeekFrom::Start(self.list_offset)).is_ok() {
+                    self.read_segments(BufReader::new(file));
+                }
             }
         }
         let next = self.segments.back().map(|s| s.index + 1).unwrap_or(0);

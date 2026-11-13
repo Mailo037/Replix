@@ -74,19 +74,30 @@ impl Ring {
         }
     }
 
-    /// Takes `n` samples, padding with silence when the source had nothing.
-    fn take(&self, n: usize, out: &mut Vec<f32>) {
+    /// Takes `n` samples as FFmpeg reads them (f32, little-endian), padding with silence
+    /// when the source had nothing. Written straight into `out`: this runs for every slot
+    /// fifty times a second, mostly for slots that are silent.
+    fn take_bytes(&self, n: usize, out: &mut Vec<u8>) {
         out.clear();
-        let mut q = self.samples.lock();
-        // A source that runs ahead of the clock is pulled back to a short lag.
-        let ahead = RATE * CHANNELS / 4;
-        if q.len() > n + ahead {
-            let excess = q.len() - n - RATE * CHANNELS / 50;
-            q.drain(..excess);
+        out.reserve(n * 4);
+        {
+            let mut q = self.samples.lock();
+            // A source that runs ahead of the clock is pulled back to a short lag.
+            let ahead = RATE * CHANNELS / 4;
+            if q.len() > n + ahead {
+                let excess = q.len() - n - RATE * CHANNELS / 50;
+                q.drain(..excess);
+            }
+            let k = n.min(q.len());
+            let (front, back) = q.as_slices();
+            let from_front = k.min(front.len());
+            for s in front[..from_front].iter().chain(&back[..k - from_front]) {
+                out.extend_from_slice(&s.to_le_bytes());
+            }
+            q.drain(..k);
         }
-        let k = n.min(q.len());
-        out.extend(q.drain(..k));
-        out.resize(n, 0.0);
+        // Silence is all zero bytes in f32.
+        out.resize(n * 4, 0);
     }
 
     fn clear(&self) {
@@ -247,7 +258,6 @@ fn spawn_writer(pipe: PipeServer, ring: Arc<Ring>, stop: Arc<AtomicBool>) -> Joi
             ring.clear();
             let start = Instant::now();
             let mut sent: u64 = 0;
-            let mut samples: Vec<f32> = Vec::new();
             let mut bytes: Vec<u8> = Vec::new();
             while !stop.load(Ordering::Relaxed) {
                 // Every slot has its own writer; 20 ms batches keep their wake-ups low
@@ -258,9 +268,7 @@ fn spawn_writer(pipe: PipeServer, ring: Arc<Ring>, stop: Arc<AtomicBool>) -> Joi
                     continue;
                 }
                 let frames = (due - sent) as usize;
-                ring.take(frames * CHANNELS, &mut samples);
-                bytes.clear();
-                bytes.extend(samples.iter().flat_map(|s| s.to_le_bytes()));
+                ring.take_bytes(frames * CHANNELS, &mut bytes);
                 if let Err(e) = pipe.write_all(&bytes) {
                     if !stop.load(Ordering::Relaxed) {
                         log::warn!("audio pipe {} stopped: {e:#}", pipe.path);
@@ -489,6 +497,47 @@ impl Drop for Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn floats(bytes: &[u8]) -> Vec<f32> {
+        bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
+    }
+
+    #[test]
+    fn a_ring_hands_out_what_it_has_then_silence() {
+        let ring = Ring::default();
+        let mut bytes = Vec::new();
+        let samples: Vec<f32> = (1..=300).map(|i| i as f32 / 512.0).collect();
+        ring.push(&samples);
+        ring.take_bytes(1000, &mut bytes);
+        let got = floats(&bytes);
+        assert_eq!(got.len(), 1000);
+        assert_eq!(got[..300], samples[..]);
+        assert!(got[300..].iter().all(|s| *s == 0.0));
+        assert!(ring.samples.lock().is_empty());
+        // An empty ring gives silence of the asked length.
+        ring.take_bytes(64, &mut bytes);
+        assert_eq!(bytes, vec![0u8; 256]);
+    }
+
+    /// Taken in other amounts than pushed, so the queue wraps around inside and both of its
+    /// halves are read.
+    #[test]
+    fn a_ring_keeps_the_order_it_was_given() {
+        let ring = Ring::default();
+        let mut bytes = Vec::new();
+        let mut next = 0u32;
+        let mut expected = 0u32;
+        for _ in 0..50 {
+            let batch: Vec<f32> = (next + 1..=next + 480).map(|i| i as f32).collect();
+            next += 480;
+            ring.push(&batch);
+            ring.take_bytes(400, &mut bytes);
+            for s in floats(&bytes) {
+                expected += 1;
+                assert_eq!(s, expected as f32);
+            }
+        }
+    }
 
     #[test]
     fn one_failed_writer_makes_the_router_unhealthy() {
