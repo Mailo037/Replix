@@ -68,6 +68,10 @@ sys-locale = "0.3"
 [target.'cfg(target_os = "linux")'.dependencies]
 # Talks to the X server directly (no C library): windows, the active one, monitors.
 x11rb = { version = "0.13", features = ["randr"] }
+# The desktop's GlobalShortcuts portal, for hotkeys under Wayland (D-Bus in Rust, no C library).
+ashpd = { version = "0.14", default-features = false, features = ["tokio", "global_shortcuts"] }
+futures-util = "0.3"
+futures-channel = "0.3"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 sysinfo = { version = "0.37", default-features = false, features = ["system"] }

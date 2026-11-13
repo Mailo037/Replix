@@ -95,7 +95,7 @@ Replix runs on all three systems. Windows has everything above; on the others a 
 | Video encoder | NVIDIA, AMD, Intel, processor | NVIDIA, VA-API (AMD, Intel), processor | VideoToolbox, processor |
 | HEVC recording | NVIDIA, AMD, Intel | NVIDIA, VA-API, if the system can play HEVC (GStreamer's `gst-libav`) | VideoToolbox |
 | Copy a clip | yes | with `wl-clipboard` or `xclip` | yes |
-| Hotkeys | yes | X11 | yes |
+| Hotkeys | yes | X11; under Wayland while a game runs through XWayland, and everywhere where the desktop offers its shortcut portal (KDE Plasma, GNOME 48 and newer, Hyprland), which may ask once to allow them | yes |
 
 On macOS the app is not notarized, so the first start is blocked once. Open it, close the message, then go to *System Settings* › *Privacy & Security*, scroll down and click **Open Anyway** next to Replix. On macOS 14 and older, right-click the app › **Open** does the same.
 

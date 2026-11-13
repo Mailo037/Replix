@@ -313,3 +313,7 @@ pub fn icon_rgba(_path: &str, _size: u32) -> Option<(u32, u32, Vec<u8>)> {
 pub fn play_sound(wav: &'static [u8], file: &std::path::Path) {
     super::unix::play_file(&["afplay"], wav, file);
 }
+
+/// Hotkeys the desktop hands out itself. Only Wayland needs that; here Replix's own key
+/// grab hears its keys whatever window is in front, so there is nothing to ask for.
+pub fn desktop_hotkeys(_keys: Vec<super::DesktopHotkey>, _pressed: std::sync::Arc<dyn Fn(&str) + Send + Sync>) {}

@@ -788,6 +788,10 @@ pub fn play_sound(wav: &'static [u8], _file: &std::path::Path) {
     }
 }
 
+/// Hotkeys the desktop hands out itself. Only Wayland needs that; here Replix's own key
+/// grab hears its keys whatever window is in front, so there is nothing to ask for.
+pub fn desktop_hotkeys(_keys: Vec<super::DesktopHotkey>, _pressed: std::sync::Arc<dyn Fn(&str) + Send + Sync>) {}
+
 #[cfg(test)]
 mod tests {
     use super::*;
