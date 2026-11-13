@@ -237,6 +237,23 @@ export interface EditorData {
   markers: Marker[];
 }
 
+/**
+ * How far getting a clip ready for the editor is, as "editor-progress" events say. A long
+ * session takes a while the first time: its tracks are copied out one by one.
+ */
+export type Preparing =
+  | { step: "waiting" }
+  | { step: "reading" }
+  /** `done` of `total` seconds of the clip. */
+  | { step: "splitting"; done: number; total: number };
+
+/** The markers of the session being recorded, in seconds since it was started. */
+export interface LiveMarks {
+  /** When the session was started, epoch milliseconds, as `Status.sessionSince`. */
+  since: number;
+  markers: Marker[];
+}
+
 /** A marked moment; the name and icon are given in the editor. */
 export interface Marker {
   /** Seconds of the clip. */
@@ -346,6 +363,15 @@ export const api = {
   takeScreenshot: () => invoke<void>("take_screenshot"),
   toggleSession: () => invoke<void>("toggle_session"),
   addMarker: () => invoke<void>("add_marker"),
+  /** The running session's markers; null while no session records. Changes come as "session-marks". */
+  sessionMarks: () => invoke<LiveMarks | null>("session_marks"),
+  /** Marks the moment `ago` seconds before now in the running session. */
+  markSession: (ago: number, name = "", icon = "") => invoke<void>("mark_session", { ago, name, icon }),
+  /** `at` as the session's markers give it. */
+  editSessionMarker: (at: number, name: string, icon: string) => invoke<void>("edit_session_marker", { at, name, icon }),
+  removeSessionMarker: (at: number) => invoke<void>("remove_session_marker", { at }),
+  /** The page shows the running session in its own view: its picture is renewed more often. */
+  watchSession: (on: boolean) => invoke<void>("watch_session", { on }),
   previewToast: () => invoke<void>("preview_toast"),
   previewSound: () => invoke<void>("preview_sound"),
   hotkeyConflicts: () => invoke<string[]>("hotkey_conflicts"),

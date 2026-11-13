@@ -64,18 +64,34 @@ pub fn run_with_timeout(args: &[String], timeout: Duration) -> Result<()> {
 /// Like `run`, stopped as soon as `keep_going` says no, e.g. work done ahead of time that
 /// nobody needs once the window is hidden.
 pub fn run_while(args: &[String], keep_going: impl Fn() -> bool) -> Result<()> {
-    run_checked(command(), args, Duration::from_secs(600), keep_going)
+    run_checked(command(), args, Duration::from_secs(600), keep_going, None)
+}
+
+/// Like `run_while`, telling `progress` how many seconds of the input are done as FFmpeg
+/// reports them, about twice a second. There is no time limit: a long session takes as long
+/// as its drive needs, and `keep_going` is the way to end it.
+pub fn run_with_progress(args: &[String], keep_going: impl Fn() -> bool, progress: &dyn Fn(f64)) -> Result<()> {
+    run_checked(command(), args, Duration::MAX, keep_going, Some(progress))
 }
 
 fn run_command(cmd: Command, args: &[String], timeout: Duration) -> Result<()> {
-    run_checked(cmd, args, timeout, || true)
+    run_checked(cmd, args, timeout, || true, None)
 }
 
-fn run_checked(mut cmd: Command, args: &[String], timeout: Duration, keep_going: impl Fn() -> bool) -> Result<()> {
+fn run_checked(
+    mut cmd: Command,
+    args: &[String],
+    timeout: Duration,
+    keep_going: impl Fn() -> bool,
+    progress: Option<&dyn Fn(f64)>,
+) -> Result<()> {
+    if progress.is_some() {
+        cmd.args(["-progress", "pipe:1", "-nostats"]);
+    }
     let mut child = cmd
         .args(args)
         .stdin(Stdio::null())
-        .stdout(Stdio::null())
+        .stdout(if progress.is_some() { Stdio::piped() } else { Stdio::null() })
         .stderr(Stdio::piped())
         .spawn_tied()
         .context("FFmpeg could not be started")?;
@@ -85,8 +101,26 @@ fn run_checked(mut cmd: Command, args: &[String], timeout: Duration, keep_going:
         let _ = stderr.read_to_string(&mut text);
         text
     });
+    // Progress comes on its own thread, so a quiet FFmpeg never holds up the checks below.
+    let (moved, times) = std::sync::mpsc::channel();
+    if let Some(stdout) = child.stdout.take() {
+        std::thread::spawn(move || {
+            use std::io::BufRead;
+            for line in std::io::BufReader::new(stdout).lines().map_while(Result::ok) {
+                if let Some(us) = line.strip_prefix("out_time_us=").and_then(|v| v.trim().parse::<f64>().ok()) {
+                    let _ = moved.send(us / 1_000_000.0);
+                }
+            }
+        });
+    }
     let started = Instant::now();
     let status = loop {
+        if let (Some(progress), Some(seconds)) = (progress, times.try_iter().last()) {
+            // FFmpeg says N/A, or a negative time, before the first packet is out.
+            if seconds.is_finite() && seconds >= 0.0 {
+                progress(seconds);
+            }
+        }
         if let Some(status) = child.try_wait()? {
             break status;
         }

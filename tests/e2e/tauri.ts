@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { AppWindow, Codec, EditorData, Item, Monitor, Settings } from "../../src/lib/api";
+import type { AppWindow, Codec, EditorData, Item, LiveMarks, Monitor, Settings, Status } from "../../src/lib/api";
 
 // The page talks to Replix's Rust side through Tauri. In these tests a stand-in answers
 // instead: it is put into the page before Replix's own scripts run, answers the commands
@@ -103,6 +103,11 @@ export interface Fixture {
   monitors: Monitor[];
   apps: AppWindow[];
   mics: { id: string; name: string; default: boolean }[];
+  status: Status;
+  /** The running session's markers, as Replix keeps them. */
+  liveMarks: LiveMarks | null;
+  /** Opening a clip takes this long, in milliseconds, with progress on the way, as a long session's first open. */
+  slowOpen: number;
 }
 
 export function fixture(overrides: Partial<Fixture> = {}): Fixture {
@@ -116,6 +121,9 @@ export function fixture(overrides: Partial<Fixture> = {}): Fixture {
     monitors: [{ index: 0, width: 1920, height: 1080, primary: true }],
     apps: [],
     mics: [{ id: "mic", name: "USB Headset", default: true }],
+    status: { state: "waiting", target: null, sessionSince: null, encoder: "NVIDIA NVENC", error: null, clipSeconds: 30 },
+    liveMarks: null,
+    slowOpen: 0,
     ...overrides,
   };
 }
@@ -164,7 +172,22 @@ export async function mockTauri(page: Page, data: Fixture = fixture()) {
           settingsRevision = Math.max(settingsRevision, args.revision);
           return settingsRevision;
         case "get_status":
-          return { state: "waiting", target: null, sessionSince: null, encoder: "NVIDIA NVENC", error: null, clipSeconds: 30 };
+          return state.status;
+        case "session_marks":
+          return state.liveMarks;
+        case "mark_session":
+        case "edit_session_marker":
+        case "remove_session_marker": {
+          // Like Replix: the session's markers change, and the page hears all of them.
+          const marks = state.liveMarks;
+          if (!marks) return null;
+          const at = cmd === "mark_session" ? Math.max(0, Math.round((Date.now() - marks.since) / 100) / 10 - args.ago) : args.at;
+          const rest = marks.markers.filter((m) => Math.abs(m.at - at) >= 0.01);
+          const changed = { at, ...(args.name ? { name: args.name } : {}), ...(args.icon ? { icon: args.icon } : {}) };
+          marks.markers = cmd === "remove_session_marker" ? rest : [...rest, changed].sort((a, b) => a.at - b.at);
+          setTimeout(() => window.__emit("session-marks", structuredClone(marks)));
+          return null;
+        }
         case "first_editor_round":
           return 1;
         case "ui_language":
@@ -174,7 +197,15 @@ export async function mockTauri(page: Page, data: Fixture = fixture()) {
         case "list_library":
           return state.items;
         case "open_editor":
-          return state.editors[args.id];
+          if (!state.slowOpen) return state.editors[args.id];
+          // Like a long session opened the first time: its tracks are copied out first.
+          return new Promise((resolve) => {
+            const total = state.editors[args.id].duration;
+            window.__emit("editor-progress", [args.id, { step: "reading" }]);
+            setTimeout(() => window.__emit("editor-progress", [args.id, { step: "splitting", done: total / 4, total }]), state.slowOpen / 4);
+            setTimeout(() => window.__emit("editor-progress", [args.id, { step: "splitting", done: total / 2, total }]), state.slowOpen / 2);
+            setTimeout(() => resolve(state.editors[args.id]), state.slowOpen);
+          });
         case "waveform":
           return Array.from({ length: 200 }, (_, i) => 0.3 + 0.3 * Math.abs(Math.sin(i / 7)));
         case "get_encoders":

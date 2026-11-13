@@ -65,8 +65,23 @@ fn pending() -> &'static media::Pending {
     PENDING.get_or_init(Default::default)
 }
 
+/// How far getting a clip ready for the editor is, for the page to show while it waits. A
+/// long session takes a while the first time it opens: its tracks are copied out of a file
+/// that may be many gigabytes.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase", tag = "step")]
+pub enum Preparing {
+    /// Other media work goes first: a warm-up of this clip, or the last editor's waveforms.
+    Waiting,
+    /// Reading the clip's length, size and tracks.
+    Reading,
+    /// Copying each audio track out on its own: `done` of `total` seconds of the clip.
+    Splitting { done: f64, total: f64 },
+}
+
 /// Gets a clip ready for the editor. `need` is the editor round asking, or `media::AHEAD`
-/// when preparing on a hunch. `strip_ready` runs once a missing filmstrip has been made.
+/// when preparing on a hunch. `strip_ready` runs once a missing filmstrip has been made;
+/// `report` hears how far it is, for an editor that waits.
 pub fn prepare(
     id: &str,
     path: &Path,
@@ -74,10 +89,18 @@ pub fn prepare(
     cache: &Path,
     need: u64,
     strip_ready: impl FnOnce(PathBuf) + Send + 'static,
+    report: &(dyn Fn(Preparing) + Sync),
 ) -> Result<EditorData> {
     let lock = lock_for(id);
     // A warm-up of this clip may hold its lock; waiting as the editor makes it stop.
-    let _held = if need == media::AHEAD { lock.lock() } else { media::wait_as_editor(|| lock.lock()) };
+    let _held = match lock.try_lock() {
+        Some(held) => held,
+        None if need == media::AHEAD => lock.lock(),
+        None => {
+            report(Preparing::Waiting);
+            media::wait_as_editor(|| lock.lock())
+        }
+    };
     let dir = cache.join("editor").join(id);
     std::fs::create_dir_all(&dir)?;
 
@@ -89,7 +112,11 @@ pub fn prepare(
             // For the editor it waits while the window is hidden, like the rest of its work;
             // made ahead of time, it simply stops.
             let demand = media::Demand::new(need);
-            let probe = |go: &(dyn Fn() -> bool + Sync)| ffmpeg::probe_while(path, go);
+            report(Preparing::Waiting);
+            let probe = |go: &(dyn Fn() -> bool + Sync)| {
+                report(Preparing::Reading);
+                ffmpeg::probe_while(path, go)
+            };
             let i = if need == media::AHEAD { media::run(&demand, probe) } else { media::run_needed(&demand, probe) }.result()?;
             let p = Probed { duration: i.duration, width: i.width, height: i.height, titles: i.audio_titles };
             let _ = std::fs::write(&probed_path, serde_json::to_vec(&p)?);
@@ -102,7 +129,7 @@ pub fn prepare(
 
     // The tracks first: the editor needs them to open; the filmstrip can come later.
     if count > 0 && audio.iter().any(|p| !p.exists()) {
-        split_tracks(path, &audio, need)?;
+        split_tracks(path, &audio, need, info.duration, report)?;
     }
 
     // The filmstrip decodes keyframes only, and in the background: the editor opens
@@ -915,13 +942,21 @@ fn count_peaks(mut input: impl std::io::Read, frames: usize, channels: usize) ->
 /// Copies each audio track of a clip into a file of its own. They are written under other
 /// names and renamed once all are whole: a track's own name is how a later open tells it
 /// is there, so one cut short by a stop, a pause or Replix quitting must never carry it.
-fn split_tracks(path: &Path, audio: &[PathBuf], need: u64) -> Result<()> {
+/// `duration` is the clip's length, to say how far it got.
+fn split_tracks(path: &Path, audio: &[PathBuf], need: u64, duration: f64, report: &(dyn Fn(Preparing) + Sync)) -> Result<()> {
     let part = |out: &PathBuf| out.with_extension("part.m4a");
     let mut args: Vec<String> = vec!["-i".into(), ffmpeg::path_arg(path)];
     for (i, out) in audio.iter().enumerate() {
         args.extend(["-map".into(), format!("0:a:{i}"), "-c".into(), "copy".into(), "-y".into(), ffmpeg::path_arg(&part(out))]);
     }
-    let split = match media::run_needed(&media::Demand::new(need), |go| ffmpeg::run_while(&args, go)) {
+    let total = duration.max(0.0);
+    let step = |done: f64| report(Preparing::Splitting { done: done.clamp(0.0, total), total });
+    report(Preparing::Waiting);
+    let copy = |go: &(dyn Fn() -> bool + Sync)| {
+        step(0.0);
+        ffmpeg::run_with_progress(&args, go, &step)
+    };
+    let split = match media::run_needed(&media::Demand::new(need), copy) {
         media::Outcome::Done(()) => audio.iter().try_for_each(|out| std::fs::rename(part(out), out)).map_err(|e| Some(e.into())),
         media::Outcome::Stopped => Err(None),
         media::Outcome::Failed(e) => Err(Some(e)),
@@ -1209,13 +1244,21 @@ mod tests {
 
         let (_rounds, round) = media::test_rounds();
         media::end_round(round);
-        let stopped = split_tracks(&clip, &audio, round).unwrap_err();
+        let stopped = split_tracks(&clip, &audio, round, 1.0, &|_| {}).unwrap_err();
         assert!(media::is_stopped(&stopped));
         assert_eq!(names(), ["clip.mp4"], "nothing left behind by a stopped split");
 
+        // The page hears how far it got, in seconds of the clip, never past its end.
+        let steps = Mutex::new(Vec::new());
         let next = round + 1;
-        split_tracks(&clip, &audio, next).unwrap();
+        split_tracks(&clip, &audio, next, 1.0, &|s| steps.lock().push(s)).unwrap();
         assert_eq!(names(), ["a0.m4a", "a1.m4a", "clip.mp4"]);
+        let steps = steps.into_inner();
+        assert!(steps.contains(&Preparing::Splitting { done: 0.0, total: 1.0 }), "{steps:?}");
+        assert!(steps.iter().all(|s| match s {
+            Preparing::Splitting { done, total } => *done <= *total,
+            _ => true,
+        }));
         let _ = std::fs::remove_dir_all(&dir);
     }
 

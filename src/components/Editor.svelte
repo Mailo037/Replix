@@ -1,7 +1,7 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
   import { onDestroy, onMount, untrack } from "svelte";
-  import { api, type Draft, type Marker, type Preset } from "../lib/api";
+  import { api, type Draft, type Marker, type Preparing as Step, type Preset } from "../lib/api";
   import { History } from "../lib/editor/history.svelte";
   import { EditorSession } from "../lib/editor/session.svelte";
   import { currentRound, endEditorRound } from "../lib/editorRound.svelte";
@@ -11,6 +11,7 @@
   import Header from "./editor/Header.svelte";
   import TextLane from "./editor/TextLane.svelte";
   import Player from "./editor/Player.svelte";
+  import Preparing from "./editor/Preparing.svelte";
   import Timeline from "./editor/Timeline.svelte";
   import Toolbar from "./editor/Toolbar.svelte";
 
@@ -23,6 +24,8 @@
   const ed = new EditorSession(untrack(() => id));
   let failure = $state<string | null>(null);
   let progress = $state<number | null>(null);
+  /** How far opening the clip is, while it is made ready. */
+  let preparing = $state<Step | null>(null);
   let fullscreen = $state(false);
   let viewer = $state<HTMLDivElement>();
   let player = $state<ReturnType<typeof Player>>();
@@ -60,6 +63,9 @@
     const [of, share] = e.payload;
     if (progress !== null && of === ticket) progress = share;
   });
+  const unlistenPrep = listen<[string, Step]>("editor-progress", (e) => {
+    if (e.payload[0] === id && !ed.data) preparing = e.payload[1];
+  });
   // The filmstrip is made in the background the first time a clip opens.
   const unlistenStrip = listen<[string, string]>("filmstrip", (e) => {
     if (ed.data && e.payload[0] === id) ed.data.filmstrip = e.payload[1];
@@ -69,6 +75,7 @@
     // A long session's filmstrip and waveforms take a while; nobody needs them now.
     endEditorRound();
     unlisten.then((f) => f());
+    unlistenPrep.then((f) => f());
     unlistenStrip.then((f) => f());
   });
 
@@ -88,7 +95,7 @@
         ed.seek(ed.playStart);
         return;
       }
-      ed.syncAudio(false);
+      ed.follow();
       frame = requestAnimationFrame(tick);
     }
     return () => cancelAnimationFrame(frame);
@@ -145,8 +152,9 @@
       const edit = ed.edits[i];
       // Outside its own start and end the track is silent, as it will be in the export.
       const heard = edit?.enabled && ed.current >= (edit.start ?? 0) && ed.current <= (edit.end ?? Infinity);
-      // The preview can't go above full volume; the export can.
-      audio.volume = heard ? Math.min(1, edit.volume * ed.masterVolume) : 0;
+      // The preview can't go above full volume; the export can. The player's own volume
+      // (full screen) only changes what is heard here.
+      audio.volume = heard ? Math.min(1, edit.volume * ed.masterVolume) * ed.hearing : 0;
     });
   });
 
@@ -216,6 +224,12 @@
     if (fullscreen && e.key === "Escape") {
       e.preventDefault();
       player?.toggleFullscreen();
+      return;
+    }
+    // In full screen, up and down change how loud the preview plays, as in a video player.
+    if (fullscreen && (e.key === "ArrowUp" || e.key === "ArrowDown") && !(e.target instanceof HTMLInputElement)) {
+      e.preventDefault();
+      ed.setListenVolume((ed.listenMuted ? 0 : ed.listenVolume) + (e.key === "ArrowUp" ? 0.1 : -0.1));
       return;
     }
     if (!e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "f" && !(e.target instanceof HTMLInputElement && e.target.type !== "range")) {
@@ -308,7 +322,8 @@
       bind:fullscreen
       {ed}
       onready={() => {
-        ed.seek(resumeAt ?? ed.trimStart);
+        // A playhead already moved (keys pressed while the video was still loading) stays.
+        ed.seek(resumeAt ?? (ed.current > 0 ? ed.current : ed.trimStart));
         resumeAt = null;
       }}
     />
@@ -329,7 +344,7 @@
       {/snippet}
     </Timeline>
   {:else}
-    <div class="loading"><span class="mono meta">{t("Preparing tracks…")}</span></div>
+    <Preparing step={preparing} />
   {/if}
 </section>
 
@@ -342,8 +357,7 @@
     flex-direction: column;
     gap: 12px;
   }
-  .failure,
-  .loading {
+  .failure {
     margin: auto;
     text-align: center;
   }

@@ -22,7 +22,11 @@ pub async fn open_editor(app: AppHandle, id: String, round: u64) -> Res<editor::
                 let _ = app.emit("items-meta", [(&id, serde_json::json!({ "seen": true }))]);
             }
         }
-        editor::prepare(&id, &path, &meta, &state.cache, round.max(1), strip_ready(&app, &id)).map_err(err)
+        // The page shows how far it is; a clip prepared before opens before anything is said.
+        let report = |step: editor::Preparing| {
+            let _ = app.emit("editor-progress", (&id, step));
+        };
+        editor::prepare(&id, &path, &meta, &state.cache, round.max(1), strip_ready(&app, &id), &report).map_err(err)
     })
     .await
     .map_err(err)?
@@ -94,7 +98,7 @@ pub async fn warm_editor(app: AppHandle, id: String) -> Res<bool> {
         if meta.duration <= 0.0 || meta.duration > WARM_LONGEST {
             return Ok(true);
         }
-        match editor::prepare(&id, &path, &meta, &state.cache, media::AHEAD, strip_ready(&app, &id)) {
+        match editor::prepare(&id, &path, &meta, &state.cache, media::AHEAD, strip_ready(&app, &id), &|_| {}) {
             Ok(_) => Ok(true),
             Err(e) if media::is_stopped(&e) => Ok(false),
             Err(e) => Err(err(e)),

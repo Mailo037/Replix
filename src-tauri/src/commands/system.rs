@@ -6,7 +6,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::encoder::Codec;
-use crate::recorder::{Command, Status};
+use crate::recorder::{Command, LiveMark, LiveMarks, Status};
 use crate::{audio, install, media, own_thread, platform, AppState, FOCUSED};
 
 #[tauri::command]
@@ -172,6 +172,36 @@ pub fn stop_mic_test(state: State<AppState>) {
 #[tauri::command]
 pub fn add_marker(state: State<AppState>) {
     state.recorder.send(Command::Marker);
+}
+
+/// The markers of the session being recorded; none while no session records. Changes come
+/// as "session-marks" events.
+#[tauri::command]
+pub fn session_marks(state: State<AppState>) -> Option<LiveMarks> {
+    state.recorder.live_marks.lock().clone()
+}
+
+/// Marks the moment `ago` seconds before now in the running session, with a name and icon.
+#[tauri::command]
+pub fn mark_session(state: State<AppState>, ago: f64, name: String, icon: String) {
+    state.recorder.send(Command::LiveMark(LiveMark::Add { ago, name, icon }));
+}
+
+/// Names a marker of the running session, or changes its icon; `at` as "session-marks" gives it.
+#[tauri::command]
+pub fn edit_session_marker(state: State<AppState>, at: f64, name: String, icon: String) {
+    state.recorder.send(Command::LiveMark(LiveMark::Edit { at, name, icon }));
+}
+
+#[tauri::command]
+pub fn remove_session_marker(state: State<AppState>, at: f64) {
+    state.recorder.send(Command::LiveMark(LiveMark::Remove { at }));
+}
+
+/// The page shows the running session in its own view, or no longer does.
+#[tauri::command]
+pub fn watch_session(on: bool) {
+    crate::recorder::watch_session(on);
 }
 
 /// The language the page should use: the chosen one, or the one the system is set to.

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { EditorData, Settings } from "../api";
 import { EditorSession } from "./session.svelte";
 
@@ -80,5 +80,88 @@ describe("EditorSession", () => {
     ed.current = 2;
     ed.toggleMarker();
     expect(ed.markers).toEqual([{ at: 2 }]);
+  });
+
+  /** A stand-in for a media element: plays on only when told to, seeks at once. */
+  function media(readyState = 4) {
+    return {
+      currentTime: 0,
+      paused: true,
+      seeking: false,
+      readyState,
+      seeks: 0,
+      play() {
+        this.paused = false;
+        return Promise.resolve();
+      },
+      pause() {
+        this.paused = true;
+      },
+    };
+  }
+
+  function playing() {
+    const ed = new EditorSession("x");
+    ed.load(data(), null);
+    const video = media();
+    const audios = [media(), media()];
+    for (const a of audios) {
+      let at = 0;
+      Object.defineProperty(a, "currentTime", {
+        get: () => at,
+        set: (v: number) => {
+          at = v;
+          a.seeks++;
+        },
+      });
+    }
+    ed.video = video as unknown as HTMLVideoElement;
+    ed.audios = audios as unknown as HTMLAudioElement[];
+    return { ed, video, audios };
+  }
+
+  it("holds the tracks while the picture is seeking, instead of pulling them back over and over", async () => {
+    const { ed, video, audios } = playing();
+    await ed.play();
+    expect(audios.every((a) => !a.paused)).toBe(true);
+
+    // A jump over a removed part: the picture seeks for a while, the tracks wait for it.
+    ed.seek(6);
+    video.seeking = true;
+    const seeks = audios[0].seeks;
+    for (let frame = 0; frame < 30; frame++) ed.follow();
+    expect(audios.every((a) => a.paused)).toBe(true);
+    expect(audios[0].seeks).toBe(seeks);
+
+    // The picture plays on: the tracks start again where it is, once.
+    video.seeking = false;
+    video.currentTime = 6.05;
+    ed.follow();
+    expect(audios.every((a) => !a.paused && a.currentTime === 6.05)).toBe(true);
+    expect(audios[0].seeks).toBe(seeks + 1);
+  });
+
+  it("leaves a track that was just moved alone while it lands", async () => {
+    let clock = 0;
+    const now = vi.spyOn(performance, "now").mockImplementation(() => clock);
+    const { ed, video, audios } = playing();
+    await ed.play();
+    const seeks = audios[0].seeks;
+    clock = 1000;
+    // Slightly off is fine; far off is corrected, then given time to land.
+    video.currentTime = 0.1;
+    ed.follow();
+    expect(audios[0].seeks).toBe(seeks);
+    video.currentTime = 1;
+    ed.follow();
+    expect(audios[0].seeks).toBe(seeks + 1);
+    clock = 1100;
+    video.currentTime = 1.5;
+    ed.follow();
+    expect(audios[0].seeks).toBe(seeks + 1);
+    clock = 2000;
+    ed.follow();
+    expect(audios[0].seeks).toBe(seeks + 2);
+    now.mockRestore();
   });
 });

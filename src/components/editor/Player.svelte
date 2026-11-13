@@ -7,6 +7,7 @@
   import { tip } from "../../lib/tooltip";
   import Icon from "../Icon.svelte";
   import CropFrame from "./CropFrame.svelte";
+  import PlayerBar from "./PlayerBar.svelte";
   import TextLayer from "./TextLayer.svelte";
 
   /** The picture, as large as the room allows at the clip's own shape, with each track playing beside it. */
@@ -24,6 +25,21 @@
   } = $props();
 
   let preview = $state<HTMLDivElement>();
+  /** In full screen the pointer has rested a while: the controls and the pointer step aside. */
+  let idle = $state(false);
+  let idleTimer = 0;
+
+  /** The pointer moved: the controls come back, and go again after a few still seconds. */
+  function wake() {
+    idle = false;
+    clearTimeout(idleTimer);
+    idleTimer = window.setTimeout(() => (idle = true), 2500);
+  }
+
+  $effect(() => {
+    if (fullscreen) wake();
+    return () => clearTimeout(idleTimer);
+  });
 
   /** The player fills the screen; Escape or the button brings it back. */
   export async function toggleFullscreen() {
@@ -48,16 +64,20 @@
 
 {#if ed.data}
   {@const data = ed.data}
-  <div class="viewer" class:fullscreen bind:this={viewer}>
-    <button
-      type="button"
-      class="fs-toggle"
-      aria-label={fullscreen ? t("Leave full screen") : t("Full screen")}
-      use:tip={fullscreen ? t("Leave full screen · Esc") : t("Full screen · F")}
-      onclick={toggleFullscreen}
-    >
-      <Icon name={fullscreen ? "shrink" : "expand"} size={16} />
-    </button>
+  <div
+    class="viewer"
+    role="presentation"
+    class:fullscreen
+    class:idle={fullscreen && idle && ed.playing}
+    bind:this={viewer}
+    onpointermove={fullscreen ? wake : undefined}
+    onpointerdown={fullscreen ? wake : undefined}
+  >
+    {#if !fullscreen}
+      <button type="button" class="fs-toggle" aria-label={t("Full screen")} use:tip={t("Full screen · F")} onclick={toggleFullscreen}>
+        <Icon name="expand" size={16} />
+      </button>
+    {/if}
     <div class="preview" bind:this={preview} style:--ratio={data.width && data.height ? data.width / data.height : 16 / 9}>
       <!-- svelte-ignore a11y_media_has_caption -->
       <video
@@ -84,6 +104,9 @@
         <button type="button" class="play" aria-label={t("Play")} use:tip={t("Play · Space")} onclick={() => ed.play()}><Icon name="play" size={20} /></button>
       {/if}
     </div>
+    {#if fullscreen}
+      <PlayerBar {ed} onleave={toggleFullscreen} />
+    {/if}
   </div>
 {/if}
 
@@ -101,6 +124,18 @@
   }
   .viewer.fullscreen .preview {
     border-radius: 0;
+  }
+  /* Watching in full screen: after a few still seconds the pointer and the controls step
+     aside, unless the pointer is on them or a control has the keyboard. */
+  .viewer.idle:not(:has(:global(.bar:hover), :global(.bar:focus-within))) {
+    cursor: none;
+  }
+  .viewer.idle:not(:has(:global(.bar:hover), :global(.bar:focus-within))) :global(.bar) {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .viewer.idle:not(:has(:global(.bar:hover), :global(.bar:focus-within))) video {
+    cursor: none;
   }
   .fs-toggle {
     position: absolute;

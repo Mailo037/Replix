@@ -34,6 +34,17 @@ use session::Live;
 
 /// How often the library's picture of a running session is renewed while someone looks.
 const PICTURE_EVERY: Duration = Duration::from_secs(30);
+/// The same while the page shows the running session in its own view, to mark moments in.
+const PICTURE_WATCHED: Duration = Duration::from_secs(5);
+
+/// The page shows the running session in its own view.
+static WATCHED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Says whether the page shows the running session in its own view, where a fresher
+/// picture helps to find one's place.
+pub fn watch_session(on: bool) {
+    WATCHED.store(on, std::sync::atomic::Ordering::Relaxed);
+}
 
 /// Whether a file in the clips folder is a session still being recorded.
 pub(crate) fn is_live_file(path: &std::path::Path) -> bool {
@@ -102,8 +113,35 @@ pub enum Command {
     ToggleSession,
     Screenshot,
     Marker,
+    /// A marker set, named or taken away on the page while a session records.
+    LiveMark(LiveMark),
     Apply(Box<Settings>),
 }
+
+/// A change the page makes to the markers of the session being recorded. Times are seconds
+/// since the session was started, as `LiveMarks` gives them.
+pub enum LiveMark {
+    /// Marks the moment `ago` seconds before now: a moment is often noticed after it.
+    Add { ago: f64, name: String, icon: String },
+    /// Names the marker at `at` or changes its icon.
+    Edit { at: f64, name: String, icon: String },
+    Remove { at: f64 },
+}
+
+/// The markers of the session being recorded, for the page, which can add to them while it
+/// runs. Times are seconds since the session was started.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LiveMarks {
+    /// When the session was started, epoch milliseconds, as the status has it.
+    pub since: u64,
+    pub markers: Vec<library::Marker>,
+}
+
+/// The longest a page may reach back when marking a moment it noticed late, in seconds.
+const LONGEST_AGO: f64 = 300.0;
+/// How close, in seconds, a page's time has to be to a marker's to name it.
+const SAME_MARKER: f64 = 0.01;
 
 struct PendingClip {
     /// Stream time of the key press, where the clip ends.
@@ -118,6 +156,8 @@ pub struct Recorder {
     tx: Sender<Command>,
     pub status: Arc<Mutex<Status>>,
     pub encoders: Arc<Mutex<Vec<&'static Encoder>>>,
+    /// The running session's markers; none while no session records.
+    pub live_marks: Arc<Mutex<Option<LiveMarks>>>,
 }
 
 impl Recorder {
@@ -132,11 +172,13 @@ impl Recorder {
             clip_seconds: None,
         }));
         let encoders = Arc::new(Mutex::new(Vec::new()));
+        let live_marks = Arc::new(Mutex::new(None));
         let worker = Worker {
             app,
             settings,
             status: status.clone(),
             encoders: encoders.clone(),
+            live_marks: live_marks.clone(),
             encoders_cached: false,
             encoder_probe: None,
             pipeline: None,
@@ -144,7 +186,7 @@ impl Recorder {
             health: Health::default(),
         };
         std::thread::Builder::new().name("recorder".into()).spawn(move || worker.run(rx)).expect("thread");
-        Self { tx, status, encoders }
+        Self { tx, status, encoders, live_marks }
     }
 
     pub fn send(&self, command: Command) {
@@ -157,6 +199,7 @@ struct Worker {
     settings: Settings,
     status: Arc<Mutex<Status>>,
     encoders: Arc<Mutex<Vec<&'static Encoder>>>,
+    live_marks: Arc<Mutex<Option<LiveMarks>>>,
     /// The encoder list came from an earlier test and may be out of date.
     encoders_cached: bool,
     encoder_probe: Option<EncoderProbe>,
@@ -193,6 +236,9 @@ impl Worker {
                 self.handle(command);
             }
             self.tick();
+            // A session starts and ends in many ways (the key, a new target, a full drive);
+            // the page's live view hears of each.
+            self.publish_marks();
         }
         if let Some(mut p) = self.pipeline.take() {
             p.stop();
@@ -302,7 +348,9 @@ impl Worker {
             Command::ToggleSession => self.toggle_session(),
             Command::Screenshot => self.screenshot(),
             Command::Marker => self.add_marker(),
+            Command::LiveMark(change) => self.change_live_mark(change),
         }
+        self.publish_marks();
     }
 
     fn desired_target(&self) -> Option<Target> {
@@ -412,10 +460,10 @@ impl Worker {
                     // The session's file takes no more: a full or lost drive. What is in
                     // it is saved as it is, and the rest of the session stays in the
                     // buffer until it ends.
-                    let rest = p.session.as_ref().map(|s| (s.since, s.live.as_ref().map_or(s.first, Live::written)));
+                    let rest = p.session.as_ref().map(|s| (s.since, s.stream_since, s.live.as_ref().map_or(s.first, Live::written)));
                     Self::finish_session(&self.app, &self.settings, p);
-                    if let Some((since, first)) = rest {
-                        p.session = Some(Session { first, since, live: None, pictured: None, pictures: 0 });
+                    if let Some((since, stream_since, first)) = rest {
+                        p.session = Some(Session { first, since, stream_since, live: None, pictured: None, pictures: 0 });
                         p.router.hold = true;
                     }
                 }
@@ -584,7 +632,7 @@ impl Worker {
                 clips_dir: settings.clips_dir.clone(),
                 limit_gb: settings.storage_limit_gb,
                 origin,
-                markers: p.markers.iter().copied().filter(|m| *m >= origin && *m <= until).collect(),
+                markers: p.markers.iter().filter(|m| m.at >= origin && m.at <= until).cloned().collect(),
                 private: private_masks(&p.private, origin, until, stream_now),
                 encoder: p.encoder,
                 kbps: p.kbps,
@@ -620,7 +668,7 @@ impl Worker {
             let live = Live::start(p.dir.clone(), file, first)
                 .inspect_err(|e| log::warn!("the session is kept in the buffer; its own file could not be started: {e:#}"))
                 .ok();
-            p.session = Some(Session { first, since: audio::now_ms(), live, pictured: None, pictures: 0 });
+            p.session = Some(Session { first, since: audio::now_ms(), stream_since: p.now(), live, pictured: None, pictures: 0 });
             p.router.hold = true;
             p.feed_session();
             crate::toast(&self.app, &tr("Session started"), &tr("Press the session key again to stop."));
@@ -634,7 +682,8 @@ impl Worker {
             return;
         }
         let Some(session) = p.session.as_ref() else { return };
-        if session.pictured.is_some_and(|at| at.elapsed() < PICTURE_EVERY) {
+        let every = if WATCHED.load(std::sync::atomic::Ordering::Relaxed) { PICTURE_WATCHED } else { PICTURE_EVERY };
+        if session.pictured.is_some_and(|at| at.elapsed() < every) {
             return;
         }
         let (since, first, n) = (session.since, session.first, session.pictures);
@@ -701,7 +750,7 @@ impl Worker {
             clips_dir: settings.clips_dir.clone(),
             limit_gb: settings.storage_limit_gb,
             origin,
-            markers: p.markers.iter().copied().filter(|m| *m >= origin && *m <= until + SEGMENT_SECONDS).collect(),
+            markers: p.markers.iter().filter(|m| m.at >= origin && m.at <= until + SEGMENT_SECONDS).cloned().collect(),
             private,
             encoder: p.encoder,
             kbps: p.kbps,
@@ -751,7 +800,7 @@ impl Worker {
             clips_dir: settings.clips_dir.clone(),
             limit_gb: settings.storage_limit_gb,
             origin,
-            markers: p.markers.iter().copied().filter(|m| *m >= origin && *m <= until + SEGMENT_SECONDS).collect(),
+            markers: p.markers.iter().filter(|m| m.at >= origin && m.at <= until + SEGMENT_SECONDS).cloned().collect(),
             private,
             encoder: p.encoder,
             kbps: p.kbps,
@@ -775,13 +824,37 @@ impl Worker {
             return;
         };
         let now = p.now();
-        p.markers.push(now);
+        p.markers.push(library::Marker::at(now));
         let detail = match &p.session {
             Some(s) => save::into_session(audio::now_ms().saturating_sub(s.since) as f64 / 1000.0),
             None => p.target.label(),
         };
         crate::toast(&self.app, &tr("Marker set"), &detail);
         sound::play(&self.app, Chime::Done);
+    }
+
+    /// Changes the running session's markers as the page asks. Nothing happens without a
+    /// session: the page only offers this while one records.
+    fn change_live_mark(&mut self, change: LiveMark) {
+        let Some(p) = self.pipeline.as_mut() else { return };
+        let Some(start) = p.session.as_ref().map(|s| s.stream_since) else { return };
+        let now = p.now();
+        change_marks(&mut p.markers, start, now, change);
+    }
+
+    /// Tells the page the running session's markers, when they changed or the session
+    /// started or ended.
+    fn publish_marks(&self) {
+        let marks = self.pipeline.as_ref().and_then(|p| {
+            let s = p.session.as_ref()?;
+            Some(LiveMarks { since: s.since, markers: session_marks(&p.markers, s.stream_since) })
+        });
+        let mut shown = self.live_marks.lock();
+        if *shown != marks {
+            shown.clone_from(&marks);
+            drop(shown);
+            let _ = self.app.emit("session-marks", marks);
+        }
     }
 
     fn screenshot(&self) {
@@ -878,9 +951,74 @@ fn previews_dir(app: &AppHandle) -> PathBuf {
     app.path().app_cache_dir().unwrap_or_else(|_| std::env::temp_dir()).join("previews")
 }
 
+/// The markers from a session's start on, in seconds since `start` (stream time).
+fn session_marks(markers: &[library::Marker], start: f64) -> Vec<library::Marker> {
+    markers.iter().filter(|m| m.at >= start).map(|m| library::Marker { at: m.at - start, ..m.clone() }).collect()
+}
+
+/// Applies a page's change to the markers (in stream time) of the session that started at
+/// `start`; `now` is the stream time now. A new marker lands within the session and never
+/// on top of one already there, which it names instead.
+fn change_marks(markers: &mut Vec<library::Marker>, start: f64, now: f64, change: LiveMark) {
+    let find = |markers: &[library::Marker], at: f64| markers.iter().position(|m| (m.at - (start + at)).abs() < SAME_MARKER);
+    match change {
+        LiveMark::Add { ago, name, icon } => {
+            let at = (now - ago.clamp(0.0, LONGEST_AGO)).max(start);
+            let mut mark = library::Marker { at, name, icon };
+            library::tidy_marker(&mut mark);
+            match markers.iter_mut().find(|m| (m.at - at).abs() < library::MARKER_GAP) {
+                Some(near) if !mark.name.is_empty() || !mark.icon.is_empty() => {
+                    near.name = mark.name;
+                    near.icon = mark.icon;
+                }
+                Some(_) => {}
+                None => {
+                    markers.push(mark);
+                    markers.sort_by(|a, b| a.at.total_cmp(&b.at));
+                }
+            }
+        }
+        LiveMark::Edit { at, name, icon } => {
+            if let Some(i) = find(markers, at) {
+                let m = &mut markers[i];
+                m.name = name;
+                m.icon = icon;
+                library::tidy_marker(m);
+            }
+        }
+        LiveMark::Remove { at } => {
+            if let Some(i) = find(markers, at) {
+                markers.remove(i);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The page marks a moment late, names it, and takes one away; times on the page count
+    /// from the session's start, in the recorder from the stream's.
+    #[test]
+    fn the_page_changes_a_running_sessions_markers() {
+        let start = 100.0;
+        let mut markers = vec![library::Marker::at(40.0), library::Marker::at(130.0)];
+        let add = |ago: f64, name: &str| LiveMark::Add { ago, name: name.into(), icon: String::new() };
+        change_marks(&mut markers, start, 160.0, add(10.0, "  Ace   round "));
+        assert_eq!(session_marks(&markers, start).iter().map(|m| (m.at, m.name.as_str())).collect::<Vec<_>>(), [(30.0, ""), (50.0, "Ace round")]);
+        // Reaching back past the start lands on it; marking where one is names that one.
+        change_marks(&mut markers, start, 160.0, add(500.0, ""));
+        assert_eq!(session_marks(&markers, start)[0].at, 0.0);
+        change_marks(&mut markers, start, 160.0, add(10.1, "Clutch"));
+        assert_eq!(session_marks(&markers, start).len(), 3);
+        assert_eq!(session_marks(&markers, start)[2].name, "Clutch");
+        change_marks(&mut markers, start, 160.0, LiveMark::Edit { at: 30.0, name: "Wipe".into(), icon: "skull".into() });
+        assert_eq!(session_marks(&markers, start)[1], library::Marker { at: 30.0, name: "Wipe".into(), icon: "skull".into() });
+        change_marks(&mut markers, start, 160.0, LiveMark::Remove { at: 0.0 });
+        assert_eq!(session_marks(&markers, start).iter().map(|m| m.at).collect::<Vec<_>>(), [30.0, 50.0]);
+        assert_eq!(markers[0].at, 40.0, "a marker from before the session stays for the clips that hold it");
+    }
 
     #[test]
     fn an_unfinished_encoder_probe_leaves_the_recorder_free() {

@@ -6,6 +6,7 @@
   import Editor from "./components/Editor.svelte";
   import FfmpegSetup from "./components/FfmpegSetup.svelte";
   import Library from "./components/Library.svelte";
+  import LiveSession from "./components/LiveSession.svelte";
   import Onboarding from "./components/Onboarding.svelte";
   import Settings from "./components/Settings.svelte";
   import Sidebar from "./components/Sidebar.svelte";
@@ -26,7 +27,7 @@
     store.init().catch((e) => (error = String(e)));
     // Videos and pictures dropped on the window go into the library.
     const unlisten = getCurrentWebview().onDragDropEvent((e) => {
-      if (e.payload.type === "enter" || e.payload.type === "over") dropping = store.view.name !== "editor" && !!store.settings?.onboarded;
+      if (e.payload.type === "enter" || e.payload.type === "over") dropping = !focused() && !!store.settings?.onboarded;
       else if (e.payload.type === "leave") dropping = false;
       else if (e.payload.type === "drop") {
         const wanted = dropping;
@@ -38,6 +39,9 @@
       unlisten.then((f) => f());
     };
   });
+
+  /** A screen of its own for one thing, the editor or a session being recorded: no sidebar, no dropping. */
+  const focused = () => store.view.name === "editor" || store.view.name === "live";
 
   /** Each page (and each library filter) fades in when you switch to it. */
   const page = $derived(JSON.stringify(store.view));
@@ -55,7 +59,7 @@
     {:else if store.settings && !store.settings.onboarded}
       <Onboarding />
     {:else}
-      {#if store.view.name !== "editor"}
+      {#if !focused()}
         <Sidebar />
       {/if}
       <main>
@@ -65,6 +69,8 @@
               <Library filter={store.view.filter} game={store.view.game} tag={store.view.tag ?? null} />
             {:else if store.view.name === "editor"}
               <Editor id={store.view.id} />
+            {:else if store.view.name === "live"}
+              <LiveSession />
             {:else}
               <Settings />
             {/if}

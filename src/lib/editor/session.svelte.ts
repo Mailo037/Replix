@@ -7,6 +7,28 @@ import { joinAt, nextSpeed, partAt, partsOf, playLength, putBack, speedAt, withS
 /** A marker this close to the playhead counts as on it. */
 export const NEAR = 0.25;
 
+/** How far, in seconds, a track may drift from the picture before it is put back in step. */
+const DRIFT = 0.2;
+/**
+ * How long a track that was just put back in step is left alone, in milliseconds: its own
+ * seek takes a moment to land, and correcting it again meanwhile would only restart it.
+ */
+const SETTLE = 600;
+/** `HTMLMediaElement.HAVE_FUTURE_DATA`: the element can play on from where it is. */
+const HAVE_FUTURE_DATA = 3;
+/** How loud the preview plays, as last set; kept for the next clip. */
+const LISTEN_KEY = "replix.editor.listen";
+
+function readListen(): { volume: number; muted: boolean } {
+  try {
+    const saved = JSON.parse(localStorage.getItem(LISTEN_KEY) ?? "null");
+    if (saved && typeof saved.volume === "number") return { volume: Math.min(1, Math.max(0, saved.volume)), muted: !!saved.muted };
+  } catch {
+    // Storage may be off, or hold something else; full volume works as well.
+  }
+  return { volume: 1, muted: false };
+}
+
 /**
  * One clip open in the editor: what is being changed, where the playhead is, and the player
  * that shows it. The editor's parts share one of these; what it holds is reactive.
@@ -39,6 +61,14 @@ export class EditorSession {
 
   current = $state(0);
   playing = $state(false);
+  /**
+   * How loud the preview plays, 0 to 1, and whether it is silent: the player's own volume,
+   * as in any video player. Not part of the edit; the export keeps its own sound.
+   */
+  listenVolume = $state(readListen().volume);
+  listenMuted = $state(readListen().muted);
+  /** What the preview's sound is multiplied by. */
+  hearing = $derived(this.listenMuted ? 0 : this.listenVolume);
   video = $state<HTMLVideoElement>();
   audios = $state<HTMLAudioElement[]>([]);
 
@@ -63,6 +93,29 @@ export class EditorSession {
 
   constructor(id: string) {
     this.id = id;
+  }
+
+  /** Sets how loud the preview plays; turning it up from silence unmutes it. */
+  setListenVolume(volume: number) {
+    this.listenVolume = Math.min(1, Math.max(0, Math.round(volume * 100) / 100));
+    this.listenMuted = this.listenVolume === 0;
+    this.keepListen();
+  }
+
+  /** Silences the preview, or brings its sound back. */
+  toggleListen() {
+    this.listenMuted = !this.listenMuted;
+    // Unmuting at no volume would stay silent.
+    if (!this.listenMuted && this.listenVolume === 0) this.listenVolume = 1;
+    this.keepListen();
+  }
+
+  private keepListen() {
+    try {
+      localStorage.setItem(LISTEN_KEY, JSON.stringify({ volume: this.listenVolume, muted: this.listenMuted }));
+    } catch {
+      // Not kept; it still applies while the editor is open.
+    }
   }
 
   /** A time as a share of the clip, in percent, for placing things on the timeline. */
@@ -130,26 +183,76 @@ export class EditorSession {
     this.syncAudio(true);
   }
 
-  /** Each track plays from its own element; this keeps them with the picture. */
+  /**
+   * The tracks are held still because the picture is: it is seeking or waiting for data.
+   * Left running, they would be pulled back to it again and again, and the same moment
+   * would be heard over and over.
+   */
+  private held = false;
+  /** When each track was last put back in step, as `performance.now()`. */
+  private nudged: number[] = [];
+
+  /**
+   * Each track plays from its own element; this keeps them with the picture. `force` puts
+   * every track where the picture is (after a seek); otherwise only a track that drifted
+   * away is moved, and none that is still landing from the last move.
+   */
   syncAudio(force: boolean) {
     const video = this.video;
     if (!video) return;
-    for (const a of this.audios) {
-      if (a && (force || (this.playing && Math.abs(a.currentTime - video.currentTime) > 0.12))) a.currentTime = video.currentTime;
+    const now = performance.now();
+    this.audios.forEach((a, i) => {
+      if (!a) return;
+      if (!force) {
+        if (!this.playing || this.held || a.seeking || now - (this.nudged[i] ?? -Infinity) < SETTLE) return;
+        if (Math.abs(a.currentTime - video.currentTime) <= DRIFT) return;
+      }
+      a.currentTime = video.currentTime;
+      this.nudged[i] = now;
+    });
+  }
+
+  /**
+   * Called on every frame while playing. While the picture stands still (seeking after a
+   * jump over a removed part, or waiting for the disk) the tracks wait with it, and they
+   * start again together with it.
+   */
+  follow() {
+    const video = this.video;
+    if (!video || !this.playing) return;
+    const still = video.seeking || video.paused || video.readyState < HAVE_FUTURE_DATA;
+    if (still) {
+      if (!this.held) {
+        this.held = true;
+        for (const a of this.audios) a?.pause();
+      }
+      return;
     }
+    if (this.held) {
+      this.held = false;
+      this.syncAudio(true);
+      for (const a of this.audios) a?.play().catch(() => {});
+      return;
+    }
+    this.syncAudio(false);
   }
 
   async play() {
     const video = this.video;
     if (!video) return;
     if (video.currentTime < this.playStart || video.currentTime >= this.playEnd - 0.05) video.currentTime = this.playStart;
+    // The tracks start with the picture, once it is ready to play on; `follow` lets them go.
+    this.held = true;
+    for (const a of this.audios) a?.pause();
     this.syncAudio(true);
     this.playing = true;
-    await Promise.allSettled([video.play(), ...this.audios.filter(Boolean).map((a) => a.play())]);
+    await video.play().catch(() => {});
+    this.follow();
   }
 
   pause() {
     this.playing = false;
+    this.held = false;
     if (this.video) {
       this.video.pause();
       this.current = this.video.currentTime;

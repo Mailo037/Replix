@@ -3,6 +3,7 @@
   import { duration, gameColor, time } from "../lib/format";
   import { store } from "../lib/store.svelte";
   import { t } from "../lib/i18n.svelte";
+  import Icon from "./Icon.svelte";
 
   /** The session being recorded right now; it becomes a clip tile once it is stopped and saved. */
   let { since, game, title }: { since: number; game: string; title: string } = $props();
@@ -40,6 +41,10 @@
     {#if picture && store.visible}
       <img src={picture} alt="" class="real" class:loaded decoding="async" onload={() => (loaded = true)} />
     {/if}
+    <!-- The whole picture opens the session, to mark moments while it runs. -->
+    <button type="button" class="open" aria-label={t("Open {title} to mark moments", { title })} onclick={() => store.go({ name: "live" })}>
+      <span class="label hint"><Icon name="flag" size={14} />{t("Mark moments")}</span>
+    </button>
     <span class="label top"><span class="dot" class:dim aria-hidden="true"></span>{t("Recording")}</span>
     <button type="button" class="label stop" disabled={stopping} onclick={stop}>
       <span class="square" aria-hidden="true"></span>{t("Stop")}
@@ -107,10 +112,38 @@
   .label.top {
     right: 10px;
     top: 10px;
+    pointer-events: none;
+  }
+  .open {
+    position: absolute;
+    inset: 0;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .open:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+  }
+  .label.hint {
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 13px;
+    font-weight: 700;
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 160ms ease;
+  }
+  .open:hover .hint,
+  .open:focus-visible .hint {
+    opacity: 1;
   }
   .label.bottom {
     right: 10px;
     bottom: 10px;
+    pointer-events: none;
   }
   .dot {
     width: 8px;

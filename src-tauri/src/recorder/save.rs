@@ -163,7 +163,7 @@ pub(super) struct SaveJob {
     /// Stream time where the first segment starts, the joined recording's zero.
     pub origin: f64,
     /// Marked moments, in stream time.
-    pub markers: Vec<f64>,
+    pub markers: Vec<library::Marker>,
     /// Parts of the picture to black out, in stream time: windows of programs kept out of
     /// recordings.
     pub private: Vec<Mask>,
@@ -300,7 +300,7 @@ impl SaveJob {
                 markers: library::tidy_markers(
                     self.markers
                         .iter()
-                        .map(|m| library::Marker::at(m - zero))
+                        .map(|m| library::Marker { at: m.at - zero, ..m.clone() })
                         .collect(),
                     length,
                 ),
@@ -362,7 +362,10 @@ impl SaveJob {
                 })
                 .collect(),
             unread: info.duration <= 0.0,
-            markers: library::tidy_markers(self.markers.iter().map(|m| library::Marker::at(m - self.origin)).collect(), 0.0),
+            markers: library::tidy_markers(
+                self.markers.iter().map(|m| library::Marker { at: m.at - self.origin, ..m.clone() }).collect(),
+                0.0,
+            ),
             ..Default::default()
         };
         if let Err(e) = library::write_meta(&out, &meta) {

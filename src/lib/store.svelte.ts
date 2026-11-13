@@ -1,5 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
-import { api, type Item, type PendingSave, type Settings, type Status } from "./api";
+import { api, type Item, type LiveMarks, type PendingSave, type Settings, type Status } from "./api";
 import { onColor } from "./format";
 import { applyTheme } from "./themes";
 import { syncEditorRound } from "./editorRound.svelte";
@@ -11,6 +11,8 @@ export type Filter = "all" | "clips" | "screenshots" | "sessions" | "drafts" | "
 export type View =
   | { name: "library"; filter: Filter; game: string | null; tag?: string | null }
   | { name: "editor"; id: string }
+  /** The session being recorded, where moments are marked while it runs. */
+  | { name: "live" }
   | { name: "settings" };
 
 export interface NoticeAction {
@@ -49,6 +51,8 @@ class Store {
   notice = $state<Notice | null>(null);
   /** The newest picture of the session being recorded, for its tile in the library. */
   sessionPicture = $state<{ since: number; path: string } | null>(null);
+  /** The markers of the session being recorded; null while none records. */
+  liveMarks = $state<LiveMarks | null>(null);
   /** Hotkeys another program already owns. */
   conflicts = $state<string[]>([]);
   /** The window is on screen; hidden in the tray or minimised, Replix keeps quiet. */
@@ -132,6 +136,13 @@ class Store {
       const [since, path] = e.payload;
       if (since === this.status.sessionSince) this.sessionPicture = { since, path };
     });
+    let heard = false;
+    await listen<LiveMarks | null>("session-marks", (e) => {
+      heard = true;
+      this.liveMarks = e.payload;
+    });
+    // Asked after listening, so a change in between is not lost; an event is newer.
+    api.sessionMarks().then((marks) => heard || (this.liveMarks = marks), () => {});
     await listen("library-changed", () => this.refresh());
     // Replix says when a scan had to leave files unread. Free again right away (it was a
     // moment of lost focus), scan again now; else when Replix is back or the editor closes.

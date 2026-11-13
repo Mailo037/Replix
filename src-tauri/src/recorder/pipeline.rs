@@ -92,6 +92,8 @@ fn picture_size(target: &Target) -> Option<(u32, u32)> {
 pub(super) struct Session {
     pub first: u64,
     pub since: u64,
+    /// Stream time when it was started: the page counts the session's time from here.
+    pub stream_since: f64,
     /// Writes the session into the clips folder while it runs. None when that could not
     /// start, or stopped: the buffer then keeps the session's segments until it ends.
     pub live: Option<Live>,
@@ -161,8 +163,9 @@ pub(super) struct Pipeline {
     pub started: Instant,
     /// Clips whose last moment is still on its way through the encoder.
     pub pending: Vec<PendingClip>,
-    /// Moments marked with the marker key, in stream time.
-    pub markers: Vec<f64>,
+    /// Moments marked with the marker key or on the page, in stream time, with a name and
+    /// icon when one was given while the session ran.
+    pub markers: Vec<crate::library::Marker>,
     pub private: Vec<Look>,
     memo: platform::WindowMemo,
     /// The newest segment seen, and when it first showed up.
@@ -381,7 +384,7 @@ impl Pipeline {
         let session_start = self.session.as_ref().and_then(|s| s.live.as_ref()).and_then(Live::span).map(|s| s.0);
         let oldest = self.segments.front().map(|s| session_start.map_or(s.start, |start| start.min(s.start)) - PRIVACY_MARGIN);
         if let Some(oldest) = oldest {
-            self.markers.retain(|m| *m >= oldest);
+            self.markers.retain(|m| m.at >= oldest);
             // The newest look stays: it tells whether the windows are still there.
             let last = self.private.len().saturating_sub(1);
             let mut i = 0;
@@ -428,7 +431,7 @@ impl Pipeline {
             format: self.encoder.format,
             origin,
             tracks: self.router.tracks_between(session.since, crate::audio::now_ms()),
-            markers: self.markers.iter().copied().filter(|m| *m >= from).collect(),
+            markers: self.markers.iter().filter(|m| m.at >= from).cloned().collect(),
             // Whatever is on screen now may still be there when the session breaks off.
             private: private_masks(&self.private, from, f64::INFINITY, f64::INFINITY).iter().map(Hidden::from).collect(),
             done: false,

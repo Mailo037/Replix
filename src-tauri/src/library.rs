@@ -725,12 +725,20 @@ pub fn restore(paths: &[PathBuf]) -> anyhow::Result<usize> {
 pub fn tidy_markers(mut markers: Vec<Marker>, duration: f64) -> Vec<Marker> {
     markers.retain(|m| m.at.is_finite() && m.at >= 0.0 && (duration <= 0.0 || m.at <= duration));
     markers.sort_by(|a, b| a.at.total_cmp(&b.at));
-    markers.dedup_by(|a, b| (a.at - b.at).abs() < 0.25);
+    markers.dedup_by(|a, b| (a.at - b.at).abs() < MARKER_GAP);
     for m in &mut markers {
-        m.name = m.name.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MARKER_NAME).collect();
-        m.icon = m.icon.chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect();
+        tidy_marker(m);
     }
     markers
+}
+
+/// Markers closer together than this, in seconds, are one.
+pub const MARKER_GAP: f64 = 0.25;
+
+/// A marker's name and icon as they are kept: spaces collapsed, not too long.
+pub fn tidy_marker(m: &mut Marker) {
+    m.name = m.name.split_whitespace().collect::<Vec<_>>().join(" ").chars().take(MARKER_NAME).collect();
+    m.icon = m.icon.chars().filter(|c| c.is_ascii_alphanumeric()).take(24).collect();
 }
 
 /// Tags longer than this are cut, and a clip keeps at most `MAX_TAGS` of them.

@@ -82,8 +82,8 @@ pub(super) struct Journal {
     /// Stream time where the file starts; none until its first segment is in.
     pub origin: Option<f64>,
     pub tracks: Vec<Track>,
-    /// Marked moments, in stream time.
-    pub markers: Vec<f64>,
+    /// Marked moments, in stream time. Journals from before marker names hold bare numbers.
+    pub markers: Vec<crate::library::Marker>,
     /// In stream time; one still on screen runs on without an end.
     pub private: Vec<Hidden>,
     /// The session is in the library; the file is only still here because it could not
@@ -476,7 +476,7 @@ mod tests {
             kbps: 20000,
             format: Codec::H264,
             origin: Some(10.0),
-            markers: vec![11.5],
+            markers: vec![crate::library::Marker::at(11.5)],
             private: vec![Hidden::from(&open)],
             ..Default::default()
         };
@@ -490,6 +490,18 @@ mod tests {
         let early = Journal { origin: None, ..back };
         assert_eq!(early.masks_from_start(), (0.0, vec![Mask { area, start: 0.0, end: OPEN_END }]));
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A journal from before marker names, with bare numbers, still brings its markers back;
+    /// a named one keeps its name.
+    #[test]
+    fn journals_keep_old_and_named_markers() {
+        let old: Journal = serde_json::from_str(r#"{"game":"Game","markers":[11.5,20]}"#).unwrap();
+        assert_eq!(old.markers, vec![crate::library::Marker::at(11.5), crate::library::Marker::at(20.0)]);
+        let named = crate::library::Marker { at: 3.0, name: "Clutch".into(), icon: "trophy".into() };
+        let journal = Journal { markers: vec![named.clone()], ..Default::default() };
+        let back: Journal = serde_json::from_str(&serde_json::to_string(&journal).unwrap()).unwrap();
+        assert_eq!(back.markers, vec![named]);
     }
 
     #[test]

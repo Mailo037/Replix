@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import { calls, mockTauri } from "./tauri";
+import { calls, fixture, mockTauri } from "./tauri";
 
 async function openEditor(page: Page) {
   await mockTauri(page);
@@ -149,4 +149,51 @@ test("a text can be taken away again", async ({ page }) => {
   await page.getByRole("dialog", { name: "Text" }).getByRole("button", { name: "Remove text" }).click();
   await expect(page.getByRole("img", { name: "Your text" })).toHaveCount(0);
   await expect(page.getByRole("button", { name: /Text “Your text”/ })).toHaveCount(0);
+});
+
+test("says how far opening a long session is", async ({ page }) => {
+  await mockTauri(page, fixture({ slowOpen: 3000 }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Open Last-lap overtake" }).click();
+  const status = page.getByRole("status").filter({ hasText: "Getting the clip ready" });
+  await expect(status).toBeVisible();
+  await expect(status).toContainText("Copying the audio tracks · 0:03 of 0:06");
+  await expect(status.getByRole("progressbar")).toHaveAttribute("aria-valuenow", "50");
+  await expect(status).toContainText("so far");
+  // Ready: the editor takes its place.
+  await expect(page.getByRole("textbox", { name: "Title" })).toHaveValue("Last-lap overtake");
+  await expect(status).toHaveCount(0);
+});
+
+test("full screen has its own controls: scrub, markers and the player's volume", async ({ page }) => {
+  await openEditor(page);
+  await page.getByRole("button", { name: "Full screen" }).click();
+  const controls = page.getByRole("group", { name: "Player controls" });
+  await expect(controls).toBeVisible();
+
+  // Scrubbing along the bar moves the playhead.
+  const bar = controls.getByRole("slider", { name: "Position" });
+  const box = (await bar.boundingBox())!;
+  await page.mouse.click(box.x + box.width / 2, box.y + box.height / 2);
+  await expect(controls.locator(".clock")).toContainText("0:03.0 / 0:06.0");
+  await bar.focus();
+  await page.keyboard.press("Shift+ArrowRight");
+  await expect(controls.locator(".clock")).toContainText("0:04.0 / 0:06.0");
+
+  // Muting is the player's: the tracks stay as they are, and the export keeps its sound.
+  await controls.getByRole("button", { name: "Mute", exact: true }).click();
+  await expect(controls.getByRole("button", { name: "Unmute", exact: true })).toBeVisible();
+  await expect(controls.getByRole("slider", { name: "Volume" })).toHaveValue("0");
+  await expect.poll(() => page.evaluate(() => [...document.querySelectorAll("audio")].map((a) => a.volume))).toEqual([0, 0, 0]);
+  await controls.getByRole("button", { name: "Unmute", exact: true }).click();
+  await page.keyboard.press("ArrowDown");
+  await expect(controls.getByRole("slider", { name: "Volume" })).toHaveValue("90");
+
+  await controls.getByRole("button", { name: "Mark this moment" }).click();
+  await controls.getByRole("button", { name: "Leave full screen" }).click();
+  await expect(controls).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Marker at 0:04.0" })).toBeVisible();
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const [request] = await calls(page, "export_clip");
+  expect(request.args.request).toMatchObject({ masterVolume: 1 });
 });
