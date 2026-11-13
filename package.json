@@ -9,6 +9,7 @@
     "check": "svelte-check --tsconfig ./tsconfig.json",
     "test": "vitest run",
     "test:e2e": "playwright test",
+    "shots": "playwright test -c playwright.shots.config.ts",
     "check:all": "node scripts/check-all.mjs",
     "tauri": "tauri",
     "set-version": "node scripts/set-version.mjs",

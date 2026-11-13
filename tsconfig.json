@@ -9,5 +9,7 @@
     "noEmit": true,
     "types": ["svelte", "vite/client"]
   },
-  "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts", "vitest.config.ts"]
+  "include": ["src/**/*.ts", "src/**/*.svelte", "tests/**/*.ts", "vitest.config.ts"],
+  // The shot script runs in Node (FFmpeg, files) like the Playwright configs, which are not checked here either.
+  "exclude": ["tests/shots"]
 }

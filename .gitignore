@@ -10,3 +10,4 @@ screenshots/
 recherche/ui/
 test-results/
 playwright-report/
+tests/shots/media/
