@@ -228,6 +228,7 @@ pub fn run() {
             system::get_codecs,
             system::list_apps,
             system::list_monitors,
+            system::monitor_preview,
             system::report_focus,
             system::save_clip_now,
             system::take_screenshot,

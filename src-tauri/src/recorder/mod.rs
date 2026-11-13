@@ -843,6 +843,36 @@ impl Worker {
     }
 }
 
+/// A small picture of what a display shows right now, so the menu can tell displays apart:
+/// a JPEG data URL, or `None` where none could be taken (the menu then shows its outline).
+/// Windows of programs kept out of recordings are black, as on a screenshot.
+pub fn display_picture(app: &AppHandle, index: u32, excluded: &[String]) -> Option<String> {
+    use base64::Engine;
+    let hide: String = platform::excluded_areas(index, excluded, &mut platform::WindowMemo::default())
+        .iter()
+        .map(|(_, a)| format!(",{}", save::black_box(a)))
+        .collect();
+    let dir = previews_dir(app);
+    std::fs::create_dir_all(&dir).ok()?;
+    let path = dir.join(format!("display-{index}-{}.jpg", audio::now_ms()));
+    // About twice the size the menu shows it at, so it stays sharp on screens with scaling.
+    let capture = platform::capture(platform::Grab::Monitor(index), 30, false, &format!("{}{hide},scale=320:-2", platform::DOWNLOAD));
+    let mut args = capture.input;
+    if let Some(filter) = capture.filter {
+        args.extend(["-filter:v".into(), filter]);
+    }
+    args.extend(["-frames:v", "1", "-q:v", "5", "-update", "1", "-y"].map(String::from));
+    args.push(ffmpeg::path_arg(&path));
+    let taken = ffmpeg::run_with_timeout(&args, Duration::from_secs(5));
+    let bytes = std::fs::read(&path);
+    let _ = std::fs::remove_file(&path);
+    if let Err(e) = taken {
+        log::info!("no picture of display {index}: {e:#}");
+        return None;
+    }
+    Some(format!("data:image/jpeg;base64,{}", base64::engine::general_purpose::STANDARD.encode(bytes.ok()?)))
+}
+
 /// Where pictures of saves in progress and of a running session are made.
 fn previews_dir(app: &AppHandle) -> PathBuf {
     app.path().app_cache_dir().unwrap_or_else(|_| std::env::temp_dir()).join("previews")

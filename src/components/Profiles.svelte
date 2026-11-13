@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, type AppWindow, type Profile, type Quality } from "../lib/api";
-  import { appIcon } from "../lib/appIcons.svelte";
+  import { appChoice, appIcon } from "../lib/appIcons.svelte";
   import { endsWithExe } from "../lib/platform";
   import { lengthLabel } from "../lib/format";
   import { t } from "../lib/i18n.svelte";
@@ -153,7 +153,7 @@
         placeholder={t("Add a game or app…")}
         value={null}
         options={free.length
-          ? free.map((a) => ({ value: a.exe, label: a.name, hint: a.title !== a.name ? a.title : undefined }))
+          ? free.map(appChoice)
           : [{ value: "", label: t("No other open windows"), hint: t("Start the game first") }]}
         onopen={loadApps}
         onchange={(exe) => {
@@ -274,9 +274,11 @@
     min-height: 48px;
     padding: 8px 12px;
   }
+  /* Wide enough for the longest translation of its prompt; the note beside it gives way. */
   .add-select {
-    width: 260px;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 260px;
+    max-width: 360px;
   }
   .add-row .meta {
     min-width: 0;

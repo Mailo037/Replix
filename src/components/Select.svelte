@@ -1,9 +1,11 @@
 <script lang="ts" generics="T extends string | number | null">
   import { fit } from "../lib/place";
+  import { tip } from "../lib/tooltip";
   import Icon from "./Icon.svelte";
   import { t } from "../lib/i18n.svelte";
 
   // A dropdown drawn by the app. The list sits in the top layer, so scrolling panels don't clip it.
+  // The button is as wide as its place allows; the list grows to show every entry in full.
   let {
     options,
     value,
@@ -12,7 +14,8 @@
     onopen,
     placeholder,
   }: {
-    options: { value: T; label: string; hint?: string }[];
+    /** `icon` is a picture for the choice (a program's icon); null shows a plain frame until it is there. */
+    options: { value: T; label: string; hint?: string; icon?: string | null }[];
     value: T;
     label: string;
     onchange: (v: T) => void;
@@ -32,6 +35,20 @@
   const chosen = $derived(options.find((o) => o.value === value));
   const placeholderText = $derived(placeholder ?? t("Choose…"));
 
+  /** The choice is cut off on the button: hovering it shows the whole name. */
+  let shown = $state<HTMLSpanElement>();
+  let cut = $state(false);
+  $effect(() => {
+    const node = shown;
+    if (!node) return;
+    void (chosen?.label ?? placeholderText);
+    const measure = () => (cut = node.scrollWidth > node.clientWidth + 1);
+    measure();
+    const resize = new ResizeObserver(measure);
+    resize.observe(node);
+    return () => resize.disconnect();
+  });
+
   // Sized before it shows; placed once it can be measured, so it never runs out of the window.
   function onBeforeToggle(e: ToggleEvent) {
     if (e.newState !== "open" || !trigger || !list) return;
@@ -46,7 +63,11 @@
   function onToggle(e: ToggleEvent) {
     open = e.newState === "open";
     if (open && trigger && list) {
-      list.classList.toggle("up", fit(list, trigger.getBoundingClientRect()));
+      // A button on the right of the window opens its list leftwards, so a list wider than the
+      // button stays over the panel it belongs to.
+      const r = trigger.getBoundingClientRect();
+      const align = r.left + r.width / 2 > innerWidth / 2 ? "end" : "start";
+      list.classList.toggle("up", fit(list, r, { align }));
       list.style.visibility = "";
       list.focus();
       list?.querySelector<HTMLElement>(`[data-index="${active}"]`)?.scrollIntoView({ block: "nearest" });
@@ -77,6 +98,11 @@
       node.removeEventListener("toggle", onToggle as EventListener);
     };
   });
+
+  /** Opens the list, as a click on the button would: for a choice that has to be made now. */
+  export function show() {
+    if (!open) trigger?.click();
+  }
 
   function pick(i: number) {
     const option = options[i];
@@ -130,8 +156,12 @@
   aria-expanded={open}
   aria-label={t("{label}: {choice}", { label, choice: chosen?.label ?? placeholderText })}
   onkeydown={onTriggerKey}
+  use:tip={cut && !open ? (chosen?.label ?? placeholderText) : null}
 >
-  <span class="current" class:placeholder={!chosen}>{chosen?.label ?? placeholderText}</span>
+  {#if chosen && chosen.icon !== undefined}
+    <span class="current-icon">{#if chosen.icon}<img src={chosen.icon} alt="" />{:else}<Icon name="app" size={16} />{/if}</span>
+  {/if}
+  <span bind:this={shown} class="current" class:placeholder={!chosen}>{chosen?.label ?? placeholderText}</span>
   <span class="chevron"><Icon name="chevronDown" size={16} /></span>
 </button>
 
@@ -156,12 +186,16 @@
       aria-selected={option.value === value}
       class="option"
       class:active={i === active}
+      class:with-icon={option.icon !== undefined}
       onpointermove={() => (active = i)}
       onclick={() => pick(i)}
     >
+      {#if option.icon !== undefined}
+        <span class="option-icon">{#if option.icon}<img src={option.icon} alt="" />{:else}<Icon name="app" size={16} />{/if}</span>
+      {/if}
       <span class="text">
         <span class="name">{option.label}</span>
-        {#if option.hint}<span class="hint">{option.hint}</span>{/if}
+        {#if option.hint}<span class="hint" title={option.hint}>{option.hint}</span>{/if}
       </span>
       {#if option.value === value}<span class="tick"><Icon name="check" size={16} /></span>{/if}
     </div>
@@ -214,7 +248,7 @@
     position: fixed;
     inset: auto;
     margin: 0;
-    max-width: min(420px, calc(100vw - 16px));
+    max-width: min(460px, calc(100vw - 16px));
     max-height: calc(100vh - 16px);
     padding: 4px;
     border: 0;
@@ -257,8 +291,9 @@
     align-items: center;
     gap: 10px;
     min-height: 32px;
-    padding: 5px 8px 5px 10px;
-    border-radius: 999px;
+    padding: 6px 8px 6px 12px;
+    /* A pill on one line, a rounded box when a long name takes two. */
+    border-radius: 16px;
     cursor: pointer;
   }
   .option.active {
@@ -269,16 +304,50 @@
     min-width: 0;
     display: flex;
     flex-direction: column;
+    gap: 1px;
   }
-  .name,
+  /* Names are never cut off in the list: a long one (a microphone, say) wraps instead. The line
+     under it (a window's title) stays one line; hovering it shows the rest. */
+  .name {
+    overflow-wrap: anywhere;
+    line-height: 1.3;
+  }
   .hint {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .hint {
+    line-height: 1.3;
     font-size: 12px;
     color: var(--ghost);
+  }
+  /* A program's icon in front of its name, as in the recording menu. */
+  .option.with-icon {
+    min-height: 40px;
+    padding: 5px 10px 5px 5px;
+    gap: 10px;
+  }
+  .option-icon {
+    width: 30px;
+    height: 30px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--muted);
+  }
+  .option-icon img {
+    width: 20px;
+    height: 20px;
+  }
+  .current-icon {
+    display: flex;
+    flex: none;
+    color: var(--muted);
+  }
+  .current-icon img {
+    width: 18px;
+    height: 18px;
   }
   .tick {
     display: flex;

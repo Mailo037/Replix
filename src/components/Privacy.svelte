@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, type AppWindow, type Excluded } from "../lib/api";
-  import { appIcon } from "../lib/appIcons.svelte";
+  import { appChoice, appIcon } from "../lib/appIcons.svelte";
   import { t } from "../lib/i18n.svelte";
   import { store } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
@@ -58,7 +58,7 @@
         placeholder={t("Keep a program out…")}
         value={null}
         options={free.length
-          ? free.map((a) => ({ value: a.exe, label: a.name, hint: a.title !== a.name ? a.title : undefined }))
+          ? free.map(appChoice)
           : [{ value: "", label: t("No other open windows"), hint: t("Open the program first") }]}
         onopen={loadApps}
         onchange={(exe) => {
@@ -117,9 +117,11 @@
     width: 18px;
     height: 18px;
   }
+  /* Wide enough for the longest translation of its prompt; the note beside it gives way. */
   .add-select {
-    width: 260px;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 260px;
+    max-width: 360px;
   }
   .add-row .meta {
     min-width: 0;

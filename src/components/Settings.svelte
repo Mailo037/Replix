@@ -1,6 +1,7 @@
 <script lang="ts">
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
-  import { onMount } from "svelte";
+  import { onMount, tick } from "svelte";
+  import { appChoices } from "../lib/appIcons.svelte";
   import {
     api,
     type AppWindow,
@@ -103,10 +104,26 @@
     if (typeof dir === "string") update({ clipsDir: dir });
   }
 
-  async function showApps() {
-    apps = await api.listApps();
-    choosingApp = true;
+  /** "One app" with none picked yet asks which one right away; it is recorded once picked. */
+  let appSelect = $state<Select<string | null>>();
+  async function chooseSource(source: Settings["source"]) {
+    if (source === "app" && !s.appExe) {
+      choosingApp = true;
+      await tick();
+      appSelect?.show();
+      return;
+    }
+    choosingApp = false;
+    update({ source });
   }
+
+  const pickingApp = $derived(s?.source === "app" || choosingApp);
+  async function loadApps() {
+    apps = await api.listApps().catch(() => apps);
+  }
+  $effect(() => {
+    if (pickingApp) loadApps();
+  });
 
   const hotkeyRows: { key: keyof Settings["hotkeys"]; label: string; hint: string }[] = $derived([
     { key: "clip", label: t("Save clip"), hint: t("Keeps the last moments") },
@@ -134,9 +151,24 @@
               { value: "screen", label: t("Whole screen") },
               { value: "app", label: t("One app") },
             ]}
-            onchange={(v) => (v === "app" && !s.appExe ? showApps() : update({ source: v }))}
+            onchange={chooseSource}
           />
-          {#if s.source === "game"}
+          {#if pickingApp}
+            <div class="app-pick">
+              <Select
+                bind:this={appSelect}
+                label={t("App to record")}
+                placeholder={t("Choose an open app…")}
+                value={s.source === "app" ? s.appExe : null}
+                options={appChoices(apps, s.appExe)}
+                onopen={loadApps}
+                onchange={(exe) => {
+                  choosingApp = false;
+                  update({ source: "app", appExe: exe });
+                }}
+              />
+            </div>
+          {:else if s.source === "game"}
             <p class="meta note">{t("Replix starts when a game is in front and stops when it closes. Nothing else is recorded.")}</p>
           {:else if s.source === "screen" && monitors.length > 1}
             <Segmented
@@ -148,28 +180,6 @@
               }))}
               onchange={(v) => update({ monitor: v })}
             />
-          {:else if s.source === "app"}
-            <div class="inline">
-              <span class="mono">{s.appExe ?? t("No app chosen")}</span>
-              <button type="button" class="btn small" onclick={showApps}>{t("Choose app")}</button>
-            </div>
-          {/if}
-          {#if choosingApp}
-            <ul class="apps scroll">
-              {#each apps as a (a.exe)}
-                <li>
-                  <button
-                    type="button"
-                    onclick={() => {
-                      choosingApp = false;
-                      update({ source: "app", appExe: a.exe });
-                    }}
-                  >
-                    <span>{a.name}</span><span class="meta">{a.title}</span>
-                  </button>
-                </li>
-              {/each}
-            </ul>
           {/if}
         </div>
         <div class="row stack">
@@ -593,10 +603,6 @@
     align-items: center;
     gap: 8px;
   }
-  .inline .mono {
-    flex: 1;
-    color: var(--muted);
-  }
   .usage {
     height: 8px;
     border-radius: 4px;
@@ -610,12 +616,16 @@
     background: var(--accent);
     transition: width 400ms var(--travel);
   }
+  /* As wide as the choice needs, between a steady minimum and a share of the row, so a long
+     name (a microphone's, a translation) fits and the text beside it still has room. */
   .pick {
-    width: 200px;
-    flex: none;
+    flex: 0 1 auto;
+    min-width: 200px;
+    max-width: min(360px, 55%);
   }
   .pick.wide {
-    width: 280px;
+    min-width: 280px;
+    max-width: min(440px, 62%);
   }
   .volume {
     display: flex;
@@ -673,27 +683,7 @@
   .swatch:active {
     transform: scale(0.9);
   }
-  .apps {
-    list-style: none;
-    margin: 0;
-    padding: 4px;
-    max-height: 240px;
-    border-radius: var(--r-row);
-    background: var(--canvas);
-  }
-  .apps button {
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: flex-start;
-    padding: 8px 12px;
-    border: 0;
-    border-radius: 14px;
-    background: transparent;
-    font-weight: 600;
-    text-align: left;
-  }
-  .apps button:hover {
-    background: var(--surface);
+  .app-pick {
+    width: min(100%, 420px);
   }
 </style>

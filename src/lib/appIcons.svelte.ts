@@ -1,4 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
+import type { AppWindow } from "./api";
 
 // Program icons for the editor's track heads, read once per program and kept as data URLs.
 
@@ -35,4 +36,26 @@ export function appIcon(path: string | null | undefined): string | null {
     load(path);
   }
   return icons[path] ?? null;
+}
+
+/**
+ * An open app as a choice in a list, the same everywhere one is picked: its name, its window's
+ * title where that says more than the name, and its icon (null until read, shown as a frame).
+ */
+export function appChoice(a: AppWindow) {
+  return { value: a.exe, label: a.name, hint: a.title && a.title !== a.name ? a.title : undefined, icon: appIcon(a.path) };
+}
+
+/**
+ * The open apps as choices for picking one, with the one picked before kept in the list even
+ * while it is closed. Its entry carries the name exactly as it was saved, so the list marks it
+ * whatever the case of the running program's name.
+ */
+export function appChoices(apps: AppWindow[], chosen: string | null | undefined) {
+  const same = (exe: string) => !!chosen && exe.toLowerCase() === chosen.toLowerCase();
+  const list = apps.map((a) => ({ ...appChoice(a), value: same(a.exe) ? chosen! : a.exe }));
+  if (chosen && !apps.some((a) => same(a.exe))) {
+    list.push({ value: chosen, label: chosen.replace(/\.exe$/i, ""), hint: undefined, icon: null });
+  }
+  return list;
 }

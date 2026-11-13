@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { api, type AppWindow, type InputDevice, type Settings, type Source } from "../lib/api";
+  import { appChoices } from "../lib/appIcons.svelte";
   import { lengthLabel } from "../lib/format";
   import { t, tParts } from "../lib/i18n.svelte";
   import { isWindows } from "../lib/platform";
@@ -32,10 +33,7 @@
     { value: null, label: isWindows ? t("Windows default") : t("System default"), hint: mics.find((m) => m.default)?.name },
     ...mics.map((m) => ({ value: m.id as string | null, label: m.name })),
   ]);
-  const appOptions = $derived([
-    ...apps.map((a) => ({ value: a.exe as string | null, label: a.name, hint: a.title })),
-    ...(s.appExe && !apps.some((a) => a.exe === s.appExe) ? [{ value: s.appExe, label: s.appExe }] : []),
-  ]);
+  const appOptions = $derived(appChoices(apps, s.appExe));
 
   onMount(async () => {
     mics = await api.listMics();
@@ -412,9 +410,11 @@
   [aria-checked="true"] .mark {
     color: var(--accent);
   }
+  /* Grows for a long microphone name; the label beside it gives way. */
   .pick {
-    width: 260px;
-    min-width: 0;
+    flex: 0 1 auto;
+    min-width: min(260px, 65%);
+    max-width: 65%;
   }
   .rows {
     display: flex;

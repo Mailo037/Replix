@@ -36,6 +36,31 @@ test("does not offer HEVC without an encoder for it", async ({ page }) => {
   await expect(page.getByRole("group", { name: "Video format" })).toHaveCount(0);
 });
 
+test("one app asks which app at once, and records it once picked", async ({ page }) => {
+  await mockTauri(
+    page,
+    fixture({
+      apps: [
+        { exe: "Discord.exe", path: "C:/Apps/Discord.exe", name: "Discord", title: "#general" },
+        { exe: "Spotify.exe", path: "C:/Apps/Spotify.exe", name: "Spotify", title: "Spotify" },
+      ],
+    }),
+  );
+  await page.goto("/");
+  await page.getByRole("button", { name: "Settings" }).click();
+  await page.getByRole("group", { name: "Record" }).getByRole("button", { name: "One app" }).click();
+
+  const list = page.getByRole("listbox", { name: "App to record" });
+  await expect(list).toBeVisible();
+  // Nothing changes until an app is picked.
+  expect(await calls(page, "set_settings")).toHaveLength(0);
+  // A window title that only repeats the name is left out.
+  await expect(list.getByRole("option", { name: "Spotify" })).toHaveText("Spotify");
+  await list.getByRole("option", { name: /Discord/ }).click();
+  await expect.poll(async () => (await calls(page, "set_settings")).at(-1)?.args.settings).toMatchObject({ source: "app", appExe: "Discord.exe" });
+  await expect(page.getByRole("button", { name: "App to record: Discord" })).toBeVisible();
+});
+
 test("turning the sound on plays it once", async ({ page }) => {
   await mockTauri(page, fixture({ settings: { ...fixture().settings, saveSound: false } }));
   await page.goto("/");

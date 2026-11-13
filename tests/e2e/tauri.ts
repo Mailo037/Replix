@@ -1,5 +1,5 @@
 import type { Page } from "@playwright/test";
-import type { Codec, EditorData, Item, Settings } from "../../src/lib/api";
+import type { AppWindow, Codec, EditorData, Item, Monitor, Settings } from "../../src/lib/api";
 
 // The page talks to Replix's Rust side through Tauri. In these tests a stand-in answers
 // instead: it is put into the page before Replix's own scripts run, answers the commands
@@ -100,6 +100,9 @@ export interface Fixture {
   editors: Record<string, EditorData>;
   encoders: { id: string; label: string }[];
   codecs: Codec[];
+  monitors: Monitor[];
+  apps: AppWindow[];
+  mics: { id: string; name: string; default: boolean }[];
 }
 
 export function fixture(overrides: Partial<Fixture> = {}): Fixture {
@@ -110,6 +113,9 @@ export function fixture(overrides: Partial<Fixture> = {}): Fixture {
     editors: Object.fromEntries(list.map((i) => [i.id, editorData(i)])),
     encoders: [{ id: "nvenc", label: "NVIDIA NVENC" }],
     codecs: ["h264"],
+    monitors: [{ index: 0, width: 1920, height: 1080, primary: true }],
+    apps: [],
+    mics: [{ id: "mic", name: "USB Headset", default: true }],
     ...overrides,
   };
 }
@@ -176,11 +182,14 @@ export async function mockTauri(page: Page, data: Fixture = fixture()) {
         case "get_codecs":
           return state.codecs;
         case "list_mics":
-          return [{ id: "mic", name: "USB Headset", default: true }];
+          return state.mics;
         case "list_monitors":
-          return [{ index: 0, width: 1920, height: 1080, primary: true }];
+          return state.monitors;
+        case "monitor_preview":
+          // Runs in the page, where the constants above do not exist.
+          return "/tests/fixtures/thumb.jpg";
         case "list_apps":
-          return [];
+          return state.apps;
         case "storage_info":
           return { clips: 2_000_000_000, exports: 0, free: 200_000_000_000 };
         case "export_clip":

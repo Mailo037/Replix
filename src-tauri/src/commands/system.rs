@@ -3,7 +3,7 @@
 use std::sync::atomic::Ordering;
 
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::encoder::Codec;
 use crate::recorder::{Command, Status};
@@ -85,6 +85,13 @@ pub async fn list_apps() -> Vec<AppWindow> {
 #[tauri::command]
 pub fn list_monitors() -> Vec<platform::MonitorInfo> {
     platform::monitors()
+}
+
+/// A small picture of what a display shows now, for the menu that picks one.
+#[tauri::command]
+pub async fn monitor_preview(app: AppHandle, index: u32) -> Option<String> {
+    let excluded = app.state::<AppState>().settings.lock().excluded_exes();
+    own_thread(move || Ok(crate::recorder::display_picture(&app, index, &excluded))).await.ok().flatten()
 }
 
 #[tauri::command]

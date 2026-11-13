@@ -302,6 +302,8 @@ export const api = {
   getCodecs: () => invoke<Codec[]>("get_codecs"),
   listApps: () => invoke<AppWindow[]>("list_apps"),
   listMonitors: () => invoke<Monitor[]>("list_monitors"),
+  /** A small picture of what a display shows now, as a data URL; null where none could be taken. */
+  monitorPreview: (index: number) => invoke<string | null>("monitor_preview", { index }),
   listLibrary: () => invoke<Item[]>("list_library"),
   /** Opens a clip in the editor; its media work belongs to the editor round given. */
   // After the changes asked for before it, so a draft saved a moment ago opens as saved;
