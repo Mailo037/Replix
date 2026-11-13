@@ -29,6 +29,15 @@ jobs:
       - name: Check translations
         run: node scripts/i18n.mjs --check
 
+      - name: Unit tests
+        run: npm test
+
+      # The page in a browser, with a stand-in for the Rust side (tests/e2e/tauri.ts).
+      - name: UI tests
+        run: |
+          npx playwright install --with-deps chromium
+          npx playwright test
+
       - name: Build UI
         run: npm run build
 

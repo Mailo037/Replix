@@ -77,6 +77,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3d62b7694a562cdf5a74227903507c56ab2cc8bdd1f781ed5cb4cf9c9f810bfc"
 
 [[package]]
+name = "ashpd"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8ba377f1fb1e3972907220f1f8e7c0a45164580905c981d872c1fb90d921cbcc"
+dependencies = [
+ "bitflags 2.13.2",
+ "futures-util",
+ "getrandom 0.4.3",
+ "serde",
+ "tokio",
+ "zbus 6.2.1",
+]
+
+[[package]]
 name = "async-broadcast"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3231,10 +3245,14 @@ name = "replix"
 version = "0.3.6"
 dependencies = [
  "anyhow",
+ "ashpd",
+ "base64 0.22.1",
  "chrono",
  "core-foundation 0.10.1",
  "core-graphics 0.25.0",
  "crossbeam-channel",
+ "futures-channel",
+ "futures-util",
  "libc",
  "log",
  "nnnoiseless",
@@ -4386,7 +4404,7 @@ dependencies = [
  "thiserror 2.0.21",
  "url",
  "windows 0.62.2",
- "zbus",
+ "zbus 5.19.0",
 ]
 
 [[package]]
@@ -4412,7 +4430,7 @@ dependencies = [
  "tokio",
  "tracing",
  "windows-sys 0.61.2",
- "zbus",
+ "zbus 5.19.0",
 ]
 
 [[package]]
@@ -4668,6 +4686,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "windows-sys 0.61.2",
 ]
@@ -6004,9 +6023,37 @@ dependencies = [
  "uuid",
  "windows-sys 0.61.2",
  "winnow 1.0.4",
- "zbus_macros",
+ "zbus_macros 5.19.0",
  "zbus_names",
  "zvariant",
+]
+
+[[package]]
+name = "zbus"
+version = "6.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0ddb2961d9587ef9f24ad14cde1c3bc4c5edc9f1525932a8cffdd5bd98886eb9"
+dependencies = [
+ "async-trait",
+ "bitflags 2.13.2",
+ "endi",
+ "futures-core",
+ "hex",
+ "libc",
+ "ordered-stream",
+ "rustix",
+ "serde",
+ "serde_repr",
+ "socket2",
+ "tokio",
+ "uds_windows",
+ "uuid",
+ "windows-sys 0.61.2",
+ "winnow 1.0.4",
+ "zbus_macros 6.2.1",
+ "zbus_utils",
+ "zcheapstr",
+ "zruntime",
 ]
 
 [[package]]
@@ -6025,6 +6072,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "zbus_macros"
+version = "6.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "083b38add47c340fc12ec560124fb1d9c23acb584f7021099f85ec6587a03c54"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 3.0.9",
+ "zbus_utils",
+]
+
+[[package]]
 name = "zbus_names"
 version = "4.3.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6033,6 +6092,19 @@ dependencies = [
  "serde",
  "winnow 1.0.4",
  "zvariant",
+]
+
+[[package]]
+name = "zbus_utils"
+version = "6.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af55e52da295311b368c45bcae221f020e28e97a2420360170ce389218e76ec7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde",
+ "syn 3.0.9",
+ "winnow 1.0.4",
 ]
 
 [[package]]
@@ -6131,6 +6203,16 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
+
+[[package]]
+name = "zruntime"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ce6a55d4f521760475a30f7b96779508fe8c40dc834478709454dd1d5f0ebc72"
+dependencies = [
+ "futures-core",
+ "futures-io",
+]
 
 [[package]]
 name = "zvariant"

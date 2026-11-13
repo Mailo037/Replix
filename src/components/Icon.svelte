@@ -121,6 +121,10 @@
     restore: "M4.5 9.5a5.5 5.5 0 1 1 1.6 4.2M4.5 5.5v4h4",
     copy: box(3, 7, 10, 10, 2) + "M7 7V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-2",
     link: "M8.5 11.5l3-3M9 6l1.2-1.2a3 3 0 0 1 4.2 4.2L13.2 10M11 14l-1.2 1.2a3 3 0 0 1-4.2-4.2L6.8 10",
+    tag: soft([[3.5, 5], [11.5, 5], [16.5, 10], [11.5, 15], [3.5, 15]], 2) + "M7.5 10h.01",
+    combine: box(2.5, 5.5, 6.5, 9, 2) + box(11, 5.5, 6.5, 9, 2),
+    text: "M4.5 5h11M10 5v11",
+    gauge: "M3.5 14a6.5 6.5 0 1 1 13 0M10 14l2.5-4",
   };
   // Drawn solid. They keep the stroke too, so a filled icon has the same round outline and
   // size as its outlined form (a star turning solid does not shrink).

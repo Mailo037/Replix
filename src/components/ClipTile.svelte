@@ -12,6 +12,7 @@
   import { t } from "../lib/i18n.svelte";
   import { isWindows } from "../lib/platform";
   import Icon from "./Icon.svelte";
+  import TagEditor from "./TagEditor.svelte";
 
   let {
     item,
@@ -69,6 +70,10 @@
     return () => node.removeEventListener("toggle", sync);
   });
 
+  /** Where the tag panel opened, while it is open. */
+  let tagging = $state<DOMRect | null>(null);
+  const tags = $derived(item.tags ?? []);
+
   let renaming = $state(false);
   let draftTitle = $state("");
 
@@ -84,8 +89,9 @@
     if (keep) await rename(item.id, item.title, to).catch((e) => store.notify(t("Couldn't rename"), String(e)));
   }
 
-  async function act(what: "favorite" | "reveal" | "delete" | "copy" | "link" | "rename") {
+  async function act(what: "favorite" | "reveal" | "delete" | "copy" | "link" | "rename" | "tags") {
     menuEl?.hidePopover();
+    if (what === "tags") tagging = (moreBtn ?? menuEl)?.getBoundingClientRect() ?? null;
     if (what === "favorite") await api.setFavorite([item.id], !item.favorite);
     if (what === "reveal") await api.revealItem(item.id);
     if (what === "copy") await share.copy(item.path);
@@ -151,7 +157,9 @@
       <span class="title" class:hidden={renaming}>{item.title}</span>
       <span class="meta">
         {#if item.game}<span class="swatch" style:background={gameColor(item.game)} aria-hidden="true"></span>{/if}
-        {item.game && !item.title.includes(item.game) ? `${gameLabel(item.game)} · ` : ""}{time(item.created)}
+        <span class="when">{item.game && !item.title.includes(item.game) ? `${gameLabel(item.game)} · ` : ""}{time(item.created)}</span>
+        {#each tags.slice(0, 2) as tag (tag)}<span class="tag">#{tag}</span>{/each}
+        {#if tags.length > 2}<span class="tag more-tags">+{tags.length - 2}</span>{/if}
       </span>
     </span>
   </button>
@@ -204,11 +212,23 @@
         <Icon name="star" size={16} filled={item.favorite} />{item.favorite ? t("Remove favorite") : t("Add to favorites")}
       </button>
       <button type="button" role="menuitem" onclick={() => act("rename")}><Icon name="edit" size={16} />{t("Rename")}</button>
+      <button type="button" role="menuitem" onclick={() => act("tags")}>
+        <Icon name="tag" size={16} />{t("Tags")}{#if tags.length}<span class="hint">{tags.length}</span>{/if}
+      </button>
       <button type="button" role="menuitem" onclick={() => act("reveal")}><Icon name="folder" size={16} />{t("Show in folder")}</button>
       <button type="button" role="menuitem" class="danger" onclick={() => act("delete")}>
         <Icon name="trash" size={16} />{isWindows ? t("Move to recycle bin") : t("Move to trash")}
       </button>
     </div>
+  {/if}
+  {#if tagging}
+    <TagEditor
+      {tags}
+      anchor={tagging}
+      onadd={(tag) => api.tagItems([item.id], [tag], []).catch((e) => store.notify(t("Tags not saved"), String(e)))}
+      onremove={(tag) => api.tagItems([item.id], [], [tag]).catch((e) => store.notify(t("Tags not saved"), String(e)))}
+      onclose={() => (tagging = null)}
+    />
   {/if}
 </div>
 
@@ -349,8 +369,29 @@
     display: flex;
     align-items: center;
     gap: 7px;
+    min-width: 0;
     margin-top: 2px;
     font-size: 12.5px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+  .when {
+    flex: none;
+  }
+  .tag {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 0 7px;
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 11.5px;
+    font-weight: 600;
+    line-height: 18px;
+  }
+  .more-tags {
+    flex: none;
   }
   .swatch {
     width: 8px;

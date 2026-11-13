@@ -20,11 +20,12 @@ use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::audio;
-use crate::encoder::{self, Encoder};
+use crate::encoder::{self, Codec, Encoder};
 use crate::ffmpeg;
 use crate::i18n::tr;
 use crate::library::{self, Kind, Meta};
 use crate::settings::{CaptureSource, Settings};
+use crate::sound::{self, Chime};
 use crate::platform;
 use health::Health;
 use pipeline::{private_masks, segment_name, Pipeline, Segment, Session, Target, SEGMENT_SECONDS};
@@ -244,6 +245,7 @@ impl Worker {
                     private,
                     encoder,
                     kbps: if journal.kbps > 0 { journal.kbps } else { settings.quality.video_kbps() },
+                    format: journal.format,
                     recorded: Some(left.ended),
                     placeholder,
                 };
@@ -257,16 +259,24 @@ impl Worker {
 
     /// The chosen encoder, or the best one; one that keeps failing at start is passed over
     /// for the next that works, so a broken driver costs a few seconds, not the recording.
+    ///
+    /// The settings name the graphics card (or "auto") and the format apart: HEVC is
+    /// recorded on the chosen card's HEVC encoder, else on the best one there is, and where
+    /// none works the recording stays H.264.
     fn encoder(&self) -> Option<&'static Encoder> {
         let found = self.encoders.lock();
         let usable = |e: &&&'static Encoder| self.health.usable(e.id);
-        if self.settings.encoder != "auto" {
-            let chosen = found.iter().filter(usable).find(|e| e.id == self.settings.encoder || e.codec == self.settings.encoder);
-            if let Some(e) = chosen {
-                return Some(e);
+        let wanted = self.settings.encoder.as_str();
+        let pick = |format: Codec| {
+            let mut fitting = found.iter().filter(usable).filter(|e| e.format == format);
+            if wanted == "auto" {
+                return fitting.next().copied();
             }
-        }
-        found.iter().find(usable).or(found.first()).copied()
+            let all: Vec<_> = fitting.collect();
+            all.iter().find(|e| e.base() == wanted || e.codec == wanted).or(all.first()).map(|e| **e)
+        };
+        let chosen = if self.settings.codec == Codec::H264 { None } else { pick(self.settings.codec) };
+        chosen.or_else(|| pick(Codec::H264)).or(found.first().copied())
     }
 
     fn handle(&mut self, command: Command) {
@@ -505,6 +515,7 @@ impl Worker {
     fn save_clip(&mut self) {
         let Some(p) = self.pipeline.as_mut() else {
             crate::toast(&self.app, &tr("Nothing to save"), &tr("Replix is not recording right now."));
+            sound::play(&self.app, Chime::Refused);
             return;
         };
         let seconds = p.settings.buffer_seconds as f64;
@@ -516,6 +527,7 @@ impl Worker {
         let Some(first) = done.iter().find(|s| s.end > end - seconds).map(|s| s.index).or(current) else {
             let (title, detail) = save::nothing_yet();
             crate::toast(&self.app, &title, &detail);
+            sound::play(&self.app, Chime::Refused);
             return;
         };
         // No preview from the buffer while a kept-out program may be in it.
@@ -530,6 +542,7 @@ impl Worker {
         };
         p.pending.push(pending);
         crate::toast(&self.app, &tr("Saving clip…"), &p.target.label());
+        sound::play(&self.app, Chime::Done);
     }
 
     /// Saves the clips whose end has been written, or all of them once the capture stopped.
@@ -574,7 +587,8 @@ impl Worker {
                 markers: p.markers.iter().copied().filter(|m| *m >= origin && *m <= until).collect(),
                 private: private_masks(&p.private, origin, until, stream_now),
                 encoder: p.encoder,
-                kbps: p.settings.quality.video_kbps(),
+                kbps: p.kbps,
+                format: p.encoder.format,
                 recorded: None,
                 placeholder: clip.placeholder,
             };
@@ -591,8 +605,10 @@ impl Worker {
     fn toggle_session(&mut self) {
         let Some(p) = self.pipeline.as_mut() else {
             crate::toast(&self.app, &tr("Can't start a session"), &tr("Replix is not recording right now."));
+            sound::play(&self.app, Chime::Refused);
             return;
         };
+        sound::play(&self.app, Chime::Done);
         if p.session.is_some() {
             Self::finish_session(&self.app, &self.settings, p);
         } else {
@@ -688,7 +704,8 @@ impl Worker {
             markers: p.markers.iter().copied().filter(|m| *m >= origin && *m <= until + SEGMENT_SECONDS).collect(),
             private,
             encoder: p.encoder,
-            kbps: p.settings.quality.video_kbps(),
+            kbps: p.kbps,
+            format: p.encoder.format,
             recorded: None,
             placeholder,
         };
@@ -737,7 +754,8 @@ impl Worker {
             markers: p.markers.iter().copied().filter(|m| *m >= origin && *m <= until + SEGMENT_SECONDS).collect(),
             private,
             encoder: p.encoder,
-            kbps: p.settings.quality.video_kbps(),
+            kbps: p.kbps,
+            format: p.encoder.format,
             recorded: None,
             placeholder,
         };
@@ -753,6 +771,7 @@ impl Worker {
     fn add_marker(&mut self) {
         let Some(p) = self.pipeline.as_mut() else {
             crate::toast(&self.app, &tr("Can't set a marker"), &tr("Replix is not recording right now."));
+            sound::play(&self.app, Chime::Refused);
             return;
         };
         let now = p.now();
@@ -762,6 +781,7 @@ impl Worker {
             None => p.target.label(),
         };
         crate::toast(&self.app, &tr("Marker set"), &detail);
+        sound::play(&self.app, Chime::Done);
     }
 
     fn screenshot(&self) {
@@ -811,10 +831,12 @@ impl Worker {
                     let _ = library::write_meta(&path, &meta);
                     let _ = app.emit("library-changed", ());
                     crate::toast(&app, &tr("Screenshot saved"), &name);
+                    sound::play(&app, Chime::Done);
                 }
                 Err(e) => {
                     log::warn!("screenshot failed: {e}");
                     crate::toast(&app, &tr("Screenshot failed"), &tr("The picture could not be taken."));
+                    sound::play(&app, Chime::Refused);
                 }
             }
         });

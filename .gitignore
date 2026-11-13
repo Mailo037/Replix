@@ -8,3 +8,5 @@ src-tauri/binaries/
 # Not for the public repo: screenshots of a real desktop and of other apps
 screenshots/
 recherche/ui/
+test-results/
+playwright-report/

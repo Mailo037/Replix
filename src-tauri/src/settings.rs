@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::encoder::Codec;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CaptureSource {
@@ -111,6 +113,9 @@ pub struct Settings {
     pub height: u32,
     /// "auto" or an encoder id from `encoder::candidates`.
     pub encoder: String,
+    /// The format recordings are written in. HEVC is used where a graphics card can encode
+    /// it; otherwise recordings stay H.264.
+    pub codec: Codec,
     pub record_mic: bool,
     /// The microphone's id (WASAPI on Windows, the PulseAudio source on Linux, the
     /// AVFoundation name on macOS); `None` follows the system default.
@@ -130,6 +135,8 @@ pub struct Settings {
     pub launch_at_startup: bool,
     pub close_to_tray: bool,
     pub show_toast: bool,
+    /// A short sound when a hotkey saves something, or does nothing.
+    pub save_sound: bool,
     pub toast_position: ToastPosition,
     pub toast_size: ToastSize,
     /// Games and apps with their own settings.
@@ -200,6 +207,7 @@ impl Default for Settings {
             quality: Quality::Medium,
             height: 0,
             encoder: "auto".into(),
+            codec: Codec::H264,
             record_mic: true,
             mic_device: None,
             mic_volume: 1.0,
@@ -213,6 +221,7 @@ impl Default for Settings {
             launch_at_startup: false,
             close_to_tray: true,
             show_toast: true,
+            save_sound: true,
             toast_position: ToastPosition::default(),
             toast_size: ToastSize::default(),
             profiles: Vec::new(),
@@ -296,6 +305,7 @@ impl Settings {
             || self.quality != other.quality
             || self.height != other.height
             || self.encoder != other.encoder
+            || self.codec != other.codec
             || self.record_mic != other.record_mic
             || self.mic_device != other.mic_device
             || self.capture_cursor != other.capture_cursor

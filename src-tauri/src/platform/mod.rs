@@ -40,6 +40,15 @@ pub struct WindowInfo {
     pub fullscreen: bool,
 }
 
+/// A hotkey to ask the desktop for: what it is called, what it does, and the keys Replix
+/// would like for it ("Alt+C").
+#[derive(Debug, Clone, PartialEq)]
+pub struct DesktopHotkey {
+    pub id: String,
+    pub description: String,
+    pub keys: String,
+}
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct MonitorInfo {

@@ -8,7 +8,7 @@
 
 ## Keep what just happened
 
-Replix starts on its own when a game is in front and keeps a rolling buffer, from 15 seconds up to 10 minutes. Nothing to start, nothing to stop. When something great happens, press the key; the game keeps running and a small note in the corner tells you it's saved.
+Replix starts on its own when a game is in front and keeps a rolling buffer, from 15 seconds up to 10 minutes. Nothing to start, nothing to stop. When something great happens, press the key; the game keeps running, a soft sound and a small note in the corner tell you it's saved.
 
 Instead of games, Replix can also watch the whole screen or a single app. For longer stretches, start a session and it records until you press the key again. A session is written into your clips folder while it runs, so a crash or a power cut does not cost the recording: the next time Replix starts, it turns up in the library. The library shows a session that is being recorded, with its time and a button to stop it. Press <kbd>Alt</kbd> + <kbd>M</kbd> while recording to mark a moment; the editor shows every marker on the timeline and jumps from one to the next.
 
@@ -22,11 +22,13 @@ Pick your microphone, check that it's picking you up, and let noise suppression 
 
 ## Edit in seconds
 
-Trim the start and end, split the clip and take out the parts you don't need. Turn tracks off or down, let a track play for only part of the clip, or save one on its own as audio. Then export in full quality, small enough for Discord, or as a GIF. <kbd>Ctrl</kbd> + <kbd>Z</kbd> takes any step back.
+Trim the start and end, split the clip and take out the parts you don't need. Play a part at half or a quarter speed, and put words over the picture: drag them where they belong and set how long they show. Turn tracks off or down, let a track play for only part of the clip, or save one on its own as audio. Then export in full quality, small enough for Discord, or as a GIF. <kbd>Ctrl</kbd> + <kbd>Z</kbd> takes any step back.
 
 ![Editor with a part cut out and its audio tracks](docs/images/editor.png)
 
 Switch to 9:16 for TikTok, Shorts and Reels, and drag the frame to where the action is. Pull a corner to zoom in.
+
+Pick a few clips in the library and **Combine** them into a montage: each plays as you edited it, oldest first, at the first clip's size, with a marker where each one starts. The montage is a new clip you can trim and export like any other.
 
 For a video editor, export **Separate tracks**: an MKV with the mix first and then every track on its own, with its name.
 
@@ -35,6 +37,10 @@ For a video editor, export **Separate tracks**: an MKV with the mix first and th
 ## Share it
 
 Copy a clip and paste it straight into Discord or a chat, drag it out of the library, or get a link that works for 72 hours. Screenshots open in a viewer you can zoom into.
+
+## Find it again
+
+Give clips tags like *win* or *funny*, one at a time from a clip's menu or for a whole selection at once. Every tag gets a place in the sidebar, and searching for `#win` finds the clips that wear it.
 
 ## Bring in what you already have
 
@@ -71,7 +77,8 @@ Everything is recorded and kept on your computer, in `Videos\Replix` (`~/Videos/
 
 ## Good to know
 
-- Recording uses your graphics card's video encoder (NVIDIA, AMD or Intel) and falls back to the processor when there is none.
+- Recording uses your graphics card's video encoder (NVIDIA, AMD or Intel) and falls back to the processor when there is none. The bitrate follows what you record: a 1440p game at 120 fps gets more than a 1080p one at 30.
+- Where the graphics card can, clips can be recorded in HEVC, which needs about half the space. Exports are always H.264, so they play everywhere.
 - Replix waits in the tray (the menu bar on macOS) and can start when you log in.
 
 ## Linux and macOS
@@ -86,9 +93,10 @@ Replix runs on all three systems. Windows has everything above; on the others a 
 | Private windows | visible areas are blacked out; opaque windows in front stay visible | same, on X11 | same, including app captures recorded as a display |
 | A track per app | yes | yes, through PulseAudio or PipeWire (`pulseaudio-utils`) | no: the microphone, plus all system sound when a loopback device like [BlackHole](https://existential.audio/blackhole/) is installed |
 | Video encoder | NVIDIA, AMD, Intel, processor | NVIDIA, VA-API (AMD, Intel), processor | VideoToolbox, processor |
+| HEVC recording | NVIDIA, AMD, Intel | NVIDIA, VA-API, if the system can play HEVC (GStreamer's `gst-libav`) | VideoToolbox |
 | Copy a clip | yes | with `wl-clipboard` or `xclip` | yes |
-| Hotkeys | yes | X11 | yes |
+| Hotkeys | yes | X11; under Wayland while a game runs through XWayland, and everywhere where the desktop offers its shortcut portal (KDE Plasma, GNOME 48 and newer, Hyprland), which may ask once to allow them | yes |
 
-On macOS the app is not notarized: the first time, open it with right-click › **Open**.
+On macOS the app is not notarized, so the first start is blocked once. Open it, close the message, then go to *System Settings* › *Privacy & Security*, scroll down and click **Open Anyway** next to Replix. On macOS 14 and older, right-click the app › **Open** does the same.
 
 Replix uses [FFmpeg](https://ffmpeg.org), licensed under the GPL v3, and downloads it on first start. Its source is available at [ffmpeg.org](https://ffmpeg.org/download.html).

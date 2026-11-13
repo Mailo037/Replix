@@ -6,7 +6,7 @@
 //   node scripts/check-all.mjs -j 2       fewer jobs on a machine with little memory
 //
 // For the other systems it only type-checks (nothing is linked or run). C dependencies
-// (ring, objc2) get a stand-in compiler and Linux libraries a stand-in pkg-config: their
+// (ring, objc2) get a stand-in compiler and archiver, and Linux libraries a stand-in pkg-config: their
 // build scripts only need to succeed. The real builds and the tests run in CI on each system.
 // Needs the targets once: rustup target add x86_64-unknown-linux-gnu aarch64-apple-darwin
 // x86_64-pc-windows-msvc (whichever are not this machine).
@@ -21,7 +21,7 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const args = process.argv.slice(2);
 const jobsAt = args.indexOf("-j");
 const jobs = jobsAt >= 0 ? ["-j", args[jobsAt + 1]] : [];
-const wanted = args.filter((a, i) => !a.startsWith("-") && i !== jobsAt + 1);
+const wanted = args.filter((a, i) => !a.startsWith("-") && (jobsAt < 0 || i !== jobsAt + 1));
 
 const host = process.platform === "win32" ? "windows" : process.platform === "darwin" ? "macos" : "linux";
 const TARGETS = {
@@ -37,20 +37,43 @@ writeFileSync(
 const a = process.argv.slice(2);
 const o = a.indexOf("-o");
 if (o >= 0 && a[o + 1]) fs.writeFileSync(a[o + 1], "");
-if (a.includes("-E")) process.stdout.write("clang\\n__clang__\\n");
+// Preprocessing: cc's compiler check learns it is clang; anything else (Tauri's Windows
+// resource script) comes out as it went in.
+const input = a.filter((x) => !x.startsWith("-")).pop();
+if (a.includes("-E")) {
+  if (!input || input.includes("detect_compiler_family")) process.stdout.write("clang\\n__clang__\\n");
+  else process.stdout.write(fs.readFileSync(input));
+}
 if (a.includes("--version") || a.includes("-v")) process.stdout.write("clang version 18.0.0\\n");
 `,
 );
 writeFileSync(join(tools, "pkg-config.js"), `if (process.argv.includes("--modversion")) process.stdout.write("99.0.0\\n");\n`);
-let pkgConfig;
-if (host === "windows") {
-  pkgConfig = join(tools, "pkg-config.cmd");
-  writeFileSync(pkgConfig, `@node "${join(tools, "pkg-config.js")}" %*\r\n`);
-} else {
-  pkgConfig = join(tools, "pkg-config");
-  writeFileSync(pkgConfig, `#!/bin/sh\nexec node "${join(tools, "pkg-config.js")}" "$@"\n`);
-  chmodSync(pkgConfig, 0o755);
+// The archiver only has to leave an archive where it was asked to: GNU style (`crs out.a …`)
+// or the MSVC style the Windows target uses (`-out:out.lib`).
+writeFileSync(
+  join(tools, "ar.js"),
+  `const fs = require("fs");
+const a = process.argv.slice(2);
+const out = a.map((x) => /^[-/]out:(.+)$/i.exec(x)?.[1]).find(Boolean) ?? (/^-?[a-zA-Z]+$/.test(a[0] ?? "") ? a[1] : undefined);
+if (out) fs.writeFileSync(out, "");
+`,
+);
+
+/** A one-word command that runs `script` with node: build scripts split a CC with spaces in it their own way. */
+function standIn(name, script) {
+  if (host === "windows") {
+    const path = join(tools, `${name}.cmd`);
+    writeFileSync(path, `@node "${join(tools, script)}" %*\r\n`);
+    return path;
+  }
+  const path = join(tools, name);
+  writeFileSync(path, `#!/bin/sh\nexec node "${join(tools, script)}" "$@"\n`);
+  chmodSync(path, 0o755);
+  return path;
 }
+const pkgConfig = standIn("pkg-config", "pkg-config.js");
+const cc = standIn("cc", "cc.js");
+const ar = standIn("ar", "ar.js");
 
 let failed = [];
 for (const system of wanted.length ? wanted : Object.keys(TARGETS)) {
@@ -63,8 +86,8 @@ for (const system of wanted.length ? wanted : Object.keys(TARGETS)) {
   const cargoArgs = ["clippy", ...jobs, "--all-targets"];
   if (system !== host) {
     const t = target.replace(/-/g, "_");
-    env[`CC_${t}`] = `node ${join(tools, "cc.js")}`;
-    env[`AR_${t}`] = "ar";
+    env[`CC_${t}`] = cc;
+    env[`AR_${t}`] = ar;
     env.PKG_CONFIG = pkgConfig;
     env.PKG_CONFIG_ALLOW_CROSS = "1";
     cargoArgs.push("--target", target);

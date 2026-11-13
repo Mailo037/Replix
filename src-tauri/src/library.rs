@@ -71,6 +71,41 @@ pub struct Draft {
     /// All sound together: 1 as recorded, up to 2 for twice as loud.
     #[serde(default = "full")]
     pub master_volume: f64,
+    /// Parts that play slower, in seconds of the clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub speeds: Vec<Speed>,
+    /// Words laid over the picture.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub texts: Vec<TextOverlay>,
+}
+
+/// A stretch of the clip that plays slower: 0.5 is half speed. Sound keeps its pitch.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct Speed {
+    pub start: f64,
+    pub end: f64,
+    pub factor: f64,
+}
+
+/// Words over the picture. The page draws them (in Replix's own font, with an outline) and
+/// keeps the drawing here, so an export lays the very same picture on top and needs no font.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TextOverlay {
+    pub text: String,
+    /// Where the middle of the text sits in the frame, 0 to 1 from the left and the top. The
+    /// frame is the 9:16 crop in that format, else the whole picture.
+    pub x: f64,
+    pub y: f64,
+    /// The letters' size as a share of the frame's height, as set in the editor.
+    pub size: f64,
+    /// The drawing's height as a share of the frame's height.
+    pub height: f64,
+    /// Shown from and to, in seconds of the clip.
+    pub start: f64,
+    pub end: f64,
+    /// The drawing, as a PNG data URL.
+    pub png: String,
 }
 
 fn full() -> f64 {
@@ -150,6 +185,9 @@ pub struct Meta {
     /// Brought in from elsewhere: the space limit leaves it alone, as it may be the only copy.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub imported: bool,
+    /// Words the player gave the clip ("win", "funny") to find it again. Written even when
+    /// empty, so taking the last one away reaches the page.
+    pub tags: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -695,6 +733,31 @@ pub fn tidy_markers(mut markers: Vec<Marker>, duration: f64) -> Vec<Marker> {
     markers
 }
 
+/// Tags longer than this are cut, and a clip keeps at most `MAX_TAGS` of them.
+const TAG_LENGTH: usize = 32;
+const MAX_TAGS: usize = 12;
+
+/// One tag as it is kept: spaces collapsed, no leading `#`, not too long. Empty if nothing is left.
+pub fn tidy_tag(tag: &str) -> String {
+    tag.trim().trim_start_matches('#').split_whitespace().collect::<Vec<_>>().join(" ").chars().take(TAG_LENGTH).collect()
+}
+
+/// `tags` with `add` put in and `remove` taken out, compared ignoring case. A tag that is
+/// there already keeps its spelling; new ones go at the end.
+pub fn change_tags(tags: &[String], add: &[String], remove: &[String]) -> Vec<String> {
+    let gone: Vec<String> = remove.iter().map(|t| tidy_tag(t).to_lowercase()).collect();
+    let mut out: Vec<String> = Vec::new();
+    for tag in tags.iter().chain(add).map(|t| tidy_tag(t)) {
+        let key = tag.to_lowercase();
+        if tag.is_empty() || gone.contains(&key) || out.iter().any(|t| t.to_lowercase() == key) {
+            continue;
+        }
+        out.push(tag);
+    }
+    out.truncate(MAX_TAGS);
+    out
+}
+
 /// Copies a video or picture from elsewhere into `<clips>/<folder>`, under its own name,
 /// and describes it. The original stays where it was. Copied under a hidden name first,
 /// so a scan never lists half a file.
@@ -898,6 +961,17 @@ mod tests {
         std::fs::write(&clip, b"changed").unwrap();
         assert!(!PROBE_FAILURES.recent(&clip), "a changed file is tried again");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn tags_are_tidied_and_kept_once() {
+        let had = vec!["Win".to_string()];
+        let add = ["  #clutch  play ".to_string(), "win".to_string(), "".to_string()];
+        assert_eq!(change_tags(&had, &add, &[]), ["Win", "clutch play"]);
+        assert_eq!(change_tags(&had, &[], &["WIN".to_string()]), Vec::<String>::new());
+        let many: Vec<String> = (0..20).map(|i| format!("t{i}")).collect();
+        assert_eq!(change_tags(&[], &many, &[]).len(), MAX_TAGS);
+        assert_eq!(tidy_tag(&"x".repeat(50)).len(), TAG_LENGTH);
     }
 
     #[test]

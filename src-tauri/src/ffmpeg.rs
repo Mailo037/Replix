@@ -157,6 +157,8 @@ pub struct MediaInfo {
     pub audio_titles: Vec<Option<String>>,
     /// Channels of each audio stream, in the same order.
     pub audio_channels: Vec<u32>,
+    /// Frames a second of the picture; 0 when unknown.
+    pub fps: f64,
 }
 
 #[derive(Deserialize)]
@@ -175,6 +177,7 @@ struct ProbeStream {
     width: Option<u32>,
     height: Option<u32>,
     channels: Option<u32>,
+    avg_frame_rate: Option<String>,
     #[serde(default)]
     tags: std::collections::HashMap<String, String>,
 }
@@ -195,7 +198,7 @@ pub fn probe(path: &Path) -> Result<MediaInfo> {
 /// Like `probe`, stopped as soon as `keep_going` says no.
 pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Result<MediaInfo> {
     let mut cmd = Command::new(tool("ffprobe"));
-    cmd.args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,channels:stream_tags=title,name,handler_name", "-of", "json"])
+    cmd.args(["-v", "error", "-show_entries", "format=duration:stream=codec_type,width,height,channels,avg_frame_rate:stream_tags=title,name,handler_name", "-of", "json"])
         .arg(path);
     let out = probe_output(cmd, PROBE_LIMIT, keep_going)?;
     let parsed: ProbeOut = serde_json::from_slice(&out)?;
@@ -212,6 +215,7 @@ pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Resul
             Some("video") if info.width == 0 => {
                 info.width = stream.width.unwrap_or(0);
                 info.height = stream.height.unwrap_or(0);
+                info.fps = stream.avg_frame_rate.as_deref().and_then(frame_rate).unwrap_or(0.0);
             }
             Some("audio") => {
                 info.audio_titles.push(track_title(&stream.tags));
@@ -221,6 +225,13 @@ pub fn probe_while(path: &Path, keep_going: &(dyn Fn() -> bool + Sync)) -> Resul
         }
     }
     Ok(info)
+}
+
+/// "60000/1001" as 59.94; "0/0" (unknown) as None.
+fn frame_rate(text: &str) -> Option<f64> {
+    let (num, den) = text.split_once('/').unwrap_or((text, "1"));
+    let (num, den): (f64, f64) = (num.parse().ok()?, den.parse().ok()?);
+    (num > 0.0 && den > 0.0).then(|| num / den)
 }
 
 /// Counts packets through the entire MPEG-TS selection, not just the initial probe window.

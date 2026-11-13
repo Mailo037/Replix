@@ -8,12 +8,14 @@ mod i18n;
 mod install;
 mod library;
 mod media;
+mod montage;
 mod pipe;
 mod recorder;
 mod settings;
 mod settings_sync;
 mod share;
 mod shell;
+mod sound;
 mod platform;
 
 use std::path::PathBuf;
@@ -223,6 +225,7 @@ pub fn run() {
             system::ffmpeg_setup,
             system::retry_ffmpeg,
             system::get_encoders,
+            system::get_codecs,
             system::list_apps,
             system::list_monitors,
             system::report_focus,
@@ -231,6 +234,7 @@ pub fn run() {
             system::toggle_session,
             system::add_marker,
             system::preview_toast,
+            system::preview_sound,
             system::app_icon,
             system::list_mics,
             system::start_mic_test,
@@ -240,6 +244,7 @@ pub fn run() {
             clips::save_draft,
             clips::rename_item,
             clips::set_favorite,
+            clips::tag_items,
             clips::set_markers,
             clips::delete_items,
             clips::restore_items,
@@ -258,6 +263,7 @@ pub fn run() {
             editing::first_editor_round,
             editing::cancel_export,
             editing::export_clip,
+            editing::combine_clips,
             editing::save_frame,
             editing::extract_track,
             hotkeys::hotkey_conflicts,

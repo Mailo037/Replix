@@ -14,7 +14,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use super::pipeline::{area_key, segment_name, BufferDir, Mask};
 use super::session;
 use crate::audio::{self, Track, TrackKind};
-use crate::encoder::{self, Encoder};
+use crate::encoder::{self, Codec, Encoder};
 use crate::ffmpeg;
 use crate::i18n::{tr, trf};
 use crate::library::{self, Kind, Meta, TrackMeta};
@@ -170,6 +170,8 @@ pub(super) struct SaveJob {
     /// For blacking out, which means encoding the picture again.
     pub encoder: &'static Encoder,
     pub kbps: u32,
+    /// The format the footage was recorded in, which the MP4 has to name.
+    pub format: Codec,
     /// When it was recorded, if that was not just now: a session that broke off earlier.
     pub recorded: Option<u64>,
     pub placeholder: Placeholder,
@@ -387,7 +389,7 @@ impl SaveJob {
             // One file, already in order: copied into an MP4 as it is.
             Footage::Live { file, .. } => {
                 let dir = file.parent().unwrap_or(Path::new("."));
-                let slots = remux(dir, Source::File(file), &tracks, None, joined, self.duration, self.fps)?;
+                let slots = remux(dir, Source::File(file), &tracks, None, joined, Stream { seconds: self.duration, fps: self.fps, format: self.format })?;
                 // A file that broke off does not say how long it is; the copy does.
                 let length = ffmpeg::probe(joined).map(|i| i.duration).ok().filter(|d| *d > 0.0);
                 return Ok(Rendered {
@@ -413,8 +415,7 @@ impl SaveJob {
                 &tracks,
                 trim,
                 out,
-                self.duration,
-                self.fps,
+                Stream { seconds: self.duration, fps: self.fps, format: self.format },
             )
         };
         if let Some(trim) = self.trim_to {
@@ -512,16 +513,24 @@ impl Source<'_> {
     }
 }
 
+/// The footage being copied into an MP4: how long it is, its frame rate (both for sizing the
+/// MP4's index) and the format its picture is in.
+#[derive(Clone, Copy)]
+struct Stream {
+    seconds: f64,
+    fps: u32,
+    format: Codec,
+}
+
 fn remux_segments(
     dir: &Path,
     list: &Path,
     tracks: &[(usize, &str)],
     trim: Option<(f64, f64)>,
     out: &Path,
-    seconds: f64,
-    fps: u32,
+    stream: Stream,
 ) -> Result<Vec<usize>> {
-    remux(dir, Source::Segments(list), tracks, trim, out, seconds, fps)
+    remux(dir, Source::Segments(list), tracks, trim, out, stream)
 }
 
 /// Remuxes without decoding audio. Recovery is only for MP4's missing sample-rate error;
@@ -532,11 +541,12 @@ fn remux(
     tracks: &[(usize, &str)],
     trim: Option<(f64, f64)>,
     out: &Path,
-    seconds: f64,
-    fps: u32,
+    stream: Stream,
 ) -> Result<Vec<usize>> {
+    let Stream { seconds, fps, format } = stream;
     let length = trim.map_or(seconds, |t| t.1);
-    let input = stream_input(&source.input(), tracks, trim);
+    let mut input = stream_input(&source.input(), tracks, trim);
+    input.extend(format.mp4_tag().iter().map(|a| a.to_string()));
     match write_mp4(dir, &input, out, moov_room(length, fps, tracks.len())) {
         Ok(()) => return Ok(tracks.iter().map(|t| t.0).collect()),
         Err(e) if e.to_string().contains("sample rate not set") => {
@@ -582,6 +592,7 @@ fn remux(
     ]
     .into();
     input.extend(stream_input(&source.input(), &kept, trim));
+    input.extend(format.mp4_tag().iter().map(|a| a.to_string()));
     write_mp4(dir, &input, out, moov_room(length, fps, kept.len()))?;
     Ok(kept.iter().map(|t| t.0).collect())
 }
@@ -675,6 +686,7 @@ fn black_out_args(
         args.extend(ffmpeg::name_track(k, name));
     }
     args.extend(encoder::args(encoder, kbps));
+    args.extend(encoder.format.mp4_tag().iter().map(|a| a.to_string()));
     args.extend(["-c:a".into(), "copy".into()]);
     if let Some(d) = desktop {
         args.extend([format!("-c:a:{d}"), "aac".into(), format!("-b:a:{d}"), "160k".into()]);
@@ -838,8 +850,7 @@ mod tests {
                 &tracks,
                 Some((skip, length)),
                 Path::new("new.mp4"),
-                6.0,
-                60,
+                Stream { seconds: 6.0, fps: 60, format: Codec::H264 },
             )
             .unwrap();
             assert_eq!(slots, vec![0, 1]);
@@ -968,7 +979,7 @@ mod tests {
         );
         for (name, trim) in [("whole.mp4", None), ("trim.mp4", Some((0.979, 5.0)))] {
             let slots =
-                remux_segments(&dir, list, &tracks, trim, Path::new(name), 8.0, 30).unwrap();
+                remux_segments(&dir, list, &tracks, trim, Path::new(name), Stream { seconds: 8.0, fps: 30, format: Codec::H264 }).unwrap();
             assert!(slots.is_empty());
             write_mp4(
                 &dir,
@@ -1042,8 +1053,7 @@ mod tests {
             &names,
             None,
             Path::new("saved.mp4"),
-            12.0,
-            30,
+            Stream { seconds: 12.0, fps: 30, format: Codec::H264 },
         )
         .unwrap();
         assert_eq!(slots, vec![1, 3]);
@@ -1447,7 +1457,7 @@ mod tests {
         wait("the file has data before it is closed", &|| std::fs::metadata(&file).is_ok_and(|m| m.len() > 100_000));
         let tracks = [(1, "Desktop"), (3, "Microphone")];
         let names = vec![Some("Desktop".to_string()), Some("Microphone".to_string())];
-        let slots = remux(&dir, Source::File(&file), &tracks, None, Path::new("broken.mp4"), 10.0, 30).unwrap();
+        let slots = remux(&dir, Source::File(&file), &tracks, None, Path::new("broken.mp4"), Stream { seconds: 10.0, fps: 30, format: Codec::H264 }).unwrap();
         assert_eq!(slots, vec![1, 3]);
         let broken = ffmpeg::probe(&dir.join("broken.mp4")).unwrap();
         assert!(broken.duration > 1.0, "what was on disk is kept: {}", broken.duration);
@@ -1456,13 +1466,13 @@ mod tests {
         let (closed, result) = std::sync::mpsc::channel();
         live.finish(move |clean| closed.send(clean).unwrap());
         assert!(result.recv_timeout(Duration::from_secs(60)).unwrap(), "FFmpeg closed the file cleanly");
-        remux(&dir, Source::File(&file), &tracks, None, Path::new("whole.mp4"), 10.0, 30).unwrap();
+        remux(&dir, Source::File(&file), &tracks, None, Path::new("whole.mp4"), Stream { seconds: 10.0, fps: 30, format: Codec::H264 }).unwrap();
         let whole = ffmpeg::probe(&dir.join("whole.mp4")).unwrap();
         assert!((whole.duration - 10.0).abs() < 0.3, "all five segments: {}", whole.duration);
         assert_eq!(whole.audio_titles, names);
         // The same picture as the segments joined the old way.
         std::fs::write(dir.join("list.txt"), (1..6).map(|i| segment_name(i) + "\n").collect::<String>()).unwrap();
-        remux_segments(&dir, Path::new("list.txt"), &tracks, None, Path::new("joined.mp4"), 10.0, 30).unwrap();
+        remux_segments(&dir, Path::new("list.txt"), &tracks, None, Path::new("joined.mp4"), Stream { seconds: 10.0, fps: 30, format: Codec::H264 }).unwrap();
         let video = |name: &str| {
             let out = Command::new("ffmpeg").current_dir(&dir).args(["-v", "error", "-i", name, "-map", "0:v", "-f", "md5", "-"]).output().unwrap();
             assert!(out.status.success());
@@ -1471,6 +1481,45 @@ mod tests {
         assert_eq!(video("whole.mp4"), video("joined.mp4"));
         assert_eq!(ffmpeg::empty_aac_streams(&file).unwrap(), Vec::<usize>::new());
         drop(buffer);
+    }
+
+    /// HEVC segments become an MP4 marked `hvc1`, which Apple's players need, without
+    /// encoding the picture again. Skipped where FFmpeg has no HEVC encoder to make them.
+    #[test]
+    fn hevc_segments_are_marked_hvc1() {
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let has_x265 = Command::new("ffmpeg")
+            .args(["-hide_banner", "-encoders"])
+            .output()
+            .is_ok_and(|o| String::from_utf8_lossy(&o.stdout).contains("libx265"));
+        if !has_x265 {
+            eprintln!("skipped: no libx265");
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("replix-hevc-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        run(
+            &dir,
+            &[
+                "-f", "lavfi", "-i", "testsrc2=size=320x180:rate=30", "-f", "lavfi", "-i", "sine=f=440:r=48000", "-t", "6",
+                "-map", "0:v", "-map", "1:a", "-c:v", "libx265", "-preset", "ultrafast", "-x265-params", "log-level=error",
+                "-force_key_frames", "expr:gte(t,n_forced*2)", "-c:a", "aac", "-f", "segment", "-segment_time", "2",
+                "-segment_format", "mpegts", "seg%06d.ts",
+            ],
+        );
+        std::fs::write(dir.join("list.txt"), "seg000000.ts\nseg000001.ts\n").unwrap();
+        let stream = Stream { seconds: 4.0, fps: 30, format: Codec::Hevc };
+        remux_segments(&dir, Path::new("list.txt"), &[(0, "Game")], None, Path::new("clip.mp4"), stream).unwrap();
+        let out = Command::new("ffprobe")
+            .current_dir(&dir)
+            .args(["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,codec_tag_string", "-of", "csv=p=0", "clip.mp4"])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&out.stdout).trim(), "hevc,hvc1");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

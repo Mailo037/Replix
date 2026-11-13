@@ -16,6 +16,9 @@ change that works on one system only is not done.
   and the tests on all three (`.github/workflows/ci.yml`); keep it green.
 - The tests pass on every system. A test that only makes sense on one system sits behind the
   same `#[cfg(...)]` as the code it tests; shared logic is tested without one.
+- The page has tests of its own: `npm test` (logic) and `npm run test:e2e` (the page in a
+  browser, with Tauri stood in for). A change to the page keeps both green; a new command
+  the page sends gets an answer in `tests/e2e/tauri.ts`.
 
 ### 2. System-specific code stays in its place
 

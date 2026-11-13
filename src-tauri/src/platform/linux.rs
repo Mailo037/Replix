@@ -585,3 +585,130 @@ pub fn icon_rgba(path: &str, size: u32) -> Option<(u32, u32, Vec<u8>)> {
     let image = tauri::image::Image::from_bytes(&bytes).ok()?;
     Some((image.width(), image.height(), image.rgba().to_vec()))
 }
+
+/// Plays a short WAV without waiting: through PulseAudio or PipeWire (`paplay` comes with
+/// pulseaudio-utils, which Replix needs anyway), else PipeWire's or ALSA's own player.
+pub fn play_sound(wav: &'static [u8], file: &std::path::Path) {
+    super::unix::play_file(&["paplay", "pw-play", "aplay"], wav, file);
+}
+
+/// Hotkeys through the desktop's GlobalShortcuts portal (KDE Plasma, GNOME 48 and newer,
+/// Hyprland). Under Wayland, Replix's own key grab goes through XWayland and only hears its
+/// keys while an XWayland window, such as most games, is in front; the portal hears them
+/// everywhere. The desktop may ask once whether to allow them, and may give other keys where
+/// the wished ones are taken. Without the portal, or outside Wayland, this does nothing and
+/// the key grab works as before. Called again with other keys, it lets go of the old ones;
+/// with none, of all.
+pub fn desktop_hotkeys(keys: Vec<super::DesktopHotkey>, pressed: std::sync::Arc<dyn Fn(&str) + Send + Sync>) {
+    type Running = (Vec<super::DesktopHotkey>, futures_channel::oneshot::Sender<()>);
+    static CURRENT: parking_lot::Mutex<Option<Running>> = parking_lot::const_mutex(None);
+    if !wayland() {
+        return;
+    }
+    let mut current = CURRENT.lock();
+    // Settings are saved often; the same keys keep the session the desktop already knows.
+    if current.as_ref().is_some_and(|(k, _)| *k == keys) {
+        return;
+    }
+    if let Some((_, stop)) = current.take() {
+        let _ = stop.send(());
+    }
+    if keys.is_empty() {
+        return;
+    }
+    let (stop, stopped) = futures_channel::oneshot::channel();
+    *current = Some((keys.clone(), stop));
+    tauri::async_runtime::spawn(async move {
+        if let Err(e) = portal_hotkeys(&keys, pressed, stopped).await {
+            log::info!("hotkeys through the desktop's portal are not available: {e}");
+        }
+    });
+}
+
+async fn portal_hotkeys(
+    keys: &[super::DesktopHotkey],
+    pressed: std::sync::Arc<dyn Fn(&str) + Send + Sync>,
+    mut stopped: futures_channel::oneshot::Receiver<()>,
+) -> ashpd::Result<()> {
+    use ashpd::desktop::global_shortcuts::{BindShortcutsOptions, GlobalShortcuts, NewShortcut};
+    use futures_util::future::{select, Either};
+    use futures_util::StreamExt;
+
+    // A program outside a sandbox says who it is, so the desktop can keep what was allowed.
+    if let Ok(id) = ashpd::AppID::try_from("app.replix") {
+        let _ = ashpd::register_host_app(id).await;
+    }
+    let portal = GlobalShortcuts::new().await?;
+    let session = portal.create_session(Default::default()).await?;
+    let triggers: Vec<Option<String>> = keys.iter().map(|k| xdg_trigger(&k.keys)).collect();
+    let shortcuts: Vec<NewShortcut> = keys
+        .iter()
+        .zip(&triggers)
+        .map(|(k, trigger)| NewShortcut::new(k.id.as_str(), k.description.as_str()).preferred_trigger(trigger.as_deref()))
+        .collect();
+    portal.bind_shortcuts(&session, &shortcuts, None, BindShortcutsOptions::default()).await?.response()?;
+    log::info!("hotkeys bound through the desktop's portal");
+    let activated = portal.receive_activated().await?;
+    let mut activated = std::pin::pin!(activated);
+    // Until Replix lets go of these keys, or the portal goes away.
+    while let Either::Left((Some(press), _)) = select(activated.next(), &mut stopped).await {
+        pressed(press.shortcut_id());
+    }
+    session.close().await
+}
+
+/// Replix's way of writing keys ("Alt+Shift+C") the way the XDG shortcuts spec writes them
+/// ("ALT+SHIFT+c"). None for a key it has no name for; the desktop then asks for one.
+fn xdg_trigger(keys: &str) -> Option<String> {
+    let mut parts: Vec<String> = Vec::new();
+    let mut key = None;
+    for part in keys.split('+').map(str::trim).filter(|p| !p.is_empty()) {
+        let modifier = match part.to_ascii_lowercase().as_str() {
+            "ctrl" | "control" | "cmdorctrl" | "commandorcontrol" => Some("CTRL"),
+            "alt" | "option" => Some("ALT"),
+            "shift" => Some("SHIFT"),
+            "super" | "meta" | "cmd" | "command" | "logo" => Some("LOGO"),
+            _ => None,
+        };
+        match modifier {
+            Some(m) => parts.push(m.into()),
+            None => key = Some(part),
+        }
+    }
+    let key = key?;
+    let named = match key {
+        k if k.len() == 1 && k.chars().all(|c| c.is_ascii_alphanumeric()) => k.to_ascii_lowercase(),
+        k if k.len() <= 3 && k.starts_with('F') && k[1..].parse::<u8>().is_ok_and(|n| (1..=24).contains(&n)) => k.into(),
+        k if k.starts_with("Numpad") && k.len() == 7 && k.ends_with(|c: char| c.is_ascii_digit()) => format!("KP_{}", &k[6..]),
+        "Space" => "space".into(),
+        "Enter" | "Return" => "Return".into(),
+        "Tab" | "Escape" | "Delete" | "Insert" | "Home" | "End" => key.into(),
+        "Backspace" => "BackSpace".into(),
+        "PageUp" => "Page_Up".into(),
+        "PageDown" => "Page_Down".into(),
+        "Up" | "ArrowUp" => "Up".into(),
+        "Down" | "ArrowDown" => "Down".into(),
+        "Left" | "ArrowLeft" => "Left".into(),
+        "Right" | "ArrowRight" => "Right".into(),
+        "PrintScreen" => "Print".into(),
+        _ => return None,
+    };
+    parts.push(named);
+    Some(parts.join("+"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hotkeys_are_written_as_the_shortcuts_spec_wants() {
+        assert_eq!(xdg_trigger("Alt+C").as_deref(), Some("ALT+c"));
+        assert_eq!(xdg_trigger("Ctrl+Shift+F10").as_deref(), Some("CTRL+SHIFT+F10"));
+        assert_eq!(xdg_trigger("Super+Space").as_deref(), Some("LOGO+space"));
+        assert_eq!(xdg_trigger("Alt+Numpad5").as_deref(), Some("ALT+KP_5"));
+        assert_eq!(xdg_trigger("Alt+PageUp").as_deref(), Some("ALT+Page_Up"));
+        assert_eq!(xdg_trigger("Alt"), None);
+        assert_eq!(xdg_trigger("Alt+Gibberish"), None);
+    }
+}

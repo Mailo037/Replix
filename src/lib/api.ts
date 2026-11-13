@@ -4,6 +4,8 @@ export type Kind = "clip" | "session" | "screenshot";
 export type TrackKind = "game" | "app" | "mic" | "desktop";
 export type Source = "game" | "screen" | "app";
 export type Quality = "low" | "medium" | "high";
+/** The format recordings are written in; exports are always H.264. */
+export type Codec = "h264" | "hevc";
 export type ToastPosition = "topLeft" | "topRight" | "bottomLeft" | "bottomRight";
 
 export interface TrackMeta {
@@ -38,6 +40,34 @@ export interface Draft {
   cropScale?: number;
   /** All sound together: 1 as recorded, up to 2. */
   masterVolume?: number;
+  /** Parts that play slower. */
+  speeds?: Speed[];
+  /** Words over the picture. */
+  texts?: TextOverlay[];
+}
+
+/** A stretch of the clip that plays slower: 0.5 is half speed. In seconds of the clip. */
+export interface Speed {
+  start: number;
+  end: number;
+  factor: number;
+}
+
+/** Words over the picture, drawn by the page; the export lays the same drawing on top. */
+export interface TextOverlay {
+  text: string;
+  /** Middle of the text in the frame (the 9:16 crop in that format), 0 to 1. */
+  x: number;
+  y: number;
+  /** Letter size as a share of the frame's height. */
+  size: number;
+  /** The drawing's height as a share of the frame's height. */
+  height: number;
+  /** Shown from and to, in seconds of the clip. */
+  start: number;
+  end: number;
+  /** The drawing as a PNG data URL. */
+  png: string;
 }
 
 export interface Item {
@@ -62,6 +92,8 @@ export interface Item {
   markers?: Marker[];
   /** Brought in from elsewhere; the space limit leaves it alone. */
   imported?: boolean;
+  /** Words given to the clip to find it again. */
+  tags?: string[];
 }
 
 /** A clip or session still being written; the library shows a placeholder for it. */
@@ -134,6 +166,7 @@ export interface Settings {
   quality: Quality;
   height: number;
   encoder: string;
+  codec: Codec;
   recordMic: boolean;
   micDevice: string | null;
   micVolume: number;
@@ -148,6 +181,8 @@ export interface Settings {
   launchAtStartup: boolean;
   closeToTray: boolean;
   showToast: boolean;
+  /** A short sound when a hotkey saves something. */
+  saveSound: boolean;
   toastPosition: ToastPosition;
   toastSize: "small" | "medium" | "large";
   profiles: Profile[];
@@ -263,6 +298,8 @@ export const api = {
   setSettings: (settings: Settings, revision: number) => invoke<number>("set_settings", { settings, revision }),
   getStatus: () => invoke<Status>("get_status"),
   getEncoders: () => invoke<EncoderOption[]>("get_encoders"),
+  /** The formats this PC can record in. */
+  getCodecs: () => invoke<Codec[]>("get_codecs"),
   listApps: () => invoke<AppWindow[]>("list_apps"),
   listMonitors: () => invoke<Monitor[]>("list_monitors"),
   listLibrary: () => invoke<Item[]>("list_library"),
@@ -282,6 +319,8 @@ export const api = {
   saveDraft: (id: string, title: string, draft: Draft) => inOrder(() => invoke<void>("save_draft", { id, title, draft })),
   renameItem: (id: string, title: string) => inOrder(() => invoke<void>("rename_item", { id, title })),
   setFavorite: (ids: string[], favorite: boolean) => inOrder(() => invoke<void>("set_favorite", { ids, favorite })),
+  /** Puts tags on clips and takes tags off them. */
+  tagItems: (ids: string[], add: string[], remove: string[]) => inOrder(() => invoke<void>("tag_items", { ids, add, remove })),
   setMarkers: (id: string, markers: Marker[]) => inOrder(() => invoke<void>("set_markers", { id, markers })),
   /** Copies videos and pictures (or the ones in a folder) into the library. */
   importFiles: (paths: string[]) => invoke<Imported>("import_files", { paths }),
@@ -296,6 +335,8 @@ export const api = {
     invoke<string>("export_clip", { id, title, request, ticket }),
   /** Tells Replix whether the page has the focus; its work ahead of time goes by this. */
   reportFocus: (focused: boolean) => invoke<void>("report_focus", { focused }),
+  /** Joins clips, oldest first, into a new clip; says its id. Progress comes as "export-progress" for `ticket`. */
+  combineClips: (ids: string[], title: string, ticket: number) => invoke<string>("combine_clips", { ids, title, ticket }),
   /** Stops an export, running or still waiting for its turn. */
   cancelExport: (ticket: number) => invoke<void>("cancel_export", { ticket }),
   saveFrame: (id: string, time: number) => invoke<string>("save_frame", { id, time }),
@@ -304,6 +345,7 @@ export const api = {
   toggleSession: () => invoke<void>("toggle_session"),
   addMarker: () => invoke<void>("add_marker"),
   previewToast: () => invoke<void>("preview_toast"),
+  previewSound: () => invoke<void>("preview_sound"),
   hotkeyConflicts: () => invoke<string[]>("hotkey_conflicts"),
   pauseHotkeys: (paused: boolean) => invoke<void>("pause_hotkeys", { paused }),
   extractTrack: (id: string, track: number, title: string, start: number, end: number) =>

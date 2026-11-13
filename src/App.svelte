@@ -62,7 +62,7 @@
         {#key page}
           <div class="page">
             {#if store.view.name === "library"}
-              <Library filter={store.view.filter} game={store.view.game} />
+              <Library filter={store.view.filter} game={store.view.game} tag={store.view.tag ?? null} />
             {:else if store.view.name === "editor"}
               <Editor id={store.view.id} />
             {:else}

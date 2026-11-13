@@ -5,6 +5,7 @@ use std::sync::atomic::Ordering;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, State};
 
+use crate::encoder::Codec;
 use crate::recorder::{Command, Status};
 use crate::{audio, install, media, own_thread, platform, AppState, FOCUSED};
 
@@ -30,9 +31,30 @@ pub struct EncoderOption {
     label: String,
 }
 
+/// The graphics cards (and the processor) that can record, as H.264 encoders; the format
+/// is chosen apart from them (`get_codecs`).
 #[tauri::command]
 pub fn get_encoders(state: State<AppState>) -> Vec<EncoderOption> {
-    state.recorder.encoders.lock().iter().map(|e| EncoderOption { id: e.id.into(), label: e.label.into() }).collect()
+    state
+        .recorder
+        .encoders
+        .lock()
+        .iter()
+        .filter(|e| e.format == Codec::H264)
+        .map(|e| EncoderOption { id: e.id.into(), label: e.label.into() })
+        .collect()
+}
+
+/// The formats recordings can be written in on this PC: H.264 always, HEVC where a
+/// graphics card encodes it. The page offers HEVC only if it can also play it.
+#[tauri::command]
+pub fn get_codecs(state: State<AppState>) -> Vec<Codec> {
+    let found = state.recorder.encoders.lock();
+    let mut codecs = vec![Codec::H264];
+    if found.iter().any(|e| e.format == Codec::Hevc) {
+        codecs.push(Codec::Hevc);
+    }
+    codecs
 }
 
 #[derive(Serialize)]
@@ -85,6 +107,12 @@ pub fn take_screenshot(state: State<AppState>) {
 #[tauri::command]
 pub fn preview_toast(app: AppHandle) {
     crate::shell::corner_toast(&app, &crate::i18n::tr("Notifications show up here"), &crate::i18n::tr("Hover to keep one on screen"));
+}
+
+/// Plays the sound a saved clip makes, as the settings turn it on.
+#[tauri::command]
+pub fn preview_sound(app: AppHandle) {
+    crate::sound::play(&app, crate::sound::Chime::Done);
 }
 
 #[tauri::command]
