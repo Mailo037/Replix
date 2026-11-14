@@ -15,4 +15,5 @@ edit("src-tauri/tauri.conf.json", (t) => t.replace(/"version": "[^"]+"/, `"versi
 edit("src-tauri/Cargo.toml", (t) => t.replace(/^version = "[^"]+"/m, `version = "${version}"`));
 edit("src-tauri/Cargo.lock", (t) => t.replace(/(name = "replix"\r?\nversion = )"[^"]+"/, `$1"${version}"`));
 
-console.log(`Version ${version}. Next: commit, then git tag v${version} && git push --follow-tags`);
+// --follow-tags only sends annotated tags, so the tag gets -a and a message.
+console.log(`Version ${version}. Next: commit, then git tag -a v${version} -m "Release ${version}" && git push --follow-tags`);
