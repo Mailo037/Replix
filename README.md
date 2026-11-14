@@ -48,9 +48,9 @@ Import videos and pictures with the button in the library, or drop files and fol
 
 ## Set it up once
 
-A short setup walks you through the clip length, what to record, the tracks and your microphone.
+A two-step setup asks what to record, how long a clip should be and whether to record your microphone, then shows the one key that saves a clip.
 
-![Setup step explaining audio tracks](docs/images/setup-tracks.png)
+![Setup: what to record, clip length and microphone](docs/images/setup-welcome.png)
 
 Every game can have its own clip length, frame rate, quality and microphone setting, or be left out entirely. A space limit moves the oldest clips to the recycle bin (the Trash on Linux and macOS); favorites, drafts and imported videos stay.
 

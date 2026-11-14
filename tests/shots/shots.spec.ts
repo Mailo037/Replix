@@ -249,12 +249,13 @@ test("settings", async ({ page }) => {
 });
 
 test("setup", async ({ page }) => {
-  // Without motion the frames of the welcome picture stand still where they line up.
+  // Without motion each step stands where it lands.
   await page.emulateMedia({ reducedMotion: "reduce" });
   await open(page, { onboarded: false });
-  await expect(page.getByRole("button", { name: "Let's set it up" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Never miss the moment" })).toBeVisible();
   await shoot(page, "setup-welcome");
-  await page.getByRole("button", { name: "Let's set it up" }).click();
-  for (let i = 0; i < 2; i++) await page.getByRole("button", { name: "Next", exact: true }).click();
-  await shoot(page, "setup-tracks");
+  await page.getByRole("button", { name: "Next", exact: true }).click();
+  await page.getByRole("button", { name: /Alt\s*\+\s*C/ }).click();
+  await expect(page.getByText("That's it.")).toBeVisible();
+  await shoot(page, "setup-key");
 });

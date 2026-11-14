@@ -1,39 +1,32 @@
 <script lang="ts">
-  import { onMount } from "svelte";
-  import { api, type AppWindow, type InputDevice, type Settings, type Source } from "../lib/api";
+  import { onDestroy, onMount, tick } from "svelte";
+  import { api, type AppWindow, type InputDevice, type Settings } from "../lib/api";
   import { appChoices } from "../lib/appIcons.svelte";
   import { lengthLabel } from "../lib/format";
-  import { t, tParts } from "../lib/i18n.svelte";
+  import { t } from "../lib/i18n.svelte";
   import { isWindows } from "../lib/platform";
   import { store } from "../lib/store.svelte";
   import Icon from "./Icon.svelte";
   import MicMeter from "./MicMeter.svelte";
-  import Buffer from "./onboarding/Buffer.svelte";
-  import Hotkeys from "./onboarding/Hotkeys.svelte";
-  import Keys from "./onboarding/Keys.svelte";
-  import Mic from "./onboarding/Mic.svelte";
-  import Ready from "./onboarding/Ready.svelte";
-  import Sources from "./onboarding/Sources.svelte";
-  import Tracks from "./onboarding/Tracks.svelte";
   import Segmented from "./Segmented.svelte";
   import Select from "./Select.svelte";
   import Switch from "./Switch.svelte";
 
-  // First start: one idea per step, each with its own picture.
-  const steps = ["welcome", "clip", "source", "tracks", "mic", "keys", "ready"] as const;
+  // First start, in two steps: what Replix keeps, then the one key that saves it.
+  // Everything else waits in Settings.
+  const steps = ["setup", "key"] as const;
   let step = $state(0);
   let mics = $state<InputDevice[]>([]);
   let apps = $state<AppWindow[]>([]);
 
   const s = $derived(store.settings!);
   const current = $derived(steps[step]);
-  const keys = (combo: string) => (combo ? combo.split("+") : [t("Not set")]);
   const micDevice = $derived(store.settings?.micDevice ?? null);
   const micOptions = $derived([
     { value: null, label: isWindows ? t("Windows default") : t("System default"), hint: mics.find((m) => m.default)?.name },
     ...mics.map((m) => ({ value: m.id as string | null, label: m.name })),
   ]);
-  const appOptions = $derived(appChoices(apps, s.appExe));
+  const clipKeys = $derived(s.hotkeys.clip ? s.hotkeys.clip.split("+") : [t("Not set")]);
 
   onMount(async () => {
     mics = await api.listMics();
@@ -43,10 +36,40 @@
     store.save({ ...s, ...patch });
   }
 
-  async function pickSource(source: Source) {
+  /** "One app" with none picked yet asks which one right away, as in Settings; it is recorded once picked. */
+  let appSelect = $state<Select<string | null>>();
+  let choosingApp = $state(false);
+  const pickingApp = $derived(s.source === "app" || choosingApp);
+  async function chooseSource(source: Settings["source"]) {
+    if (source === "app" && !s.appExe) {
+      choosingApp = true;
+      await tick();
+      appSelect?.show();
+      return;
+    }
+    choosingApp = false;
     update({ source });
-    if (source === "app") apps = await api.listApps();
   }
+  async function loadApps() {
+    apps = await api.listApps().catch(() => apps);
+  }
+  $effect(() => {
+    if (pickingApp) loadApps();
+  });
+
+  // Trying the key on the page shows what it does; the real one only acts in a game.
+  let tried = $state(false);
+  let pressed = $state(false);
+  let pressTimer: ReturnType<typeof setTimeout> | undefined;
+  function tryKeys() {
+    clearTimeout(pressTimer);
+    pressed = true;
+    pressTimer = setTimeout(() => {
+      pressed = false;
+      tried = true;
+    }, 140);
+  }
+  onDestroy(() => clearTimeout(pressTimer));
 
   function next() {
     if (step < steps.length - 1) step += 1;
@@ -73,171 +96,126 @@
       back();
     }
   }
-
-  const sources: { value: Source; title: string; text: string; icon: string }[] = $derived([
-    { value: "game", title: t("Games"), text: t("Starts by itself when a game is in front. Nothing else is recorded."), icon: "game" },
-    { value: "screen", title: t("Whole screen"), text: t("Everything on your main display."), icon: "desktop" },
-    { value: "app", title: t("One app"), text: t("Pick a program and Replix records only that."), icon: "app" },
-  ]);
 </script>
 
 <svelte:window onkeydown={onKey} />
 
 <section class="onboarding" aria-label={t("Set up Replix")}>
   <div class="frame">
-    <div class="stage">
-      {#key current}
-        <div class="scene">
-          {#if current === "welcome"}
-            <Buffer seconds={s.bufferSeconds} />
-          {:else if current === "clip"}
-            <Keys keys={keys(s.hotkeys.clip)} seconds={s.bufferSeconds} />
-          {:else if current === "source"}
-            <Sources source={s.source} />
-          {:else if current === "tracks"}
-            <Tracks />
-          {:else if current === "mic"}
-            <Mic denoise={s.micNoiseSuppression} on={s.recordMic} />
-          {:else if current === "keys"}
-            <Hotkeys
-              rows={[
-                { keys: keys(s.hotkeys.clip), icon: "clips", taken: store.conflicts.includes(s.hotkeys.clip) },
-                { keys: keys(s.hotkeys.screenshot), icon: "camera", taken: store.conflicts.includes(s.hotkeys.screenshot) },
-                { keys: keys(s.hotkeys.session), icon: "record", taken: store.conflicts.includes(s.hotkeys.session) },
-              ]}
-            />
-          {:else}
-            <Ready />
-          {/if}
-        </div>
-      {/key}
+    <div class="top">
+      <div class="progress" role="progressbar" aria-label={t("Setup")} aria-valuemin={1} aria-valuemax={steps.length} aria-valuenow={step + 1}>
+        {#each steps as name, i (name)}
+          <span class:done={i <= step}></span>
+        {/each}
+      </div>
+      {#if step < steps.length - 1}
+        <button type="button" class="skip" onclick={finish}>{t("Skip setup")}</button>
+      {/if}
     </div>
 
-    <div class="content">
-      <div class="top">
-        <div class="progress" role="progressbar" aria-label={t("Setup")} aria-valuemin={1} aria-valuemax={steps.length} aria-valuenow={step + 1}>
-          {#each steps as name, i (name)}
-            <span class:done={i <= step}></span>
-          {/each}
-        </div>
-        {#if step < steps.length - 1}
-          <button type="button" class="skip" onclick={finish}>{t("Skip setup")}</button>
-        {/if}
-      </div>
-
-      {#key current}
-        <div class="copy scroll">
-          {#if current === "welcome"}
+    {#key current}
+      <div class="copy scroll">
+        <div class="inner">
+          {#if current === "setup"}
             <h1>{t("Never miss the moment")}</h1>
             <p>{t("Replix quietly keeps the last few seconds of what you play. When something great happens, you keep it. Nothing to start, nothing to stop.")}</p>
-          {:else if current === "clip"}
-            <h1>{t("One key, and it's saved")}</h1>
-            <p>
-              {#each tParts("Press {combo} in any game. Replix saves what just happened, and the game keeps running.") as part}{#if part === "{combo}"}<kbd>{keys(s.hotkeys.clip).join(" + ")}</kbd>{:else}{part}{/if}{/each}
-            </p>
-            <div class="field">
-              <span class="label">{t("How far back?")}</span>
-              <Segmented
-                label={t("Clip length")}
-                value={s.bufferSeconds}
-                options={[15, 30, 60, 120].map((n) => ({ value: n, label: lengthLabel(n) }))}
-                onchange={(v) => update({ bufferSeconds: v })}
-              />
-            </div>
-          {:else if current === "source"}
-            <h1>{t("What should Replix watch?")}</h1>
-            <p>{t("Most people leave this on games. You can change it any time.")}</p>
-            <div class="choices" role="radiogroup" aria-label={t("What to record")}>
-              {#each sources as option (option.value)}
-                <button
-                  type="button"
-                  class="choice"
-                  role="radio"
-                  aria-checked={s.source === option.value}
-                  onclick={() => pickSource(option.value)}
-                >
-                  <span class="choice-icon"><Icon name={option.icon} /></span>
-                  <span class="choice-text"><b>{option.title}</b><span>{option.text}</span></span>
-                  <span class="mono mark">{s.source === option.value ? "[×]" : "[ ]"}</span>
-                </button>
-              {/each}
-            </div>
-            {#if s.source === "app"}
-              <Select
-                label={t("App to record")}
-                placeholder={t("Choose an open app…")}
-                value={s.appExe}
-                options={appOptions}
-                onopen={async () => (apps = await api.listApps())}
-                onchange={(v) => update({ appExe: v })}
-              />
-            {/if}
-          {:else if current === "tracks"}
-            <h1>{t("Every sound gets its own track")}</h1>
-            <p>{t("The game, Discord, Spotify and your mic are kept apart. Later you can mute your friends or the music and keep the rest. Any app that plays sound gets a track by itself.")}</p>
-          {:else if current === "mic"}
-            <h1>{t("Is your mic on?")}</h1>
-            <p>{t("Say something. If the bar moves, you're good.")}</p>
-            <div class="rows">
-              <div class="line">
-                <span>{t("Record my voice")}</span>
+            <div class="panel card">
+              <div class="row stack">
+                <span class="name">{t("Record")}</span>
+                <Segmented
+                  label={t("Record")}
+                  value={choosingApp ? "app" : s.source}
+                  options={[
+                    { value: "game", label: t("Games") },
+                    { value: "screen", label: t("Whole screen") },
+                    { value: "app", label: t("One app") },
+                  ]}
+                  onchange={chooseSource}
+                />
+                {#if pickingApp}
+                  <Select
+                    bind:this={appSelect}
+                    label={t("App to record")}
+                    placeholder={t("Choose an open app…")}
+                    value={s.source === "app" ? s.appExe : null}
+                    options={appChoices(apps, s.appExe)}
+                    onopen={loadApps}
+                    onchange={(exe) => {
+                      choosingApp = false;
+                      update({ source: "app", appExe: exe });
+                    }}
+                  />
+                {:else}
+                  <span class="note">
+                    {s.source === "game" ? t("Starts by itself when a game is in front. Nothing else is recorded.") : t("Everything on your main display.")}
+                  </span>
+                {/if}
+              </div>
+              <div class="row">
+                <span class="name">{t("Clip length")}</span>
+                <Segmented
+                  label={t("Clip length")}
+                  value={s.bufferSeconds}
+                  options={[15, 30, 60, 120].map((n) => ({ value: n, label: lengthLabel(n) }))}
+                  onchange={(v) => update({ bufferSeconds: v })}
+                />
+              </div>
+              <div class="row">
+                <span class="name">{t("Record my voice")}</span>
                 <Switch checked={s.recordMic} label={t("Record my voice")} onchange={(v) => update({ recordMic: v })} />
               </div>
               {#if s.recordMic}
-                <div class="line">
-                  <span>{t("Microphone")}</span>
+                <div class="row">
+                  <span class="name">{t("Microphone")}</span>
                   <div class="pick">
                     <Select label={t("Microphone")} value={s.micDevice} options={micOptions} onchange={(v) => update({ micDevice: v })} />
                   </div>
                 </div>
-                <div class="line">
-                  <span>{t("Noise suppression")}</span>
-                  <Switch
-                    checked={s.micNoiseSuppression}
-                    label={t("Noise suppression")}
-                    onchange={(v) => update({ micNoiseSuppression: v })}
-                  />
+                <div class="meter">
+                  <MicMeter device={micDevice} />
                 </div>
-                <MicMeter device={micDevice} />
               {/if}
             </div>
-          {:else if current === "keys"}
-            <h1>{t("Three keys to remember")}</h1>
-            <ul class="keylist">
-              <li><span>{t("Save a clip")}</span><kbd>{keys(s.hotkeys.clip).join(" + ")}</kbd></li>
-              <li><span>{t("Screenshot")}</span><kbd>{keys(s.hotkeys.screenshot).join(" + ")}</kbd></li>
-              <li><span>{t("Start or stop a session")}</span><kbd>{keys(s.hotkeys.session).join(" + ")}</kbd></li>
-            </ul>
+          {:else}
+            <h1>{t("One key, and it's saved")}</h1>
+            <p>{t("Press it in any game. Replix saves what just happened, and the game keeps running.")}</p>
+            <button type="button" class="keys" class:pressed class:tried disabled={!s.hotkeys.clip} onclick={tryKeys}>
+              {#each clipKeys as key, i (i)}
+                {#if i > 0}<span class="plus mono">+</span>{/if}
+                <span class="cap mono">{key}</span>
+              {/each}
+            </button>
+            <div class="result" role="status">
+              {#if tried}
+                <span class="saved">
+                  <span class="tick"><Icon name="check" size={14} /></span>
+                  {t("That's it. In a game, this saves a {length} clip.", { length: lengthLabel(s.bufferSeconds) })}
+                </span>
+              {:else if s.hotkeys.clip}
+                <span class="hint">{t("Click the keys to try it.")}</span>
+              {/if}
+            </div>
             {#if store.conflicts.length}
               <p class="warn">{t("{names} is taken by another program. Pick a different key in Settings.", { names: store.conflicts.join(", ") })}</p>
-            {:else}
-              <p>{t("Change them any time in Settings.")}</p>
             {/if}
-          {:else}
-            <h1>{t("You're all set")}</h1>
-            <p>{t("Start a game whenever you like. Replix waits in the tray and stays out of your way.")}</p>
-            <div class="rows">
-              <div class="line">
-                <span>{isWindows ? t("Start with Windows") : t("Start when you log in")}</span>
+            <div class="panel card">
+              <div class="row">
+                <span class="name">{isWindows ? t("Start with Windows") : t("Start when you log in")}</span>
                 <Switch checked={s.launchAtStartup} label={isWindows ? t("Start with Windows") : t("Start when you log in")} onchange={(v) => update({ launchAtStartup: v })} />
-              </div>
-              <div class="line">
-                <span>{t("Notifications in the corner")}</span>
-                <Switch checked={s.showToast} label={t("Notifications in the corner")} onchange={(v) => update({ showToast: v })} />
               </div>
             </div>
           {/if}
         </div>
-      {/key}
-
-      <div class="nav">
-        {#if step > 0}
-          <button type="button" class="btn ghost" onclick={back}>{t("Back")}</button>
-        {/if}
-        <button type="button" class="btn primary" onclick={next}>
-          {current === "welcome" ? t("Let's set it up") : current === "ready" ? t("Open my library") : t("Next")}
-        </button>
       </div>
+    {/key}
+
+    <div class="nav">
+      {#if step > 0}
+        <button type="button" class="btn ghost" onclick={back}>{t("Back")}</button>
+      {/if}
+      <button type="button" class="btn primary" onclick={next}>
+        {current === "key" ? t("Open my library") : t("Next")}
+      </button>
     </div>
   </div>
 </section>
@@ -252,33 +230,10 @@
     padding: 8px 24px 24px;
   }
   .frame {
-    container-type: size;
-    width: min(1060px, 100%);
-    height: min(600px, 100%);
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    gap: clamp(28px, 5vw, 64px);
-    align-items: stretch;
-  }
-  .stage {
-    position: relative;
-    align-self: center;
-    width: min(100%, 92cqh, 460px);
-    aspect-ratio: 1;
-    justify-self: end;
-    container-type: size;
-  }
-  .scene {
-    position: absolute;
-    inset: 0;
-    animation: scene 420ms var(--travel);
-  }
-  .content {
-    min-width: 0;
+    width: min(520px, 100%);
+    height: min(680px, 100%);
     display: flex;
     flex-direction: column;
-    padding: 12px 0;
-    max-width: 460px;
   }
   .top {
     display: flex;
@@ -317,9 +272,15 @@
     overflow-y: auto;
     display: flex;
     flex-direction: column;
-    gap: 14px;
-    padding-top: clamp(20px, 8cqh, 64px);
     animation: copy 360ms var(--travel);
+  }
+  /* Centred while it fits; scrolls from the top once it doesn't. */
+  .inner {
+    margin: auto 0;
+    padding: 24px 0 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
   }
   h1 {
     margin: 0;
@@ -331,7 +292,7 @@
   }
   p {
     margin: 0;
-    max-width: 44ch;
+    max-width: 46ch;
     color: var(--muted);
     font-size: 14px;
     line-height: 1.55;
@@ -340,108 +301,123 @@
   .warn {
     color: var(--red);
   }
-  kbd {
-    font-family: var(--mono);
-    font-size: 12.5px;
-    padding: 2px 7px;
-    border-radius: 10px;
-    background: var(--surface);
-    color: var(--ink);
-    white-space: nowrap;
-  }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+  .card {
     margin-top: 6px;
-  }
-  .label {
-    font-size: 12.5px;
-    color: var(--muted);
-  }
-  .choices {
+    padding: 4px 20px;
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    margin-top: 4px;
   }
-  .choice {
+  .row {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding: 9px 12px;
-    border: 0;
-    border-radius: var(--r-row);
-    background: var(--overlay);
-    text-align: left;
-    transition: background-color 160ms ease, box-shadow 160ms ease;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 10px 16px;
+    min-height: 56px;
+    padding: 8px 0;
   }
-  .choice:hover {
-    background: var(--surface);
+  .row + .row {
+    border-top: 1px solid var(--line);
   }
-  .choice[aria-checked="true"] {
-    background: var(--surface);
-    box-shadow: inset 0 0 0 1.5px var(--accent);
-  }
-  .choice-icon {
-    width: 32px;
-    height: 32px;
-    flex: none;
-    border-radius: 12px;
-    background: var(--raised);
-    color: var(--accent);
-    display: grid;
-    place-items: center;
-  }
-  .choice-text {
-    flex: 1;
-    min-width: 0;
-    display: flex;
+  .row.stack {
     flex-direction: column;
+    align-items: stretch;
+    padding: 14px 0;
   }
-  .choice-text span {
+  .name {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .note {
     font-size: 12.5px;
     color: var(--muted);
-  }
-  .mark {
-    font-size: 12px;
-    color: var(--ghost);
-  }
-  [aria-checked="true"] .mark {
-    color: var(--accent);
   }
   /* Grows for a long microphone name; the label beside it gives way. */
   .pick {
     flex: 0 1 auto;
-    min-width: min(260px, 65%);
+    min-width: min(240px, 100%);
     max-width: 65%;
   }
-  .rows {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    margin-top: 4px;
+  .meter {
+    padding: 0 0 16px;
   }
-  .line {
+  .keys {
+    align-self: flex-start;
+    margin-top: 10px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 16px;
-    min-height: 40px;
-  }
-  .keylist {
-    list-style: none;
-    margin: 4px 0 0;
+    gap: 12px;
     padding: 0;
-    display: flex;
-    flex-direction: column;
+    border: 0;
+    background: transparent;
+    color: var(--ink);
   }
-  .keylist li {
+  .keys:disabled {
+    cursor: default;
+  }
+  .cap {
+    display: grid;
+    place-items: center;
+    min-width: 64px;
+    height: 64px;
+    padding: 0 20px;
+    border-radius: 16px;
+    background: var(--surface);
+    box-shadow: inset 0 -4px 0 var(--black);
+    font-size: 20px;
+    transition:
+      transform 90ms ease,
+      box-shadow 90ms ease,
+      background-color 160ms ease;
+  }
+  .keys:not(:disabled):hover .cap {
+    background: var(--raised);
+  }
+  .keys.tried .cap {
+    background: var(--raised);
+    box-shadow:
+      inset 0 0 0 1.5px var(--accent),
+      inset 0 -4px 0 var(--black);
+  }
+  .keys.pressed .cap {
+    transform: translateY(3px);
+    box-shadow:
+      inset 0 0 0 1.5px var(--accent),
+      inset 0 -1px 0 var(--black);
+  }
+  .plus {
+    font-size: 18px;
+    color: var(--ghost);
+  }
+  .result {
+    min-height: 40px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    min-height: 48px;
-    border-bottom: 1px solid var(--line);
+  }
+  .hint {
+    font-size: 12.5px;
+    color: var(--ghost);
+  }
+  .saved {
+    display: inline-flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 16px 8px 8px;
+    border-radius: 20px;
+    background: var(--surface);
+    font-size: 13.5px;
+    font-weight: 600;
+    animation: pop 300ms var(--travel);
+  }
+  .tick {
+    width: 24px;
+    height: 24px;
+    flex: none;
+    border-radius: 12px;
+    display: grid;
+    place-items: center;
+    background: var(--accent);
+    color: var(--on-accent);
   }
   .nav {
     display: flex;
@@ -452,22 +428,25 @@
   .nav .btn.primary {
     min-width: 120px;
   }
-  @keyframes scene {
-    from {
-      opacity: 0;
-      transform: scale(0.97);
-    }
-  }
   @keyframes copy {
     from {
       opacity: 0;
       transform: translateY(10px);
     }
   }
+  @keyframes pop {
+    from {
+      opacity: 0;
+      transform: translateY(6px) scale(0.96);
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
-    .scene,
-    .copy {
+    .copy,
+    .saved {
       animation: none;
+    }
+    .cap {
+      transition: none;
     }
   }
 </style>
