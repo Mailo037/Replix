@@ -6,6 +6,8 @@
  * so a handle on a lane does not also move the playhead.
  */
 export function follow(e: PointerEvent, move: (ev: PointerEvent) => void, opts: { now?: boolean; stop?: boolean } = {}) {
+  // Only the main button drags; the right one opens the timeline's menu where it is.
+  if (e.button !== 0) return;
   e.preventDefault();
   if (opts.stop) e.stopPropagation();
   const target = e.currentTarget as HTMLElement;

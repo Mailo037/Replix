@@ -120,7 +120,9 @@
     font-weight: 600;
     text-align: left;
   }
-  .marker-remove:hover {
-    background: var(--hover);
+  .marker-remove:hover,
+  .marker-remove:focus-visible {
+    background: var(--menu-point);
+    outline: none;
   }
 </style>

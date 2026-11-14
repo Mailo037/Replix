@@ -504,7 +504,7 @@
   .screen:focus-visible,
   .app:hover,
   .app:focus-visible {
-    background: var(--surface);
+    background: var(--menu-point);
   }
   .source-icon,
   .app-icon {

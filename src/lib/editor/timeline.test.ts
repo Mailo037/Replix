@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { joinAt, keptLength, nextSpeed, partAt, partsOf, playLength, putBack, rulerLabel, rulerTicks, speedAt, speedLabel, withSpeed, withSplit, type Range } from "./timeline";
+import { addRange, coveredBy, inRanges, joinAt, keptLength, nextSpeed, partAt, partsOf, playLength, putBack, removeRange, rulerLabel, rulerTicks, speedAt, speedLabel, withSpeed, withSplit, type Range } from "./timeline";
 
 describe("partsOf", () => {
   it("is one part without splits", () => {
@@ -98,5 +98,36 @@ describe("slow parts", () => {
   it("go normal, half, a quarter and back", () => {
     expect([1, 0.5, 0.25].map(nextSpeed)).toEqual([0.5, 0.25, 1]);
     expect([1, 0.5, 0.25].map(speedLabel)).toEqual(["1×", "½×", "¼×"]);
+  });
+});
+
+describe("silent stretches", () => {
+  it("join when they overlap or touch, and come apart again", () => {
+    let r: Range[] = addRange([], [2, 4]);
+    r = addRange(r, [6, 8]);
+    r = addRange(r, [4, 5]);
+    expect(r).toEqual([
+      [2, 5],
+      [6, 8],
+    ]);
+    expect(addRange(r, [1, 9])).toEqual([[1, 9]]);
+    // A part in the middle taken back cuts the stretch in two.
+    expect(removeRange([[1, 9]], [3, 4])).toEqual([
+      [1, 3],
+      [4, 9],
+    ]);
+    expect(removeRange([[1, 9]], [0, 10])).toEqual([]);
+  });
+
+  it("say what they take in", () => {
+    const r: Range[] = [
+      [1, 3],
+      [5, 6],
+    ];
+    expect(inRanges(r, 2)).toBe(true);
+    expect(inRanges(r, 3)).toBe(false);
+    expect(inRanges(undefined, 2)).toBe(false);
+    expect(coveredBy(r, [1, 3])).toBe(true);
+    expect(coveredBy(r, [2, 4])).toBe(false);
   });
 });

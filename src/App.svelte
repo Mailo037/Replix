@@ -2,7 +2,6 @@
   import { onMount } from "svelte";
   import { raster } from "./lib/ascii";
   import { store } from "./lib/store.svelte";
-  import { ticker } from "./lib/ticker.svelte";
   import Editor from "./components/Editor.svelte";
   import FfmpegSetup from "./components/FfmpegSetup.svelte";
   import Library from "./components/Library.svelte";
@@ -15,9 +14,10 @@
   import { importPaths } from "./lib/importing";
   import { t } from "./lib/i18n.svelte";
 
-  const field = raster();
-  // The field drifts up one pixel every second and a half.
-  const drift = ticker(1500);
+  /** Lines in the field, each 16 px high: the field is taller than the space it fills. */
+  const ROWS = 34;
+  // The field twice over: it drifts up by one field and starts again, with no seam.
+  const field = raster(260, ROWS).repeat(2);
   let error = $state<string | null>(null);
 
   /** Files from Explorer are being dragged over the window. */
@@ -48,8 +48,8 @@
 </script>
 
 <div class="shell">
-  <!-- Moved, not laid out again: the drift costs the page no layout and no repaint. -->
-  <div class="raster" aria-hidden="true"><pre style:transform="translateY(-{drift.n % 16}px)">{field}</pre></div>
+  <!-- Moved by the compositor, smoothly: the drift costs the page no layout and no repaint. -->
+  <div class="raster" aria-hidden="true"><pre style:--field="{ROWS * 16}px" style:--drift="{ROWS * 16 * 1.5}s">{field}</pre></div>
 
   <TitleBar />
 
@@ -144,6 +144,18 @@
     line-height: 16px;
     color: var(--ghost);
     will-change: transform;
+    /* Up by one field in a steady glide, a pixel every second and a half, then from the
+       start again, which looks the same. Reduced motion keeps it still. */
+    animation: drift var(--drift) linear infinite;
+  }
+  @keyframes drift {
+    to {
+      transform: translateY(calc(-1 * var(--field)));
+    }
+  }
+  /* Without the focus, perhaps beside a game, it stands still and the page draws nothing. */
+  :global(.resting) .raster pre {
+    animation-play-state: paused;
   }
   .body {
     position: relative;

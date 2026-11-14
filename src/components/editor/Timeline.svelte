@@ -1,12 +1,12 @@
 <script lang="ts">
   import type { Snippet } from "svelte";
-  import { follow, wheel } from "../../lib/editor/actions";
+  import { follow, timeAt, wheel } from "../../lib/editor/actions";
   import type { EditorSession } from "../../lib/editor/session.svelte";
   import { t } from "../../lib/i18n.svelte";
   import { tip } from "../../lib/tooltip";
   import MarkerMenu from "./MarkerMenu.svelte";
   import Ruler from "./Ruler.svelte";
-  import TrackMenu from "./TrackMenu.svelte";
+  import TimelineMenu from "./TimelineMenu.svelte";
   import TrackRow from "./TrackRow.svelte";
   import VideoLane from "./VideoLane.svelte";
 
@@ -36,8 +36,8 @@
 
   /** The marker being named, and where its panel opened. */
   let markerMenu = $state<{ at: number; x: number; y: number } | null>(null);
-  /** The right-click menu of an audio track, where it opened. */
-  let trackMenu = $state<{ i: number; x: number; y: number } | null>(null);
+  /** The right-click menu: the time and the track or text it was opened on, and where. */
+  let menu = $state<{ at: number | null; track: number | null; text: number | null; x: number; y: number } | null>(null);
 
   // A new clip, or undo bringing back other markers, closes the panel of one that is gone.
   $effect(() => {
@@ -98,9 +98,28 @@
     markerMenu = { at, x: Math.max(8, Math.min(r.left - 8, innerWidth - 268)), y: Math.min(r.bottom + 6, innerHeight - 190) };
   }
 
-  function openTrackMenu(i: number, e: MouseEvent) {
+  /**
+   * Right-click anywhere on the timeline: the menu works at the time under the pointer, with
+   * the entries of the audio track or text it was on. A marker opens its own panel instead.
+   */
+  function openMenu(e: MouseEvent) {
+    if (e.defaultPrevented || !(e.target instanceof Element)) return;
+    const lane = e.target.closest<HTMLElement>(".lane");
+    const row = e.target.closest<HTMLElement>("[data-track]");
+    if (!lane && !row) return;
     e.preventDefault();
-    trackMenu = { i, x: Math.min(e.clientX, innerWidth - 270), y: Math.min(e.clientY, innerHeight - 150) };
+    // From the keyboard (the menu key) there is no pointer: the playhead's time, by the lane.
+    const keyboard = e.clientX === 0 && e.clientY === 0;
+    const box = (lane ?? row)!.getBoundingClientRect();
+    const at = !lane ? null : keyboard ? ed.current : timeAt(lane, e.clientX, ed.duration);
+    const bar = e.target.closest<HTMLElement>("[data-text-bar]");
+    menu = {
+      at,
+      track: row ? Number(row.dataset.track) : null,
+      text: bar ? Number(bar.dataset.textBar) : null,
+      x: keyboard ? box.left + box.width * (ed.pct(ed.current) / 100) : e.clientX,
+      y: keyboard ? box.bottom + 4 : e.clientY,
+    };
   }
 
   function restoreTracks() {
@@ -130,7 +149,7 @@
     {/if}
     {@render toolbar()}
 
-    <div class="tracks" use:wheel={scrub}>
+    <div class="tracks" role="group" aria-label={t("Timeline")} use:wheel={scrub} oncontextmenu={openMenu}>
       <Ruler {ed} onmarkermenu={openMarkerMenu} />
       <VideoLane {ed} />
       {@render lanes?.()}
@@ -138,7 +157,7 @@
       <div class="audio-rows scroll" bind:this={rows} style:max-height="min({rowsHeight}px, max({ROW - 4}px, 100vh - 400px))">
         {#each data.tracks as track, i (i)}
           {#if ed.edits[i] && !ed.edits[i].removed}
-            <TrackRow {ed} {i} {track} onmenu={openTrackMenu} />
+            <TrackRow {ed} {i} {track} />
           {/if}
         {/each}
       </div>
@@ -154,8 +173,8 @@
       {#if markerMenu}
         <MarkerMenu {ed} {...markerMenu} onclose={() => (markerMenu = null)} />
       {/if}
-      {#if trackMenu && data.tracks[trackMenu.i]}
-        <TrackMenu {ed} {...trackMenu} onclose={() => (trackMenu = null)} />
+      {#if menu}
+        <TimelineMenu {ed} {...menu} onclose={() => (menu = null)} />
       {/if}
 
       <div class="overlay" aria-hidden="true">

@@ -11,12 +11,7 @@
   import Waveform from "../Waveform.svelte";
 
   /** One audio track: mute, volume, its waveform and where in the clip it is heard. */
-  let {
-    ed,
-    i,
-    track,
-    onmenu,
-  }: { ed: EditorSession; i: number; track: EditorTrack; onmenu: (i: number, e: MouseEvent) => void } = $props();
+  let { ed, i, track }: { ed: EditorSession; i: number; track: EditorTrack } = $props();
 
   const edit = $derived(ed.edits[i]);
   const name = $derived(trackName(track));
@@ -38,13 +33,8 @@
       (ev) => {
         const at = timeAt(lane, ev.clientX, duration);
         const edit = ed.edits[i];
-        if (side === "start") {
-          const v = Math.min(at, (edit.end ?? duration) - 0.2);
-          edit.start = v <= 0.05 ? undefined : v;
-        } else {
-          const v = Math.max(at, (edit.start ?? 0) + 0.2);
-          edit.end = v >= duration - 0.05 ? undefined : v;
-        }
+        if (side === "start") ed.setTrackStart(i, at);
+        else ed.setTrackEnd(i, at);
         ed.seek(side === "start" ? (edit.start ?? 0) : (edit.end ?? duration));
       },
       { stop: true },
@@ -52,7 +42,8 @@
   }
 </script>
 
-<div class="row" class:off={!edit.enabled} role="group" aria-label={name} oncontextmenu={(e) => onmenu(i, e)}>
+<!-- Right-click opens the timeline's menu with this track's own entries (data-track). -->
+<div class="row" class:off={!edit.enabled} role="group" aria-label={name} data-track={i}>
   <div class="head">
     <button
       type="button"
@@ -85,6 +76,11 @@
   <div class="lane audio-lane" role="presentation" onpointerdown={scrub}>
     <Waveform id={ed.id} track={i} duration={ed.duration} muted={!edit.enabled} />
     {#if from > 0}<span class="track-dim" style:left="0" style:width="{ed.pct(from)}%"></span>{/if}
+    {#each edit.silent ?? [] as [a, b] (a)}
+      <span class="track-silent" style:left="{ed.pct(a)}%" style:width="{ed.pct(b) - ed.pct(a)}%" aria-hidden="true">
+        <Icon name="mute" size={12} />
+      </span>
+    {/each}
     {#if to < ed.duration}<span class="track-dim" style:left="{ed.pct(to)}%" style:right="0"></span>{/if}
     <button
       type="button"
@@ -144,6 +140,18 @@
     top: 0;
     bottom: 0;
     background: rgb(10 10 9 / 0.7);
+    pointer-events: none;
+  }
+  /* Taken out of this track alone: hatched, with the mute sign where there is room. */
+  .track-silent {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: grid;
+    place-items: center;
+    overflow: hidden;
+    background: repeating-linear-gradient(-45deg, rgb(10 10 9 / 0.82) 0 5px, rgb(10 10 9 / 0.55) 5px 10px);
+    color: var(--ghost);
     pointer-events: none;
   }
   .track-handle {

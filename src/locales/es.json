@@ -645,5 +645,20 @@
   "The session a few seconds ago": "La sesión hace unos segundos",
   "The session could not be saved": "No se pudo guardar la sesión",
   "Waiting for other work to finish": "Esperando a que termine otro trabajo",
-  "Your markers are on its timeline.": "Tus marcadores están en su línea de tiempo."
+  "Your markers are on its timeline.": "Tus marcadores están en su línea de tiempo.",
+  "{name} ends here": "{name} termina aquí",
+  "{name} starts here": "{name} empieza aquí",
+  "Add text here": "Añadir texto aquí",
+  "At {time}": "En {time}",
+  "Bring {name} back in this part": "Volver a oír {name} en esta parte",
+  "Edit text": "Editar texto",
+  "End the clip here": "Terminar el clip aquí",
+  "Play from here": "Reproducir desde aquí",
+  "Play this part at {speed}": "Reproducir esta parte a {speed}",
+  "Put this part back": "Recuperar esta parte",
+  "Remove this part": "Quitar esta parte",
+  "Silence {name} in this part": "Silenciar {name} en esta parte",
+  "Split here": "Dividir aquí",
+  "Start the clip here": "Empezar el clip aquí",
+  "Timeline": "Línea de tiempo"
 }

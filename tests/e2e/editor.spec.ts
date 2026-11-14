@@ -197,3 +197,36 @@ test("full screen has its own controls: scrub, markers and the player's volume",
   const [request] = await calls(page, "export_clip");
   expect(request.args.request).toMatchObject({ masterVolume: 1 });
 });
+
+test("right-click on the timeline splits there and silences one track in a part", async ({ page }) => {
+  await openEditor(page);
+  /** Right-clicks a lane at a share of its width. */
+  const rightClick = async (lane: ReturnType<Page["locator"]>, share: number) => {
+    const box = (await lane.boundingBox())!;
+    await page.mouse.click(box.x + box.width * share, box.y + box.height / 2, { button: "right" });
+  };
+  const video = page.getByRole("slider", { name: "Position" });
+  await rightClick(video, 0.5);
+  const menu = page.getByRole("menu", { name: "At 0:03.0" });
+  await expect(menu).toBeVisible();
+  // The menu's first entry has the keyboard; arrows move, Escape closes.
+  await expect(menu.getByRole("menuitem", { name: "Play from here" })).toBeFocused();
+  await menu.getByRole("menuitem", { name: /Split here/ }).click();
+  await expect(menu).toHaveCount(0);
+  await expect(page.locator(".length")).toContainText("2 of 2 parts");
+
+  // Discord, in the second part only.
+  const discord = page.getByRole("group", { name: "Discord" }).locator(".audio-lane");
+  await rightClick(discord, 0.75);
+  await page.getByRole("menuitem", { name: "Silence Discord in this part" }).click();
+  await expect(page.getByRole("group", { name: "Discord" }).locator(".track-silent")).toHaveCount(1);
+  await rightClick(discord, 0.75);
+  await expect(page.getByRole("menuitem", { name: "Bring Discord back in this part" })).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("menu")).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Export", exact: true }).click();
+  const [request] = await calls(page, "export_clip");
+  const tracks = (request.args.request as { tracks: { silent?: number[][] }[] }).tracks;
+  expect(tracks.map((t) => t.silent)).toEqual([undefined, [[3, 6]], undefined]);
+});

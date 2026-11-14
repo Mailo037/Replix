@@ -17,6 +17,9 @@
   --red: #ff8a8a;
   --accent: #c5f26b;
   --on-accent: #17111f;
+  /* The entry a menu or list points at (pointer or keys): a touch of the accent over the
+     menu's own colour, clearly lit on every theme and with every accent. */
+  --menu-point: color-mix(in srgb, var(--accent) 16%, var(--raised));
 
   /* Sticker colours: labels, game initials. Dark text on all of them. */
   --pink: #ff9ec0;
@@ -315,20 +318,30 @@ h3 {
   position: fixed;
   inset: auto;
   margin: 0;
-  max-width: 280px;
-  padding: 6px 12px;
+  width: max-content;
+  max-width: min(320px, calc(100vw - 16px));
+  padding: 6px 11px;
   border: 0;
-  border-radius: 12px;
-  background: var(--raised);
+  border-radius: 11px;
+  /* A step lighter than menus and panels, so it stands apart over them. */
+  background: var(--hover);
   color: var(--ink);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 600;
   line-height: 1.35;
+  text-wrap: balance;
   box-shadow:
-    0 0 0 1px rgb(255 255 255 / 0.05),
+    0 0 0 1px rgb(255 255 255 / 0.06),
     0 8px 24px rgb(0 0 0 / 0.45);
   pointer-events: none;
   overflow: visible;
+}
+
+/* After " · ": the key, or how it works. Quieter, and on its own line only when it must. */
+.tooltip-more {
+  margin-left: 8px;
+  font-weight: 500;
+  color: var(--muted);
 }
 
 .tooltip {

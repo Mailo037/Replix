@@ -23,6 +23,8 @@ export interface TrackEdit {
   end?: number;
   /** Taken out of the clip: not shown and not exported. */
   removed?: boolean;
+  /** Stretches where this track is silent, in seconds of the clip, while the others play on. */
+  silent?: [number, number][];
 }
 
 export interface Draft {

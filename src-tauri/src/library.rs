@@ -44,6 +44,10 @@ pub struct TrackEdit {
     /// Taken out of the clip in the editor: not shown and not exported.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub removed: bool,
+    /// Stretches where this track is silent, in seconds of the clip: a part of it taken out
+    /// while the other tracks play on.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub silent: Vec<[f64; 2]>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

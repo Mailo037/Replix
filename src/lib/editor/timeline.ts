@@ -59,6 +59,30 @@ export function joinAt(parts: Part[], splits: number[], cuts: Range[], at: numbe
   return { splits: nextSplits, cuts };
 }
 
+/** The ranges with `[a, b]` added; ones that overlap or touch become one. */
+export function addRange(ranges: Range[], [a, b]: Range): Range[] {
+  const out: Range[] = [];
+  let [from, to] = [a, b];
+  for (const [x, y] of ranges) {
+    if (y < from - EPS || x > to + EPS) out.push([x, y]);
+    else [from, to] = [Math.min(from, x), Math.max(to, y)];
+  }
+  return [...out, [from, to] as Range].sort((p, q) => p[0] - q[0]);
+}
+
+/** The ranges with `[a, b]` taken out of them; a range around it is cut in two. */
+export function removeRange(ranges: Range[], [a, b]: Range): Range[] {
+  return ranges
+    .flatMap(([x, y]): Range[] => (y <= a + EPS || x >= b - EPS ? [[x, y]] : ([[x, a], [b, y]] as Range[])))
+    .filter(([x, y]) => y - x > EPS);
+}
+
+/** Whether `t` lies in one of the ranges. */
+export const inRanges = (ranges: Range[] | undefined, t: number) => !!ranges?.some(([a, b]) => t >= a - EPS && t < b - EPS);
+
+/** Whether the ranges together take in the whole of `[a, b]`. */
+export const coveredBy = (ranges: Range[] | undefined, [a, b]: Range) => !!ranges?.some((r) => covers(r, { start: a, end: b }));
+
 /** A slower stretch, in seconds of the original. */
 export interface Slow {
   start: number;

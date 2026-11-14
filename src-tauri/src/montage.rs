@@ -66,6 +66,7 @@ fn starting_edit(defaults: &[TrackDefault], track: &crate::library::TrackMeta) -
         start: None,
         end: None,
         removed: false,
+        silent: Vec::new(),
     }
 }
 
@@ -217,7 +218,7 @@ mod tests {
         let trimmed = Draft {
             trim_start: 1.0,
             trim_end: 3.0,
-            tracks: vec![TrackEdit { enabled: true, volume: 1.0, start: None, end: None, removed: false }],
+            tracks: vec![TrackEdit { enabled: true, volume: 1.0, start: None, end: None, removed: false, silent: Vec::new() }],
             cuts: Vec::new(),
             splits: Vec::new(),
             vertical: false,

@@ -4,6 +4,7 @@
   import { api, type Draft, type Marker, type Preparing as Step, type Preset } from "../lib/api";
   import { History } from "../lib/editor/history.svelte";
   import { EditorSession } from "../lib/editor/session.svelte";
+  import { inRanges } from "../lib/editor/timeline";
   import { currentRound, endEditorRound } from "../lib/editorRound.svelte";
   import { t } from "../lib/i18n.svelte";
   import { share } from "../lib/share";
@@ -151,7 +152,8 @@
       if (!audio) return;
       const edit = ed.edits[i];
       // Outside its own start and end the track is silent, as it will be in the export.
-      const heard = edit?.enabled && ed.current >= (edit.start ?? 0) && ed.current <= (edit.end ?? Infinity);
+      const heard =
+        edit?.enabled && ed.current >= (edit.start ?? 0) && ed.current <= (edit.end ?? Infinity) && !inRanges(edit.silent, ed.current);
       // The preview can't go above full volume; the export can. The player's own volume
       // (full screen) only changes what is heard here.
       audio.volume = heard ? Math.min(1, edit.volume * ed.masterVolume) * ed.hearing : 0;

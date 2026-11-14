@@ -45,4 +45,4 @@ git tag v0.2.0
 git push --follow-tags
 ```
 
-The release workflow builds the Windows installer, the Linux AppImage, .deb and .rpm, and the macOS .dmg for Apple Silicon and Intel, publishes them on GitHub and uploads `latest.json`, which installed copies check for updates (Windows, the AppImage and the macOS app update themselves; a .deb or .rpm is updated by installing the new package). It needs the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.
+The release workflow builds the Windows installer, the Linux AppImage, .deb and .rpm, and the macOS .dmg for Apple Silicon and Intel, publishes them on GitHub with `SHA256SUMS.txt` (the SHA-256 of every file) and uploads `latest.json`, which installed copies check for updates (Windows, the AppImage and the macOS app update themselves; a .deb or .rpm is updated by installing the new package). It needs the repository secrets `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`.

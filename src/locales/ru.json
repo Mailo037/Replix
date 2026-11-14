@@ -637,5 +637,20 @@
   "The session a few seconds ago": "Сессия несколько секунд назад",
   "The session could not be saved": "Не удалось сохранить сессию",
   "Waiting for other work to finish": "Ожидание окончания другой работы",
-  "Your markers are on its timeline.": "Ваши метки на её шкале времени."
+  "Your markers are on its timeline.": "Ваши метки на её шкале времени.",
+  "{name} ends here": "{name} заканчивается здесь",
+  "{name} starts here": "{name} начинается здесь",
+  "Add text here": "Добавить текст здесь",
+  "At {time}": "На {time}",
+  "Bring {name} back in this part": "Вернуть {name} в этой части",
+  "Edit text": "Изменить текст",
+  "End the clip here": "Закончить клип здесь",
+  "Play from here": "Воспроизвести отсюда",
+  "Play this part at {speed}": "Воспроизвести эту часть на {speed}",
+  "Put this part back": "Вернуть эту часть",
+  "Remove this part": "Удалить эту часть",
+  "Silence {name} in this part": "Заглушить {name} в этой части",
+  "Split here": "Разрезать здесь",
+  "Start the clip here": "Начать клип здесь",
+  "Timeline": "Шкала времени"
 }

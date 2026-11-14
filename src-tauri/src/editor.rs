@@ -463,8 +463,9 @@ pub fn export(
     ];
 
     let gif = request.preset == Preset::Gif;
-    // Each track with where it is heard, in seconds of the input (which begins at `start`).
-    type Heard = (usize, f32, Option<(f64, f64)>);
+    // Each track with where it is heard and the stretches where it is silent, in seconds of
+    // the input (which begins at `start`).
+    type Heard = (usize, f32, Option<(f64, f64)>, Vec<(f64, f64)>);
     let enabled: Vec<Heard> = if gif {
         Vec::new()
     } else {
@@ -478,7 +479,8 @@ pub fn export(
                 let t = &TrackEdit { volume: t.volume * request.master_volume.clamp(0.0, 2.0) as f32, ..t.clone() };
                 let window = (t.start.is_some() || t.end.is_some())
                     .then(|| (t.start.unwrap_or(0.0) - start, t.end.unwrap_or(1e9) - start));
-                (i, t.volume, window)
+                let silent = t.silent.iter().filter(|[a, b]| b > a).map(|[a, b]| (a - start, b - start)).collect();
+                (i, t.volume, window, silent)
             })
             .collect()
     };
@@ -583,10 +585,13 @@ pub fn export(
     };
     if !enabled.is_empty() {
         let mut inputs = String::new();
-        for (k, (i, volume, window)) in enabled.iter().enumerate() {
-            let silence = window
+        for (k, (i, volume, window, silent)) in enabled.iter().enumerate() {
+            let mut silence = window
                 .map(|(a, b)| format!(",volume=0:enable='not(between(t,{a:.3},{b:.3}))'"))
                 .unwrap_or_default();
+            for (a, b) in silent {
+                silence.push_str(&format!(",volume=0:enable='between(t,{a:.3},{b:.3})'"));
+            }
             if separate {
                 // One copy for the mix, one for the track's own stream.
                 filters.push(format!("[0:a:{i}]volume={volume:.3}{silence},asplit[a{k}][s{k}]"));
@@ -610,7 +615,7 @@ pub fn export(
         args.extend(["-map".into(), "[aout]".into()]);
         if separate {
             args.extend(ffmpeg::name_track(0, &crate::i18n::tr("Mix")));
-            for (k, (i, _, _)) in enabled.iter().enumerate() {
+            for (k, (i, _, _, _)) in enabled.iter().enumerate() {
                 let name = names.get(*i).cloned().unwrap_or_else(|| format!("Track {}", i + 1));
                 args.extend(["-map".into(), format!("[t{k}]")]);
                 args.extend(ffmpeg::name_track(k + 1, &name));
@@ -996,7 +1001,7 @@ mod tests {
             .status()
             .unwrap();
         assert!(made.success());
-        let track = |enabled| TrackEdit { enabled, volume: 1.0, start: None, end: None, removed: false };
+        let track = |enabled| TrackEdit { enabled, volume: 1.0, start: None, end: None, removed: false, silent: Vec::new() };
         let request = ExportRequest {
             trim_start: 0.5,
             trim_end: 3.5,
@@ -1024,7 +1029,7 @@ mod tests {
         ExportRequest {
             trim_start: 0.0,
             trim_end,
-            tracks: vec![TrackEdit { enabled: true, volume: 1.0, start: None, end: None, removed: false }],
+            tracks: vec![TrackEdit { enabled: true, volume: 1.0, start: None, end: None, removed: false, silent: Vec::new() }],
             preset: Preset::Original,
             cuts: Vec::new(),
             vertical: false,
@@ -1081,6 +1086,41 @@ mod tests {
         let info = ffmpeg::probe(&out).unwrap();
         assert!((info.duration - 5.0).abs() < 0.25, "4 s with one of them at half speed: {}", info.duration);
         assert_eq!(info.audio_channels.len(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// How loud the export is between two moments, in dB (-91 for silence).
+    fn loudness(file: &Path, from: f64, length: f64) -> f64 {
+        let out = std::process::Command::new("ffmpeg")
+            .args(["-hide_banner", "-ss", &format!("{from:.2}"), "-t", &format!("{length:.2}"), "-i"])
+            .arg(file)
+            .args(["-vn", "-af", "volumedetect", "-f", "null", "-"])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&out.stderr);
+        let line = text.lines().find(|l| l.contains("max_volume:")).unwrap_or("max_volume: -91 dB");
+        line.split("max_volume:").nth(1).and_then(|v| v.trim().trim_end_matches("dB").trim().parse().ok()).unwrap_or(-91.0)
+    }
+
+    /// A track silenced in one stretch is quiet there and plays on around it, while the
+    /// clip keeps its length.
+    #[test]
+    fn a_track_is_silent_where_it_was_taken_out() {
+        if ffmpeg::missing_for_test() {
+            return;
+        }
+        let dir = std::env::temp_dir().join(format!("replix-silent-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = sample_clip(&dir);
+        let mut request = plain(4.0);
+        request.tracks[0].silent = vec![[1.0, 2.5]];
+        let out = dir.join("silent.mp4");
+        export(&clip, &request, &["Game".into()], crate::encoder::software(), &out, |_| {}, &|| false).unwrap();
+        assert!((ffmpeg::probe(&out).unwrap().duration - 4.0).abs() < 0.2);
+        assert!(loudness(&out, 1.3, 0.8) < -60.0, "silent inside: {}", loudness(&out, 1.3, 0.8));
+        assert!(loudness(&out, 0.2, 0.6) > -30.0, "heard before");
+        assert!(loudness(&out, 2.9, 0.6) > -30.0, "heard after");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

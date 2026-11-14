@@ -617,5 +617,20 @@
   "The session a few seconds ago": "数秒前のセッション",
   "The session could not be saved": "セッションを保存できませんでした",
   "Waiting for other work to finish": "ほかの処理が終わるのを待っています",
-  "Your markers are on its timeline.": "マーカーはタイムラインに表示されます。"
+  "Your markers are on its timeline.": "マーカーはタイムラインに表示されます。",
+  "{name} ends here": "{name} をここで終了",
+  "{name} starts here": "{name} をここから開始",
+  "Add text here": "ここにテキストを追加",
+  "At {time}": "{time}",
+  "Bring {name} back in this part": "この部分で {name} を戻す",
+  "Edit text": "テキストを編集",
+  "End the clip here": "クリップをここで終える",
+  "Play from here": "ここから再生",
+  "Play this part at {speed}": "この部分を {speed} で再生",
+  "Put this part back": "この部分を戻す",
+  "Remove this part": "この部分を削除",
+  "Silence {name} in this part": "この部分で {name} を無音にする",
+  "Split here": "ここで分割",
+  "Start the clip here": "クリップをここから始める",
+  "Timeline": "タイムライン"
 }

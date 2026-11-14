@@ -68,7 +68,27 @@ jobs:
           releaseBody: |
             Windows: the installer (.exe). Linux: the AppImage, or the .deb / .rpm package. macOS: the .dmg (Apple Silicon: aarch64, Intel: x64).
             On Linux and macOS, install FFmpeg first (sudo apt install ffmpeg, or brew install ffmpeg). Replix keeps itself up to date from here on.
+            SHA256SUMS.txt lists the SHA-256 of every file here, to check a download (sha256sum -c SHA256SUMS.txt, or Get-FileHash on Windows).
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: true
           args: ${{ matrix.args }}
+
+  # Once every system's files are up: one SHA256SUMS.txt beside them with the SHA-256 of each.
+  # Also after a build that failed, for the files that made it; a rerun writes it anew.
+  checksums:
+    needs: release
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: SHA256SUMS.txt
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          gh release download "$TAG" --dir files
+          rm -f files/SHA256SUMS.txt
+          (cd files && sha256sum -- * | sort -k 2) > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+          gh release upload "$TAG" SHA256SUMS.txt --clobber

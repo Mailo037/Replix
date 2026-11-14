@@ -617,5 +617,20 @@
   "The session a few seconds ago": "몇 초 전의 세션",
   "The session could not be saved": "세션을 저장할 수 없어요",
   "Waiting for other work to finish": "다른 작업이 끝나기를 기다리는 중",
-  "Your markers are on its timeline.": "마커는 세션 타임라인에 있어요."
+  "Your markers are on its timeline.": "마커는 세션 타임라인에 있어요.",
+  "{name} ends here": "{name} 여기서 끝",
+  "{name} starts here": "{name} 여기서 시작",
+  "Add text here": "여기에 텍스트 추가",
+  "At {time}": "{time}",
+  "Bring {name} back in this part": "이 부분에서 {name} 다시 듣기",
+  "Edit text": "텍스트 편집",
+  "End the clip here": "클립을 여기서 끝내기",
+  "Play from here": "여기서부터 재생",
+  "Play this part at {speed}": "이 부분을 {speed}로 재생",
+  "Put this part back": "이 부분 되돌리기",
+  "Remove this part": "이 부분 제거",
+  "Silence {name} in this part": "이 부분에서 {name} 무음",
+  "Split here": "여기서 나누기",
+  "Start the clip here": "클립을 여기서 시작",
+  "Timeline": "타임라인"
 }

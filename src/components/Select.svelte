@@ -250,7 +250,7 @@
     margin: 0;
     max-width: min(460px, calc(100vw - 16px));
     max-height: calc(100vh - 16px);
-    padding: 4px;
+    padding: 6px;
     border: 0;
     border-radius: 20px;
     background: var(--raised);
@@ -290,14 +290,21 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    min-height: 32px;
-    padding: 6px 8px 6px 12px;
-    /* A pill on one line, a rounded box when a long name takes two. */
-    border-radius: 16px;
+    min-height: 34px;
+    padding: 7px 10px 7px 12px;
+    /* Rounded in step with the list around it, on one line or two. */
+    border-radius: 14px;
     cursor: pointer;
+    transition: background-color 100ms ease;
   }
   .option.active {
-    background: var(--hover);
+    background: var(--menu-point);
+  }
+  .option[aria-selected="true"] .name {
+    font-weight: 700;
+  }
+  .option.active .hint {
+    color: var(--muted);
   }
   .text {
     flex: 1;

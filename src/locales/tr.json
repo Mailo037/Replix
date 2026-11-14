@@ -629,5 +629,20 @@
   "The session a few seconds ago": "Birkaç saniye önceki oturum",
   "The session could not be saved": "Oturum kaydedilemedi",
   "Waiting for other work to finish": "Başka bir işin bitmesi bekleniyor",
-  "Your markers are on its timeline.": "İşaretlerin onun zaman çizelgesinde."
+  "Your markers are on its timeline.": "İşaretlerin onun zaman çizelgesinde.",
+  "{name} ends here": "{name} burada biter",
+  "{name} starts here": "{name} burada başlar",
+  "Add text here": "Buraya metin ekle",
+  "At {time}": "{time} anında",
+  "Bring {name} back in this part": "Bu bölümde {name} yeniden duyulsun",
+  "Edit text": "Metni düzenle",
+  "End the clip here": "Klibi burada bitir",
+  "Play from here": "Buradan oynat",
+  "Play this part at {speed}": "Bu bölümü {speed} oynat",
+  "Put this part back": "Bu bölümü geri getir",
+  "Remove this part": "Bu bölümü kaldır",
+  "Silence {name} in this part": "Bu bölümde {name} sessize al",
+  "Split here": "Buradan böl",
+  "Start the clip here": "Klibi burada başlat",
+  "Timeline": "Zaman çizelgesi"
 }

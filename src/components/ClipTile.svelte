@@ -504,8 +504,10 @@
     color: var(--muted);
     cursor: default;
   }
-  .menu button:hover:not(:disabled) {
-    background: var(--hover);
+  .menu button:hover:not(:disabled),
+  .menu button:focus-visible {
+    background: var(--menu-point);
+    outline: none;
   }
   .menu .danger {
     color: var(--red);

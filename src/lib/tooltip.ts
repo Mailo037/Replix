@@ -16,14 +16,39 @@ function element(): HTMLDivElement {
   return box;
 }
 
+/** Room kept between the tooltip and the window's edges. */
+const EDGE = 8;
+
 function place(node: HTMLElement, el: HTMLDivElement) {
+  // Measured from the window's corner: left where the last one was, near an edge, the box
+  // would be squeezed narrow and wrap before it is moved.
+  el.style.left = "0px";
+  el.style.top = "0px";
   const r = node.getBoundingClientRect();
   const t = el.getBoundingClientRect();
   const above = r.top - t.height - 8;
-  const top = above >= 4 ? above : r.bottom + 8;
-  const left = Math.min(Math.max(4, r.left + r.width / 2 - t.width / 2), innerWidth - t.width - 4);
+  const top = above >= EDGE ? above : r.bottom + 8;
+  const left = Math.min(Math.max(EDGE, r.left + r.width / 2 - t.width / 2), innerWidth - t.width - EDGE);
   el.style.left = `${Math.round(left)}px`;
   el.style.top = `${Math.round(top)}px`;
+}
+
+/**
+ * Writes the text in: what something does first, and what follows " · " (its key, or a word
+ * on how it works) quieter after it.
+ */
+function fill(el: HTMLDivElement, text: string) {
+  const at = text.indexOf(" · ");
+  if (at < 0) {
+    el.textContent = text;
+    return;
+  }
+  const main = document.createElement("span");
+  main.textContent = text.slice(0, at);
+  const more = document.createElement("span");
+  more.className = "tooltip-more";
+  more.textContent = text.slice(at + 3);
+  el.replaceChildren(main, more);
 }
 
 function show(node: HTMLElement, text: string, delay: number) {
@@ -32,7 +57,7 @@ function show(node: HTMLElement, text: string, delay: number) {
     if (!node.isConnected) return;
     const el = element();
     owner = node;
-    el.textContent = text;
+    fill(el, text);
     if (!el.matches(":popover-open")) el.showPopover();
     place(node, el);
   }, delay);
@@ -71,7 +96,7 @@ export function tip(node: HTMLElement, text: string | null | undefined) {
       if (owner !== node) return;
       if (!next) hide();
       else if (box) {
-        box.textContent = next;
+        fill(box, next);
         place(node, box);
       }
     },

@@ -2,7 +2,22 @@ import type { Draft, EditorData, Marker, Settings, Speed, TextOverlay, TrackEdit
 import { startingEdit } from "../trackDefaults";
 import { frameShare, type Crop } from "./crop";
 import { drawText } from "./textImage";
-import { joinAt, nextSpeed, partAt, partsOf, playLength, putBack, speedAt, withSpeed, withSplit, type Range } from "./timeline";
+import {
+  addRange,
+  coveredBy,
+  joinAt,
+  nextSpeed,
+  partAt,
+  partsOf,
+  playLength,
+  putBack,
+  removeRange,
+  speedAt,
+  withSpeed,
+  withSplit,
+  type Part,
+  type Range,
+} from "./timeline";
 
 /** A marker this close to the playhead counts as on it. */
 export const NEAR = 0.25;
@@ -274,17 +289,28 @@ export class EditorSession {
     this.trimEnd = Math.max(t, this.trimStart + 0.5);
   }
 
-  splitHere() {
-    const next = withSplit(this.splits, this.current, this.trimStart, this.trimEnd);
+  /** Splits the clip at `at`, the playhead unless said otherwise. */
+  splitHere(at = this.current) {
+    const next = withSplit(this.splits, at, this.trimStart, this.trimEnd);
     if (next) this.splits = next;
   }
 
+  /** Whether the clip can be split at `at`: not at an edge or next to another split. */
+  canSplit(at: number) {
+    return withSplit(this.splits, at, this.trimStart, this.trimEnd) !== null;
+  }
+
+  /** The part at `at`, if it is between the start and the end. */
+  partAt(at: number): Part | null {
+    return partAt(this.parts, at);
+  }
+
   /**
-   * Takes the part under the playhead out, or puts it back. Says what happened; "last" when
-   * it is the only part left, which stays.
+   * Takes the part under the playhead (or at `at`) out, or puts it back. Says what happened;
+   * "last" when it is the only part left, which stays.
    */
-  togglePart(): "removed" | "restored" | "last" | null {
-    const part = this.here;
+  togglePart(at = this.current): "removed" | "restored" | "last" | null {
+    const part = partAt(this.parts, at);
     if (!part) return null;
     if (part.removed) {
       this.cuts = putBack(this.cuts, part);
@@ -297,16 +323,16 @@ export class EditorSession {
     return "last";
   }
 
-  /** Plays the part under the playhead at the next speed: normal, half, a quarter. */
-  cycleSpeed() {
-    const part = this.here;
+  /** Plays the part under the playhead (or at `at`) at the next speed: normal, half, a quarter. */
+  cycleSpeed(at = this.current) {
+    const part = partAt(this.parts, at);
     if (!part || part.removed) return;
     this.speeds = withSpeed(this.speeds, part, nextSpeed(speedAt(this.speeds, (part.start + part.end) / 2)));
   }
 
-  /** Puts words at the playhead for three seconds, low in the middle, and selects them. */
-  async addText(text: string) {
-    const start = Math.min(this.current, Math.max(0, this.duration - 0.5));
+  /** Puts words at the playhead (or at `at`) for three seconds, low in the middle, and selects them. */
+  async addText(text: string, at = this.current) {
+    const start = Math.min(at, Math.max(0, this.duration - 0.5));
     const size = 0.08;
     const drawn = await drawText(text);
     this.texts = [
@@ -346,11 +372,46 @@ export class EditorSession {
     this.cuts = next.cuts;
   }
 
-  /** Sets a marker at the playhead, or takes away the one there. */
-  toggleMarker() {
-    const on = this.markers.find((m) => Math.abs(m.at - this.current) < NEAR);
+  /** Sets a marker at the playhead (or at `at`), or takes away the one there. */
+  toggleMarker(at = this.current) {
+    const on = this.markerNear(at);
     if (on) this.removeMarker(on.at);
-    else this.markers = [...this.markers, { at: this.current }].sort((a, b) => a.at - b.at);
+    else this.markers = [...this.markers, { at }].sort((a, b) => a.at - b.at);
+  }
+
+  /** The marker at `at`, give or take a little. */
+  markerNear(at: number): Marker | undefined {
+    return this.markers.find((m) => Math.abs(m.at - at) < NEAR);
+  }
+
+  /** Whether track `i` is silent through the whole of `part`. */
+  trackSilentIn(i: number, part: { start: number; end: number }) {
+    return coveredBy(this.edits[i]?.silent, [part.start, part.end]);
+  }
+
+  /** Silences track `i` in `part` while the other tracks play on, or lets it be heard there again. */
+  silenceTrack(i: number, part: { start: number; end: number }, silent: boolean) {
+    const edit = this.edits[i];
+    if (!edit) return;
+    const range: Range = [part.start, part.end];
+    const next = silent ? addRange(edit.silent ?? [], range) : removeRange(edit.silent ?? [], range);
+    if (next.length) edit.silent = next;
+    else delete edit.silent;
+  }
+
+  /** Where track `i` starts being heard; it keeps at least a fifth of a second. */
+  setTrackStart(i: number, at: number) {
+    const edit = this.edits[i];
+    if (!edit) return;
+    const v = Math.min(at, (edit.end ?? this.duration) - 0.2);
+    edit.start = v <= 0.05 ? undefined : v;
+  }
+
+  setTrackEnd(i: number, at: number) {
+    const edit = this.edits[i];
+    if (!edit) return;
+    const v = Math.max(at, (edit.start ?? 0) + 0.2);
+    edit.end = v >= this.duration - 0.05 ? undefined : v;
   }
 
   removeMarker(at: number) {

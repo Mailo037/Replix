@@ -179,7 +179,9 @@
     font-weight: 700;
     text-align: left;
   }
-  .menu button:hover {
-    background: var(--hover);
+  .menu button:hover,
+  .menu button:focus-visible {
+    background: var(--menu-point);
+    outline: none;
   }
 </style>
