@@ -3,7 +3,7 @@
   import { onDestroy } from "svelte";
   import { api, type Item, type PendingSave } from "../lib/api";
   import { day, size } from "../lib/format";
-  import { store, type Filter } from "../lib/store.svelte";
+  import { inList, store, type Filter } from "../lib/store.svelte";
   import { recycle, undo } from "../lib/undo";
   import { tip } from "../lib/tooltip";
   import ClipTile from "./ClipTile.svelte";
@@ -36,20 +36,13 @@
   });
 
   const gameLabel = (name: string) => (name === "Desktop" ? t("Desktop") : name);
-  const wears = (i: Item, name: string) => (i.tags ?? []).some((x) => x.toLowerCase() === name.toLowerCase());
 
   const visible = $derived.by(() => {
     const q = query.trim().toLowerCase();
     // "#win" looks for the tag; plain words find titles, games and tags alike.
     const word = q.replace(/^#/, "");
     return store.items.filter((i) => {
-      if (game && i.game !== game) return false;
-      if (tag && !wears(i, tag)) return false;
-      if (filter === "clips" && i.kind !== "clip") return false;
-      if (filter === "screenshots" && i.kind !== "screenshot") return false;
-      if (filter === "sessions" && i.kind !== "session") return false;
-      if (filter === "drafts" && !i.draft) return false;
-      if (filter === "favorites" && !i.favorite) return false;
+      if (!inList(i, filter, game, tag)) return false;
       if (!q) return true;
       if (q.startsWith("#")) return (i.tags ?? []).some((x) => x.toLowerCase().includes(word));
       return i.title.toLowerCase().includes(q) || i.game.toLowerCase().includes(q) || (i.tags ?? []).some((x) => x.toLowerCase().includes(word));

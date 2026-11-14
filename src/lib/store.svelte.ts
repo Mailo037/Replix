@@ -35,6 +35,18 @@ const away = () => document.visibilityState === "hidden" || !document.hasFocus()
  */
 const warmable = (i: Item) => i.kind !== "screenshot" && i.duration > 0 && i.duration <= 300;
 
+/** Whether a library list (its filter, game and tag, before any search) shows the item. */
+export function inList(i: Item, filter: Filter, game: string | null, tag: string | null) {
+  if (game && i.game !== game) return false;
+  if (tag && !(i.tags ?? []).some((x) => x.toLowerCase() === tag.toLowerCase())) return false;
+  if (filter === "clips" && i.kind !== "clip") return false;
+  if (filter === "screenshots" && i.kind !== "screenshot") return false;
+  if (filter === "sessions" && i.kind !== "session") return false;
+  if (filter === "drafts" && !i.draft) return false;
+  if (filter === "favorites" && !i.favorite) return false;
+  return true;
+}
+
 class Store {
   settings = $state<Settings | null>(null);
   status = $state<Status>({ state: "starting", target: null, sessionSince: null, encoder: null, error: null, clipSeconds: null });
@@ -400,6 +412,19 @@ class Store {
 
   /** The library view last shown, so leaving the editor goes back to it. */
   lastLibrary: View = { name: "library", filter: "all", game: null };
+
+  /**
+   * The clip before (-1) or after (1) this one in the library list last shown, so the editor
+   * can step through them in the order they lie there. Screenshots are passed over: they
+   * don't open in the editor.
+   */
+  neighbour(id: string, step: -1 | 1): string | null {
+    const list = this.lastLibrary;
+    if (list.name !== "library") return null;
+    const clips = this.items.filter((i) => i.kind !== "screenshot" && inList(i, list.filter, list.game, list.tag ?? null));
+    const at = clips.findIndex((i) => i.id === id);
+    return at < 0 ? null : (clips[at + step]?.id ?? null);
+  }
 
   go(view: View) {
     const leaving = this.view.name === "editor" && view.name !== "editor";

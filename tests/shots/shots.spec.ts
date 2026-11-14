@@ -208,7 +208,7 @@ async function openEditor(page: Page, vertical: boolean) {
   await expect(page.locator(".clock")).toContainText("/ 0:30.0");
   // The playhead in the first part.
   await page.locator("body").click({ position: { x: 5, y: 400 } });
-  for (let i = 0; i < 5; i++) await page.keyboard.press("Shift+ArrowRight");
+  for (let i = 0; i < 5; i++) await page.keyboard.press("Control+ArrowRight");
   items[0].draft = null;
 }
 

@@ -242,9 +242,13 @@
     // Text fields keep their own undo; sliders don't.
     const target = e.target;
     if ((target instanceof Element && target.matches("input:not([type=range]), textarea")) || !ed.data) return;
+    const arrow = e.key === "ArrowLeft" ? -1 : e.key === "ArrowRight" ? 1 : 0;
+    // A slider with the focus moves itself with the arrows.
+    if (arrow && target instanceof Element && target.matches("input[type=range], [role=slider]")) return;
     if (e.ctrlKey || e.metaKey) {
       const key = e.key.toLowerCase();
-      if (key === "z" && !e.shiftKey) undo();
+      if (arrow && !e.shiftKey) ed.seek(ed.current + arrow);
+      else if (key === "z" && !e.shiftKey) undo();
       else if (key === "y" || (key === "z" && e.shiftKey)) redo();
       else if (key === "s") saveDraft();
       else return;
@@ -252,7 +256,14 @@
       return;
     }
     if (e.altKey) return;
-    const step = e.shiftKey ? 1 : 1 / 30;
+    // The arrows go to the clip before or after this one in the library; with Shift they step
+    // one frame, with Ctrl (above) one second.
+    if (arrow) {
+      e.preventDefault();
+      if (e.shiftKey) ed.seek(ed.current + arrow / 30);
+      else switchTo(arrow);
+      return;
+    }
     if (e.code === "Space") {
       e.preventDefault();
       ed.toggle();
@@ -263,14 +274,20 @@
     else if (e.key === ",") ed.jumpMarker(-1);
     else if (e.key === ".") ed.jumpMarker(1);
     else if (e.key === "Delete" || e.key === "Backspace") togglePart();
-    else if (e.key === "ArrowLeft") ed.seek(ed.current - step);
-    else if (e.key === "ArrowRight") ed.seek(ed.current + step);
     else if (e.key === "Escape") back();
   }
 
   function back() {
     ed.pause();
     store.go(store.lastLibrary);
+  }
+
+  /** Opens the clip before (-1) or after (1) this one; at either end of the list nothing happens. */
+  function switchTo(step: -1 | 1) {
+    const next = store.neighbour(id, step);
+    if (!next) return;
+    ed.pause();
+    store.go({ name: "editor", id: next });
   }
 
   async function saveDraft() {

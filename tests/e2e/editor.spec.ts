@@ -10,10 +10,10 @@ async function openEditor(page: Page) {
   await expect(page.locator(".clock")).toContainText("/ 0:06.0");
 }
 
-/** Moves the playhead with the arrow keys: Shift moves a second. */
+/** Moves the playhead with the arrow keys: with Ctrl they move a second. */
 async function playheadTo(page: Page, seconds: number) {
   await page.locator("body").click({ position: { x: 5, y: 400 } });
-  for (let i = 0; i < seconds; i++) await page.keyboard.press("Shift+ArrowRight");
+  for (let i = 0; i < seconds; i++) await page.keyboard.press("Control+ArrowRight");
 }
 
 test("opens a clip with its tracks", async ({ page }) => {
@@ -21,6 +21,31 @@ test("opens a clip with its tracks", async ({ page }) => {
   await expect(page.getByRole("group", { name: "Neon Rally" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Discord" })).toBeVisible();
   await expect(page.getByRole("group", { name: "Microphone" })).toBeVisible();
+});
+
+test("the arrow keys go to the next and the previous clip", async ({ page }) => {
+  await openEditor(page);
+  const title = page.getByRole("textbox", { name: "Title" });
+  await page.locator("body").click({ position: { x: 5, y: 400 } });
+  // The first clip in the library has none before it.
+  await page.keyboard.press("ArrowLeft");
+  await expect(title).toHaveValue("Last-lap overtake");
+  await page.keyboard.press("ArrowRight");
+  await expect(title).toHaveValue("Triple on the ridge");
+  await page.keyboard.press("ArrowRight");
+  await expect(title).toHaveValue("Drift into the tunnel");
+  await page.keyboard.press("ArrowLeft");
+  await expect(title).toHaveValue("Triple on the ridge");
+});
+
+test("Shift and an arrow step one frame, Ctrl a second", async ({ page }) => {
+  await openEditor(page);
+  await playheadTo(page, 2);
+  await expect(page.locator(".clock")).toContainText("0:02.0 /");
+  // Four frames back, at 30 frames a second.
+  for (let i = 0; i < 4; i++) await page.keyboard.press("Shift+ArrowLeft");
+  await expect(page.locator(".clock")).toContainText("0:01.9 /");
+  await expect(page.getByRole("textbox", { name: "Title" })).toHaveValue("Last-lap overtake");
 });
 
 test("splits, removes a part and undoes it", async ({ page }) => {
