@@ -475,16 +475,23 @@ pub fn passive<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
     builder
 }
 
+/// How long a hidden page has to let go of its pictures and video before it is put to sleep.
+const SLEEP_AFTER: std::time::Duration = std::time::Duration::from_secs(3);
+
 /// Hidden, WebView2 is asked to keep as little memory as it can: it drops caches and the
-/// pictures and video the page let go of, which leaves more for the game. On screen again,
-/// it goes back to normal. Older WebView2 runtimes without this simply keep their memory.
-pub fn set_page_memory(webview: &tauri::Webview, visible: bool) {
+/// pictures and video the page let go of, which leaves more for the game. A moment later the
+/// page is put to sleep: no script, no timer, nothing runs in it until it is shown again, and
+/// WebView2 lets go of more memory still. Events Replix sends meanwhile wait and arrive on
+/// waking. The page's process is already in Windows' efficiency mode while hidden; WebView2
+/// does that itself. The toast is a page of its own and stays awake. Older WebView2 runtimes
+/// without these simply keep their memory.
+pub fn set_page_awake(webview: &tauri::Webview, awake: bool) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
-        ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
+        ICoreWebView2_19, ICoreWebView2_3, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW,
         COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
     };
     use windows::core::Interface;
-    let level = if visible {
+    let level = if awake {
         COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL
     } else {
         COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW
@@ -492,15 +499,43 @@ pub fn set_page_memory(webview: &tauri::Webview, visible: bool) {
     let _ = webview.with_webview(move |platform| {
         // SAFETY: called on the main thread with the controller Tauri keeps alive.
         let result = unsafe {
-            platform
-                .controller()
-                .CoreWebView2()
-                .and_then(|core| core.cast::<ICoreWebView2_19>())
-                .and_then(|core| core.SetMemoryUsageTargetLevel(level))
+            platform.controller().CoreWebView2().and_then(|core| {
+                // Showing the page wakes it too; asking again costs nothing.
+                if awake {
+                    let _ = core.cast::<ICoreWebView2_3>().and_then(|c| c.Resume());
+                }
+                core.cast::<ICoreWebView2_19>().and_then(|c| c.SetMemoryUsageTargetLevel(level))
+            })
         };
         if let Err(e) = result {
             log::debug!("page memory level not set: {e}");
         }
+    });
+    if awake {
+        return;
+    }
+    let webview = webview.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(SLEEP_AFTER);
+        let _ = webview.with_webview(|platform| {
+            // Shown again meanwhile: it stays awake.
+            if crate::page_visible() {
+                return;
+            }
+            let done = webview2_com::TrySuspendCompletedHandler::create(Box::new(|result, asleep| {
+                if result.is_err() || !asleep {
+                    log::info!("the hidden page could not be put to sleep");
+                }
+                Ok(())
+            }));
+            // SAFETY: called on the main thread with the controller Tauri keeps alive.
+            let asked = unsafe {
+                platform.controller().CoreWebView2().and_then(|c| c.cast::<ICoreWebView2_3>()).and_then(|c| c.TrySuspend(&done))
+            };
+            if let Err(e) = asked {
+                log::debug!("page not put to sleep: {e}");
+            }
+        });
     });
 }
 

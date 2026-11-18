@@ -113,7 +113,7 @@ pub(crate) fn set_page_visible(window: &tauri::WebviewWindow, visible: bool) {
         return;
     }
     PAGE_VISIBLE.store(visible, Ordering::Relaxed);
-    platform::set_page_memory(webview, visible);
+    platform::set_page_awake(webview, visible);
     media::wake();
 }
 

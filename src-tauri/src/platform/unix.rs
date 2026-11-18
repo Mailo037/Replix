@@ -59,8 +59,9 @@ pub fn passive<'a, R: tauri::Runtime, M: tauri::Manager<R>>(
     builder.focusable(false)
 }
 
-/// WebKit has no memory setting to change; a hidden page already stops painting.
-pub fn set_page_memory(_webview: &tauri::Webview, _visible: bool) {}
+/// WebKit has no memory setting to change and no way to put a page to sleep; a hidden page
+/// already stops painting, and its timers slow down.
+pub fn set_page_awake(_webview: &tauri::Webview, _awake: bool) {}
 
 /// The work area under the foreground window, where the toast goes. Tauri's monitor
 /// information is used instead.
