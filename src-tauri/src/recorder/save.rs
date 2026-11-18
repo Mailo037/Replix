@@ -696,7 +696,7 @@ fn black_out_args(
     args.extend(encoder.format.mp4_tag().iter().map(|a| a.to_string()));
     args.extend(["-c:a".into(), "copy".into()]);
     if let Some(d) = desktop {
-        args.extend([format!("-c:a:{d}"), "aac".into(), format!("-b:a:{d}"), "160k".into()]);
+        args.extend(ffmpeg::aac(&format!("a:{d}"), 160));
     }
     args.extend(["-movflags".into(), "+faststart".into(), "-f".into(), "mp4".into(), ffmpeg::path_arg(out)]);
     args

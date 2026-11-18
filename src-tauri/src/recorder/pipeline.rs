@@ -220,9 +220,10 @@ impl Pipeline {
         }
         let kbps = encoder::bitrate(settings.quality.video_kbps(), picture_size(&target), settings.fps, encoder.format);
         args.extend(encoder::args(encoder, kbps));
+        args.extend(ffmpeg::aac("a", 160));
         args.extend(
             [
-                "-force_key_frames", "expr:gte(t,n_forced*2)", "-c:a", "aac", "-b:a", "160k", "-max_muxing_queue_size",
+                "-force_key_frames", "expr:gte(t,n_forced*2)", "-max_muxing_queue_size",
                 // Timestamps run on across segments, so a save can read them back to back as one stream.
                 "1024", "-f", "segment", "-segment_time", "2", "-segment_format", "mpegts", "-segment_list_type",
                 "csv", "-segment_list",

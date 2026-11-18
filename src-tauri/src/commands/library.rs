@@ -33,10 +33,38 @@ pub async fn list_library(app: AppHandle) -> Res<Vec<Item>> {
             index.paths = items.iter().map(|i| (i.id.clone(), PathBuf::from(&i.path))).collect();
         }
         queue_thumbs(&app, &items);
+        if !deferred {
+            tidy_editor_material(&state.cache, &items);
+        }
         items
     })
     .await
     .map_err(err)
+}
+
+/// After a scan that read the whole library, at most once an hour and on a thread of its
+/// own, the editor material of clips that are gone or long unopened is removed. An empty
+/// library (a drive not plugged in, say) removes nothing.
+fn tidy_editor_material(cache: &std::path::Path, items: &[Item]) {
+    static LAST: Mutex<Option<std::time::Instant>> = parking_lot::const_mutex(None);
+    if items.is_empty() {
+        return;
+    }
+    {
+        let mut last = LAST.lock();
+        if last.is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(60 * 60)) {
+            return;
+        }
+        *last = Some(std::time::Instant::now());
+    }
+    let cache = cache.to_path_buf();
+    let ids: std::collections::HashSet<String> = items.iter().map(|i| i.id.clone()).collect();
+    std::thread::spawn(move || {
+        let freed = crate::editor::prune(&cache, &ids);
+        if freed > 0 {
+            log::info!("removed {} MB of editor material no longer needed", freed / 1_000_000);
+        }
+    });
 }
 
 type ThumbJob = (String, PathBuf, library::Kind, f64);

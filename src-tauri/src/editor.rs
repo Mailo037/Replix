@@ -59,6 +59,54 @@ fn lock_for(id: &str) -> Arc<Mutex<()>> {
     LOCKS.get_or_init(Default::default).lock().entry(id.to_string()).or_default().clone()
 }
 
+/// How long a clip's editor material stays after the editor last opened it. The tracks
+/// copied out of a long session can take hundreds of megabytes; opened again later, the
+/// clip simply gets them again.
+const KEEP_UNUSED: std::time::Duration = std::time::Duration::from_secs(14 * 24 * 60 * 60);
+
+/// Says the editor used a clip's material now, so `prune` keeps it.
+fn mark_used(dir: &Path) {
+    let _ = std::fs::File::options()
+        .write(true)
+        .open(dir.join("info.json"))
+        .and_then(|f| f.set_modified(std::time::SystemTime::now()));
+}
+
+/// Removes the editor material of clips that are no longer in the library (`ids`), and of
+/// clips the editor has not opened for two weeks. Material a preparation is working on
+/// stays. Returns how many bytes it freed.
+pub fn prune(cache: &Path, ids: &std::collections::HashSet<String>) -> u64 {
+    prune_older_than(&cache.join("editor"), ids, KEEP_UNUSED)
+}
+
+fn prune_older_than(root: &Path, ids: &std::collections::HashSet<String>, keep: std::time::Duration) -> u64 {
+    let Ok(entries) = std::fs::read_dir(root) else { return 0 };
+    let mut freed = 0;
+    for entry in entries.flatten() {
+        let dir = entry.path();
+        let Some(id) = entry.file_name().to_str().map(str::to_string) else { continue };
+        // The last open touched info.json; a folder without one counts from its own date.
+        let used = std::fs::metadata(dir.join("info.json")).or_else(|_| entry.metadata()).and_then(|m| m.modified());
+        let unused = used.ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age > keep);
+        if ids.contains(&id) && !unused {
+            continue;
+        }
+        let lock = lock_for(&id);
+        let Some(_held) = lock.try_lock() else { continue };
+        let size = folder_size(&dir);
+        if std::fs::remove_dir_all(&dir).is_ok() {
+            freed += size;
+        }
+    }
+    freed
+}
+
+fn folder_size(dir: &Path) -> u64 {
+    std::fs::read_dir(dir)
+        .map(|d| d.flatten().filter_map(|e| e.metadata().ok()).map(|m| if m.is_dir() { 0 } else { m.len() }).sum())
+        .unwrap_or(0)
+}
+
 /// Filmstrips under way, by clip.
 fn pending() -> &'static media::Pending {
     static PENDING: OnceLock<media::Pending> = OnceLock::new();
@@ -123,6 +171,7 @@ pub fn prepare(
             p
         }
     };
+    mark_used(&dir);
     let count = info.titles.len();
     let audio: Vec<PathBuf> = (0..count).map(|i| dir.join(format!("a{i}.m4a"))).collect();
     let strip = dir.join("strip.jpg");
@@ -621,7 +670,7 @@ pub fn export(
                 args.extend(ffmpeg::name_track(k + 1, &name));
             }
         }
-        args.extend(["-c:a".into(), "aac".into(), "-b:a".into(), format!("{audio_kbps}k")]);
+        args.extend(ffmpeg::aac("a", audio_kbps));
     }
     if gif {
         args.extend(["-loop".into(), "0".into()]);
@@ -981,6 +1030,39 @@ fn split_tracks(path: &Path, audio: &[PathBuf], need: u64, duration: f64, report
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Material of clips that are gone, or long unopened, is removed; what is in use stays.
+    #[test]
+    fn editor_material_of_gone_and_unused_clips_is_removed() {
+        let root = std::env::temp_dir().join(format!("replix-prune-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let week = std::time::Duration::from_secs(7 * 24 * 60 * 60);
+        let make = |id: &str, age: std::time::Duration| {
+            let dir = root.join(id);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("a0.m4a"), vec![0u8; 1000]).unwrap();
+            let info = std::fs::File::create(dir.join("info.json")).unwrap();
+            info.set_modified(std::time::SystemTime::now() - age).unwrap();
+        };
+        make("fresh", std::time::Duration::ZERO);
+        make("gone", std::time::Duration::ZERO);
+        make("old", 3 * week);
+        make("opened-again", 3 * week);
+        make("busy", std::time::Duration::ZERO);
+        let ids: std::collections::HashSet<String> = ["fresh", "old", "opened-again"].map(String::from).into();
+        // Opening a clip marks its material as used.
+        mark_used(&root.join("opened-again"));
+        let busy = lock_for("busy");
+        let held = busy.lock();
+        let freed = prune_older_than(&root, &ids, 2 * week);
+        drop(held);
+        let mut left: Vec<String> =
+            std::fs::read_dir(&root).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        left.sort();
+        assert_eq!(left, ["busy", "fresh", "opened-again"]);
+        assert_eq!(freed, 2000);
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// The MKV for video editors has the mix first, then every track that is heard on its
     /// own with its name, each as long as the cut clip; a muted track is left out.

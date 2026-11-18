@@ -409,6 +409,21 @@ fn track_title(tags: &std::collections::HashMap<String, String>) -> Option<Strin
         .cloned()
 }
 
+/// Options encoding the sound of `stream` ("a", or "a:2" for one track) as AAC. FFmpeg's
+/// "fast" coder takes about half the time of its default one and, by FFmpeg's own notes,
+/// sounds better at bitrates like Replix's; it is worse only below 64 kbit/s, and Replix never
+/// goes below 96. While recording, up to six tracks are encoded all the time.
+pub fn aac(stream: &str, kbps: u32) -> [String; 6] {
+    [
+        format!("-c:{stream}"),
+        "aac".into(),
+        format!("-b:{stream}"),
+        format!("{kbps}k"),
+        format!("-aac_coder:{stream}"),
+        "fast".into(),
+    ]
+}
+
 pub fn path_arg(path: &Path) -> String {
     path.to_string_lossy().into_owned()
 }

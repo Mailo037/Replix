@@ -159,7 +159,8 @@ pub fn combine(
     filters.push(format!("{joined}concat=n={}:v=1:a=1[v][a]", made.len()));
     args.extend(["-filter_complex".into(), filters.join(";"), "-map".into(), "[v]".into(), "-map".into(), "[a]".into()]);
     args.extend(crate::encoder::args(encoder, 16_000));
-    args.extend(["-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", "-y"].map(String::from));
+    args.extend(ffmpeg::aac("a", 192));
+    args.extend(["-movflags", "+faststart", "-y"].map(String::from));
     args.push(ffmpeg::path_arg(out));
     editor::run(&args, length, out, |p| on_progress((parts.len() as f64 + p) / steps), cancelled)?;
 

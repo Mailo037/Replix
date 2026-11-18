@@ -249,7 +249,7 @@ pub async fn extract_track(app: AppHandle, id: String, track: usize, title: Stri
         let source = state.path_of(&id)?;
         let root = state.settings.lock().clips_dir.clone();
         let out = library::export_path(&root, &title, "m4a");
-        let args: Vec<String> = vec![
+        let mut args: Vec<String> = vec![
             "-y".into(),
             "-ss".into(),
             format!("{:.3}", start.max(0.0)),
@@ -260,12 +260,9 @@ pub async fn extract_track(app: AppHandle, id: String, track: usize, title: Stri
             "-map".into(),
             format!("0:a:{track}"),
             "-vn".into(),
-            "-c:a".into(),
-            "aac".into(),
-            "-b:a".into(),
-            "192k".into(),
-            ffmpeg::path_arg(&out),
         ];
+        args.extend(ffmpeg::aac("a", 192));
+        args.push(ffmpeg::path_arg(&out));
         if let Err(e) = ffmpeg::run(&args) {
             let _ = std::fs::remove_file(&out);
             return Err(err(e));
