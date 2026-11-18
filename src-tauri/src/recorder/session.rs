@@ -2,9 +2,10 @@
 //!
 //! As each of the buffer's segments completes, it is handed to a second FFmpeg that copies
 //! it into one Matroska file in the clips folder. Matroska needs no index to be read, so
-//! what was recorded up to a crash or a power cut is still there, and the next start turns
-//! it into a session in the library. A long session also no longer piles up in the buffer:
-//! a segment that is in the file and out of the replay buffer is deleted.
+//! what was recorded up to a crash or a power cut is still there, and the next start
+//! finishes its header (`mkv`) and turns it into a session in the library. A long session
+//! also no longer piles up in the buffer: a segment that is in the file and out of the
+//! replay buffer is deleted.
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -97,13 +98,17 @@ impl Journal {
     }
 
     /// Written next to its old self and renamed over it, so a crash in between leaves one
-    /// of the two whole.
+    /// of the two whole. The new one is on the disk before the rename: otherwise a power cut
+    /// can keep the rename but not what was written, and leave an empty journal.
     pub fn write(&self, file: &Path) -> std::io::Result<()> {
         let path = journal_of(file);
         let temp = path.with_extension("json.tmp");
         // One left by a crash is hidden, and a hidden file cannot be written over in place.
         let _ = std::fs::remove_file(&temp);
-        std::fs::write(&temp, serde_json::to_string(self)?)?;
+        let mut out = std::fs::File::create(&temp)?;
+        out.write_all(serde_json::to_string(self)?.as_bytes())?;
+        out.sync_all()?;
+        drop(out);
         platform::hide_file(&temp);
         std::fs::rename(&temp, &path).inspect_err(|_| {
             let _ = std::fs::remove_file(&temp);
@@ -411,11 +416,14 @@ pub(super) fn leftovers(root: &Path) -> Vec<Leftover> {
             }
             continue;
         }
-        let ended = meta
-            .and_then(|m| m.modified().ok())
-            .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-            .map_or(0, |d| d.as_millis() as u64);
-        // Without a journal the file still says most of it: the folder names the game.
+        let epoch_ms = |t: std::io::Result<std::time::SystemTime>| {
+            t.ok().and_then(|t| t.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_millis() as u64)
+        };
+        let ended = meta.as_ref().and_then(|m| epoch_ms(m.modified())).unwrap_or(0);
+        // Not every file system keeps when a file was made; without it the start is unknown.
+        let began = meta.as_ref().and_then(|m| epoch_ms(m.created())).filter(|t| *t <= ended).unwrap_or(ended);
+        // Without a journal the file still says most of it: the folder names the game, and
+        // the file was made when the session began.
         let journal = journal.unwrap_or_else(|| Journal {
             game: file
                 .parent()
@@ -423,7 +431,7 @@ pub(super) fn leftovers(root: &Path) -> Vec<Leftover> {
                 .and_then(|p| p.file_name())
                 .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_else(|| "Desktop".into()),
-            since: ended,
+            since: began,
             ..Default::default()
         });
         found.push(Leftover { file, journal, ended });
@@ -523,6 +531,8 @@ mod tests {
         assert_eq!(found[0].file, broken);
         assert_eq!(found[0].journal.game, "Game", "named after its folder without a journal");
         assert!(found[0].ended > 0);
+        let since = found[0].journal.since;
+        assert!(since > 0 && since <= found[0].ended, "begun when the file was made: {since}");
         assert!(!done.exists() && !journal_of(&done).exists(), "already in the library");
         assert!(!empty.exists() && !journal_of(&empty).exists());
         assert!(plain.exists(), "other videos are left alone");

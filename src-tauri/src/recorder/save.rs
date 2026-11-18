@@ -391,6 +391,10 @@ impl SaveJob {
             Footage::Buffer { dir, segments, .. } => (dir, segments),
             // One file, already in order: copied into an MP4 as it is.
             Footage::Live { file, .. } => {
+                // One FFmpeg could not close is missing its length and how its sound is encoded.
+                if let Err(e) = super::mkv::seal(file) {
+                    log::warn!("could not finish the header of {}: {e}", file.display());
+                }
                 let dir = file.parent().unwrap_or(Path::new("."));
                 let slots = remux(dir, Source::File(file), &tracks, None, joined, Stream { seconds: self.duration, fps: self.fps, format: self.format })?;
                 // A file that broke off does not say how long it is; the copy does.
@@ -1458,6 +1462,26 @@ mod tests {
         wait("segments are written", &|| live.written() == 6);
         assert!(!live.failed());
         wait("the file has data before it is closed", &|| std::fs::metadata(&file).is_ok_and(|m| m.len() > 100_000));
+        // As a power cut leaves it: without its length, and with AAC FFmpeg takes for LTP.
+        let cut = dir.join("Cut Session.recording.mkv");
+        std::fs::copy(&file, &cut).unwrap();
+        let profiles = |name: &str| {
+            let out = Command::new("ffprobe").current_dir(&dir).args(["-v", "error", "-select_streams", "a", "-show_entries", "stream=profile", "-of", "csv=p=0", name]).output().unwrap();
+            String::from_utf8_lossy(&out.stdout).split_whitespace().map(str::to_string).collect::<Vec<_>>()
+        };
+        assert_eq!(ffmpeg::probe(&cut).unwrap().duration, 0.0);
+        assert!(profiles("Cut Session.recording.mkv").iter().all(|p| p == "LTP"));
+        assert!(super::super::mkv::seal(&cut).unwrap());
+        let sealed = ffmpeg::probe(&cut).unwrap();
+        assert!(sealed.duration > 1.0 && sealed.duration <= 12.0, "the length of what is in it: {}", sealed.duration);
+        assert_eq!(sealed.audio_titles.len(), 4);
+        assert_eq!(profiles("Cut Session.recording.mkv"), vec!["LC"; 4]);
+        assert!(!super::super::mkv::seal(&cut).unwrap(), "a finished header stays as it is");
+        remux(&dir, Source::File(&cut), &[(1, "Desktop")], None, Path::new("cut.mp4"), Stream { seconds: sealed.duration, fps: 30, format: Codec::H264 }).unwrap();
+        assert_eq!(profiles("cut.mp4"), vec!["LC"]);
+        // The whole file still reads to its end, as before.
+        let read = Command::new("ffmpeg").current_dir(&dir).args(["-v", "error", "-i", "Cut Session.recording.mkv", "-map", "0", "-f", "null", "-"]).output().unwrap();
+        assert!(read.status.success() && read.stderr.is_empty(), "{}", String::from_utf8_lossy(&read.stderr));
         let tracks = [(1, "Desktop"), (3, "Microphone")];
         let names = vec![Some("Desktop".to_string()), Some("Microphone".to_string())];
         let slots = remux(&dir, Source::File(&file), &tracks, None, Path::new("broken.mp4"), Stream { seconds: 10.0, fps: 30, format: Codec::H264 }).unwrap();
@@ -1469,6 +1493,7 @@ mod tests {
         let (closed, result) = std::sync::mpsc::channel();
         live.finish(move |clean| closed.send(clean).unwrap());
         assert!(result.recv_timeout(Duration::from_secs(60)).unwrap(), "FFmpeg closed the file cleanly");
+        assert!(!super::super::mkv::seal(&file).unwrap(), "a closed file is complete");
         remux(&dir, Source::File(&file), &tracks, None, Path::new("whole.mp4"), Stream { seconds: 10.0, fps: 30, format: Codec::H264 }).unwrap();
         let whole = ffmpeg::probe(&dir.join("whole.mp4")).unwrap();
         assert!((whole.duration - 10.0).abs() < 0.3, "all five segments: {}", whole.duration);

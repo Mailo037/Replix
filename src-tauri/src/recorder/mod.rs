@@ -6,6 +6,7 @@
 //! file of its own as it goes (see `session`), so it survives a crash.
 
 mod health;
+mod mkv;
 mod pipeline;
 mod save;
 mod session;
@@ -270,9 +271,14 @@ impl Worker {
         let work = move || {
             for left in found {
                 log::info!("recovering the session in {}", left.file.display());
+                // Its header is finished first; then the file knows how long it is.
+                if let Err(e) = mkv::seal(&left.file) {
+                    log::warn!("could not finish the header of {}: {e}", left.file.display());
+                }
                 let (origin, private) = left.journal.masks_from_start();
                 let journal = left.journal;
-                let seconds = left.ended.saturating_sub(journal.since) as f64 / 1000.0;
+                let measured = ffmpeg::probe(&left.file).map(|i| i.duration).ok().filter(|d| *d > 0.0);
+                let seconds = measured.unwrap_or(left.ended.saturating_sub(journal.since) as f64 / 1000.0);
                 let tracks = if journal.tracks.is_empty() { session::tracks_in(&left.file) } else { journal.tracks };
                 let placeholder = Placeholder::announce(&app, Kind::Session, &journal.game, seconds, None);
                 let job = SaveJob {

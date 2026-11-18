@@ -428,7 +428,10 @@ fn repair(path: &Path) -> Option<Meta> {
     if !meta.unread {
         return Some(meta);
     }
-    meta.duration = info.duration;
+    // A file that broke off may not say how long it is; a length known before stays.
+    if info.duration > 0.0 {
+        meta.duration = info.duration;
+    }
     meta.width = info.width;
     meta.height = info.height;
     if meta.tracks.is_empty() {
