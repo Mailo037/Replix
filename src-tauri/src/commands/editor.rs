@@ -1,5 +1,6 @@
 //! The editor: preview material, drafts, exports and stills.
 
+use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
@@ -134,12 +135,58 @@ impl Drop for Forget {
     }
 }
 
+/// A file's size and last change, to tell whether it is still the file it was.
+type Stamp = (u64, std::time::SystemTime);
+
+fn stamp(path: &Path) -> Option<Stamp> {
+    let meta = std::fs::metadata(path).ok()?;
+    Some((meta.len(), meta.modified().ok()?))
+}
+
+/// An export that was made: what was asked for, from which source, and the file it gave.
+struct Made {
+    asked: String,
+    source: Stamp,
+    out: PathBuf,
+    file: Stamp,
+}
+
+/// The last few exports. Exporting the same clip the same way again, with nothing changed,
+/// hands back the file already made instead of encoding it a second time.
+static MADE: Mutex<Vec<Made>> = parking_lot::const_mutex(Vec::new());
+const REMEMBERED: usize = 16;
+
+/// The file made for the same request before, if the source and the file are both unchanged.
+fn already_made(made: &[Made], asked: &str, source: &Path) -> Option<PathBuf> {
+    let from = stamp(source)?;
+    let m = made.iter().find(|m| m.asked == asked && m.source == from)?;
+    (stamp(&m.out) == Some(m.file)).then(|| m.out.clone())
+}
+
+fn remember(made: &mut Vec<Made>, asked: String, source: &Path, out: &Path) {
+    let (Some(source), Some(file)) = (stamp(source), stamp(out)) else { return };
+    made.retain(|m| m.asked != asked);
+    made.push(Made { asked, source, out: out.to_path_buf(), file });
+    if made.len() > REMEMBERED {
+        made.remove(0);
+    }
+}
+
 #[tauri::command]
-pub async fn export_clip(app: AppHandle, id: String, title: String, request: editor::ExportRequest, ticket: u64) -> Res<String> {
+pub async fn export_clip(app: AppHandle, id: String, title: String, request: serde_json::Value, ticket: u64) -> Res<String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<AppState>();
         let source = state.path_of(&id)?;
         let root = state.settings.lock().clips_dir.clone();
+        // Everything that shapes the file, so the same request is known again.
+        let asked = format!("{id}
+{title}
+{}
+{request}", root.display());
+        if let Some(out) = already_made(&MADE.lock(), &asked, &source) {
+            return Ok(out.to_string_lossy().into_owned());
+        }
+        let request: editor::ExportRequest = serde_json::from_value(request).map_err(err)?;
         // Exports are H.264 even where recordings are HEVC: they have to play everywhere.
         let encoder = encoder::for_exports(&state.recorder.encoders.lock());
         let cancelled = || CANCELLED_EXPORTS.lock().has(ticket);
@@ -168,6 +215,7 @@ pub async fn export_clip(app: AppHandle, id: String, title: String, request: edi
             let _ = std::fs::remove_file(&out);
             return Err(err(e));
         }
+        remember(&mut MADE.lock(), asked, &source, &out);
         Ok(out.to_string_lossy().into_owned())
     })
     .await
@@ -339,6 +387,31 @@ pub async fn save_frame(app: AppHandle, id: String, time: f64) -> Res<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The same request again gets the same file, until the source or that file changes,
+    /// or the file is gone.
+    #[test]
+    fn an_unchanged_export_is_handed_back() {
+        let dir = std::env::temp_dir().join(format!("replix-made-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (source, out) = (dir.join("clip.mp4"), dir.join("export.mp4"));
+        std::fs::write(&source, b"clip").unwrap();
+        std::fs::write(&out, b"export").unwrap();
+        let mut made = Vec::new();
+        remember(&mut made, "a".into(), &source, &out);
+        assert_eq!(already_made(&made, "a", &source), Some(out.clone()));
+        assert_eq!(already_made(&made, "b", &source), None, "another request");
+        std::fs::write(&out, b"changed by hand").unwrap();
+        assert_eq!(already_made(&made, "a", &source), None, "the file was changed");
+        remember(&mut made, "a".into(), &source, &out);
+        std::fs::write(&source, b"clip, longer").unwrap();
+        assert_eq!(already_made(&made, "a", &source), None, "the source was changed");
+        remember(&mut made, "a".into(), &source, &out);
+        std::fs::remove_file(&out).unwrap();
+        assert_eq!(already_made(&made, "a", &source), None, "the file is gone");
+        assert_eq!(made.len(), 1, "a request is remembered once");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A cancel that arrives before its export started still stops it; old cancels of
     /// exports that never came, or had ended, are dropped.
