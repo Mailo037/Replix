@@ -4,6 +4,7 @@
   import { store } from "./lib/store.svelte";
   import Editor from "./components/Editor.svelte";
   import FfmpegSetup from "./components/FfmpegSetup.svelte";
+  import Icon from "./components/Icon.svelte";
   import Library from "./components/Library.svelte";
   import LiveSession from "./components/LiveSession.svelte";
   import Onboarding from "./components/Onboarding.svelte";
@@ -93,11 +94,16 @@
         <button
           type="button"
           class="notice-action"
+          class:icon={action.icon}
+          title={action.icon ? action.label : undefined}
+          aria-label={action.icon ? action.label : undefined}
           onclick={() => {
             action.run();
             store.notice = null;
-          }}>{action.label}</button
+          }}
         >
+          {#if action.icon}<Icon name={action.icon} size={18} />{:else}{action.label}{/if}
+        </button>
       {/each}
     </div>
   {/if}
@@ -227,6 +233,16 @@
     color: var(--accent);
     font-weight: 600;
     white-space: nowrap;
+  }
+  .notice-action.icon {
+    width: 40px;
+    padding: 0;
+    display: grid;
+    place-items: center;
+  }
+  /* Icons sit close together, as one small group. */
+  .notice-action.icon + .notice-action.icon {
+    margin-left: -12px;
   }
   .notice-action:hover {
     background: var(--surface);

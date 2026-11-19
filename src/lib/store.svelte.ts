@@ -18,6 +18,8 @@ export type View =
 export interface NoticeAction {
   label: string;
   run: () => void;
+  /** Drawn as this icon instead of the word, which then becomes its tooltip. */
+  icon?: string;
 }
 
 export interface Notice {

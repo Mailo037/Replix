@@ -308,8 +308,8 @@
         tracks: t("Saved as MKV with every track on its own."),
       }[preset];
       store.notify(t("Export finished"), ed.vertical ? t("{done} Vertical 9:16.", { done }) : done, [
-        { label: t("Copy"), run: () => share.copy(out) },
-        { label: t("Show in folder"), run: () => api.revealPath(out) },
+        { label: t("Copy"), icon: "copy", run: () => share.copy(out) },
+        { label: t("Show in folder"), icon: "folder", run: () => api.revealPath(out) },
       ]);
     } catch (e) {
       if (String(e) !== "Export cancelled") store.notify(t("Export failed"), String(e));

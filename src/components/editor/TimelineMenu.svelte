@@ -87,8 +87,8 @@
     try {
       const out = await api.extractTrack(ed.id, i, `${ed.title.trim() || t("Clip")} - ${name}`, start, end);
       store.notify(t("Audio saved"), t("{name} as M4A", { name }), [
-        { label: t("Copy"), run: () => share.copy(out) },
-        { label: t("Show"), run: () => api.revealPath(out) },
+        { label: t("Copy"), icon: "copy", run: () => share.copy(out) },
+        { label: t("Show in folder"), icon: "folder", run: () => api.revealPath(out) },
       ]);
     } catch (e) {
       store.notify(t("Couldn't save the audio"), String(e));
